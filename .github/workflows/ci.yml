@@ -16,6 +16,9 @@ jobs:
       - name: Install Pi
         run: bun install -g @earendil-works/pi-coding-agent
 
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
       - name: Show versions
         run: |
           echo "pi: $(pi --version)"
