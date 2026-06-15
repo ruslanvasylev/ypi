@@ -27,7 +27,7 @@
  *   AUTO_TITLE_DEBUG              Path to debug log file (default: none)
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { spawn } from "child_process";
 
 interface TitleState {

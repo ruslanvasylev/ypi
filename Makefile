@@ -1,4 +1,4 @@
-.PHONY: test test-unit test-guardrails test-extensions test-e2e test-fast pre-push-checks check-upstream install-hooks release-preflight land ci-status ci-last-failure clean
+.PHONY: test test-unit test-guardrails test-native test-provider-allowlist test-extensions test-consumer-pack test-pi-recursive-pack build-pi-recursive test-e2e test-recursion-e2e test-extension-recursion-e2e test-parity-e2e test-fast pre-push-checks check-upstream install-hooks release-preflight land ci-status ci-last-failure clean
 
 # Fast tests — no LLM calls, uses mock pi
 test-unit:
@@ -10,13 +10,35 @@ test-guardrails:
 	@echo "Running guardrail tests..."
 	@bash tests/test_guardrails.sh
 
+test-native:
+	@echo "Running native extension tool tests..."
+	@bash tests/test_native_tool.sh
+
+# Provider env allowlist — no LLM calls, enforces native/shell parity + pi-mono coverage
+test-provider-allowlist:
+	@echo "Running provider allowlist tests..."
+	@bash tests/test_provider_allowlist.sh
+
 # All fast tests (unit + guardrails)
-test-fast: test-unit test-guardrails
+test-fast: test-unit test-guardrails test-native test-provider-allowlist
 
 # Extension compatibility — requires real pi installed
 test-extensions:
 	@echo "Running extension tests..."
 	@bash tests/test_extensions.sh
+
+test-consumer-pack:
+	@echo "Running packed consumer tests..."
+	@bash tests/test_consumer_pack.sh
+
+# Stage the pi-recursive pure-extension publish view from canonical root source
+build-pi-recursive:
+	@scripts/build-pi-recursive
+
+# Packed-consumer smoke for the pure-extension pi-recursive package
+test-pi-recursive-pack:
+	@echo "Running pi-recursive pack tests..."
+	@bash tests/test_pi_recursive_pack.sh
 
 # Extension E2E tests — REAL LLM calls, tests extension API compatibility
 test-extensions-e2e:
@@ -27,6 +49,19 @@ test-extensions-e2e:
 test-e2e:
 	@echo "Running e2e tests (real LLM calls)..."
 	@bash tests/test_e2e.sh
+
+# Focused live proof that a root ypi session can invoke rlm_query recursively.
+test-recursion-e2e:
+	@echo "Running recursion e2e test (real LLM calls)..."
+	@RLM_PROVIDER="$${RLM_PROVIDER:-openrouter}" RLM_MODEL="$${RLM_MODEL:-openai/gpt-5.5:xhigh}" bash tests/test_e2e.sh E9
+
+test-extension-recursion-e2e:
+	@echo "Running pure extension native-tool recursion e2e test (real LLM calls)..."
+	@PI_E2E_PROVIDER="$${PI_E2E_PROVIDER:-openrouter}" PI_E2E_MODEL="$${PI_E2E_MODEL:-openai/gpt-5.5:xhigh}" bash pure-extension/test.sh
+
+test-parity-e2e:
+	@echo "Running wrapper/direct-extension parity e2e test (real LLM calls)..."
+	@PI_E2E_PROVIDER="$${PI_E2E_PROVIDER:-openrouter}" PI_E2E_MODEL="$${PI_E2E_MODEL:-openai/gpt-5.5:xhigh}" bash pure-extension/compare.sh
 
 # All tests
 test: test-fast test-extensions test-e2e

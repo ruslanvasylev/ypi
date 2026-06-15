@@ -22,3 +22,9 @@ __pycache__/
 
 # Node (pi-mono submodule has its own)
 node_modules/
+
+# pi-recursive publish view — staged from canonical root source by scripts/build-pi-recursive
+/pi-recursive/extensions/
+/pi-recursive/SYSTEM_PROMPT.md
+/pi-recursive/LICENSE
+/pi-recursive/*.tgz

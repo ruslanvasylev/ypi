@@ -1,9 +1,8 @@
 #!/bin/bash
 # ypi — Y-Combinator Pi — Recursive Coding Agent
 #
-# Launches Pi as a Recursive Language Model. The LLM gets a system prompt
-# that teaches it to use bash + rlm_query for divide-and-conquer reasoning
-# over large contexts.
+# Launches Pi with the canonical ypi recursive extension. The extension owns
+# prompt injection; this wrapper only provides a friendly command and early env.
 #
 # Usage:
 #   ypi                              # interactive recursive pi
@@ -30,7 +29,50 @@ set -euo pipefail
 
 # Resolve the directory where ypi lives (and where rlm_query + SYSTEM_PROMPT.md are)
 # Follow symlinks — npm install -g creates symlinks in .bin/ pointing to node_modules/ypi/
-SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+resolve_script_dir() {
+    local source="${BASH_SOURCE[0]}"
+    local dir target
+    while [ -h "$source" ]; do
+        dir="$(cd -P "$(dirname "$source")" && pwd)"
+        target="$(readlink "$source")"
+        if [[ "$target" == /* ]]; then
+            source="$target"
+        else
+            source="$dir/$target"
+        fi
+    done
+    cd -P "$(dirname "$source")" && pwd
+}
+
+resolve_pi_bin() {
+    if [ -n "${YPI_PI_BIN:-}" ]; then
+        printf '%s\n' "$YPI_PI_BIN"
+        return 0
+    fi
+    if command -v pi >/dev/null 2>&1; then
+        command -v pi
+        return 0
+    fi
+    local candidate
+    for candidate in \
+        "$SCRIPT_DIR/../.bin/pi" \
+        "$SCRIPT_DIR/node_modules/.bin/pi" \
+        "$SCRIPT_DIR/../@earendil-works/pi-coding-agent/bin/pi" \
+        "$SCRIPT_DIR/node_modules/@earendil-works/pi-coding-agent/bin/pi"; do
+        if [ -x "$candidate" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+SCRIPT_DIR="$(resolve_script_dir)"
+if ! PI_BIN="$(resolve_pi_bin)"; then
+    echo "ypi: could not find pi. Install @earendil-works/pi-coding-agent or set YPI_PI_BIN=/path/to/pi." >&2
+    exit 127
+fi
+export YPI_PI_BIN="$PI_BIN"
 
 # Put rlm_query on PATH so Pi's bash tool can find it
 export PATH="$SCRIPT_DIR:$PATH"
@@ -58,60 +100,81 @@ export RLM_SHARED_SESSIONS="${RLM_SHARED_SESSIONS:-1}"
 # Session tree tracing — generate a trace ID that links all recursive sessions
 export RLM_TRACE_ID="${RLM_TRACE_ID:-$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
 
-# Compute Pi's session directory for this CWD so children can write there
-CWD="$(pwd)"
-SAFE_PATH="--$(echo "$CWD" | sed 's|^/||; s|[/:\\]|-|g')--"
-export RLM_SESSION_DIR="${HOME}/.pi/agent/sessions/${SAFE_PATH}"
-mkdir -p "$RLM_SESSION_DIR"
-
-# Build combined system prompt: SYSTEM_PROMPT.md + rlm_query source
-# This way the agent sees the full implementation, not just usage docs.
-COMBINED_PROMPT=$(mktemp "${TMPDIR:-/tmp}/ypi_system_prompt.XXXXXX")
-trap 'rm -f "$COMBINED_PROMPT"' EXIT
-
-cat "$SCRIPT_DIR/SYSTEM_PROMPT.md" > "$COMBINED_PROMPT"
-cat >> "$COMBINED_PROMPT" << 'EOF'
-
-## SECTION 6 – rlm_query Implementation
-
-Below is the full source of `rlm_query`. You are running inside this infrastructure.
-Understanding it helps you use recursion effectively and respect guardrails.
-
-```bash
-EOF
-cat "$SCRIPT_DIR/rlm_query" >> "$COMBINED_PROMPT"
-cat >> "$COMBINED_PROMPT" << 'EOF'
-```
-EOF
-
-# ypi status extension - shows recursive mode indicator in footer
-YPI_EXT_ARGS=()
-if [ -f "$SCRIPT_DIR/extensions/ypi.ts" ]; then
-    YPI_EXT_ARGS=(-e "$SCRIPT_DIR/extensions/ypi.ts")
+# Canonical ypi extension. Keep extensions/ypi.ts as a compatibility alias,
+# but load recursive.ts so the wrapper and direct-extension path share runtime.
+YPI_EXTENSION="$SCRIPT_DIR/extensions/recursive.ts"
+if [ ! -f "$YPI_EXTENSION" ]; then
+    echo "ypi: missing extension: $YPI_EXTENSION" >&2
+    exit 1
 fi
+export YPI_EXTENSION_ROOT="$SCRIPT_DIR"
+export YPI_EXTENSION_PATH="$YPI_EXTENSION"
 
-# Parse --append-system-prompt from args so ypi works like pi with rp
-# We append to the combined prompt file rather than passing through,
-# since pi already gets --system-prompt from us.
+# Wrapper mode opts into the shell-compatible rlm_query helper: its source is folded
+# into the system prompt and its directory is kept on PATH for the bash tool. A bare
+# `pi -e` / npm extension install leaves this unset and uses the native tool only.
+export YPI_SHELL_HELPER=1
+
+# Parse only ypi-owned flags and provider/model routing. All Pi prompt flags are
+# passed through; the extension appends ypi's recursive prompt at agent start.
 PASS_ARGS=()
-QUIET="${YPI_QUIET:-0}"
+HAS_PROVIDER=false
+HAS_MODEL=false
+SESSION_DIR_OVERRIDE=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --append-system-prompt)
-            shift
-            printf '\n%s\n' "$1" >> "$COMBINED_PROMPT"
-            shift
-            ;;
         --quiet|-q)
-            QUIET=1
             shift
             ;;
-        --system-prompt)
-            # User overriding ypi's system prompt entirely
-            [ "$QUIET" != "1" ] && echo "⚠️  Overriding ypi's system prompt. Did you mean --append-system-prompt?" >&2
+        --provider)
+            HAS_PROVIDER=true
+            PASS_ARGS+=("$1")
             shift
-            cat "$1" > "$COMBINED_PROMPT" 2>/dev/null || echo "$1" > "$COMBINED_PROMPT"
+            if [[ $# -gt 0 ]]; then
+                PASS_ARGS+=("$1")
+                shift
+            fi
+            ;;
+        --provider=*)
+            HAS_PROVIDER=true
+            PASS_ARGS+=("$1")
             shift
+            ;;
+        --model)
+            HAS_MODEL=true
+            PASS_ARGS+=("$1")
+            shift
+            if [[ $# -gt 0 ]]; then
+                PASS_ARGS+=("$1")
+                shift
+            fi
+            ;;
+        --model=*)
+            HAS_MODEL=true
+            PASS_ARGS+=("$1")
+            shift
+            ;;
+        --session-dir)
+            PASS_ARGS+=("$1")
+            shift
+            if [[ $# -gt 0 ]]; then
+                SESSION_DIR_OVERRIDE="$1"
+                PASS_ARGS+=("$1")
+                shift
+            fi
+            ;;
+        --session-dir=*)
+            SESSION_DIR_OVERRIDE="${1#--session-dir=}"
+            PASS_ARGS+=("$1")
+            shift
+            ;;
+        --)
+            PASS_ARGS+=("$1")
+            shift
+            while [[ $# -gt 0 ]]; do
+                PASS_ARGS+=("$1")
+                shift
+            done
             ;;
         *)
             PASS_ARGS+=("$1")
@@ -119,9 +182,15 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
-# Launch Pi with the combined system prompt, passing all args through
-# User's own extensions (hashline, etc.) are discovered automatically by Pi.
-PI_ARGV=(pi --system-prompt "$COMBINED_PROMPT")
-[ ${#YPI_EXT_ARGS[@]} -gt 0 ] && PI_ARGV+=("${YPI_EXT_ARGS[@]}")
+if [ -n "$SESSION_DIR_OVERRIDE" ] && [ -z "${RLM_SESSION_DIR:-}" ]; then
+    export RLM_SESSION_DIR="$SESSION_DIR_OVERRIDE"
+fi
+
+# Launch Pi with the canonical recursive extension. User's own extensions are
+# still discovered by Pi; this one is explicit so ypi is always active.
+PI_ARGV=("$PI_BIN")
+[ "$HAS_PROVIDER" = false ] && [ -n "${RLM_PROVIDER:-}" ] && PI_ARGV+=(--provider "$RLM_PROVIDER")
+[ "$HAS_MODEL" = false ] && [ -n "${RLM_MODEL:-}" ] && PI_ARGV+=(--model "$RLM_MODEL")
+PI_ARGV+=(-e "$YPI_EXTENSION")
 [ ${#PASS_ARGS[@]} -gt 0 ] && PI_ARGV+=("${PASS_ARGS[@]}")
 exec "${PI_ARGV[@]}"

@@ -11,6 +11,7 @@
 #
 # Run: bash tests/test_e2e.sh
 # Run single: bash tests/test_e2e.sh E1
+# Run recursion proof: bash tests/test_e2e.sh E9
 # Skip slow: RLM_SKIP_SLOW=1 bash tests/test_e2e.sh
 
 set -euo pipefail
@@ -119,13 +120,13 @@ EOF
     export RLM_MAX_DEPTH=3
 fi
 
-# ─── E4: Recursion — model spawns sub-call via rlm_query ─────────────────
+# ─── E4: Direct rlm_query call — child Pi answers with depth trace ────────
 
 if should_run "E4"; then
     if [ "${RLM_SKIP_SLOW:-}" = "1" ]; then
-        skip "E4: recursive sub-call" "RLM_SKIP_SLOW=1"
+        skip "E4: direct rlm_query child call" "RLM_SKIP_SLOW=1"
     else
-        echo "--- E4: Recursive sub-call (depth 0→1) ---"
+        echo "--- E4: Direct rlm_query child call (depth 0→1) ---"
         cat > "$TEST_TMP/ctx_e4.txt" << 'EOF'
 === Session 1 (2024-01-15) ===
 User said: "I just got back from Tokyo. The cherry blossoms were beautiful."
@@ -144,9 +145,9 @@ EOF
         ELAPSED=$(( $(date +%s) - START ))
 
         if echo "$OUTPUT" | grep -qi "Tokyo"; then
-            pass "E4: recursive sub-call" "$ELAPSED"
+            pass "E4: direct rlm_query child call" "$ELAPSED"
         else
-            fail "E4: recursive sub-call" "expected 'Tokyo', got: $(echo "$OUTPUT" | head -3)"
+            fail "E4: direct rlm_query child call" "expected 'Tokyo', got: $(echo "$OUTPUT" | head -3)"
         fi
 
         # Verify trace shows depth transition
@@ -287,6 +288,58 @@ EOF
         pass "E8: self-similarity across depths" "$ELAPSED"
     else
         fail "E8: self-similarity" "depth0='$(echo "$OUT_D0" | head -1)' depth1='$(echo "$OUT_D1" | head -1)'"
+    fi
+fi
+
+# ─── E9: Full ypi recursion — root agent invokes rlm_query itself ────────
+# This proves a real ypi root session can call a recursive child, not just
+# that the test shell can invoke rlm_query directly.
+
+if should_run "E9"; then
+    if [ "${RLM_SKIP_SLOW:-}" = "1" ]; then
+        skip "E9: full ypi recursive child call" "RLM_SKIP_SLOW=1"
+    else
+        echo "--- E9: Full ypi run invokes rlm_query recursively ---"
+
+        TRACE_E9="$TEST_TMP/trace_e9.log"
+        STDOUT_E9="$TEST_TMP/e9_stdout.txt"
+        STDERR_E9="$TEST_TMP/e9_stderr.txt"
+        PROMPT_E9="Use the bash tool to run rlm_query exactly once with this exact prompt: Reply with exactly CHILD_OK. Then reply with exactly the child answer and no other text."
+
+        START=$(date +%s)
+        set +e
+        RLM_DEPTH=0 \
+        RLM_MAX_DEPTH=1 \
+        RLM_JSON=0 \
+        PI_TRACE_FILE="$TRACE_E9" \
+        timeout 90 "$PROJECT_DIR/ypi" -p --no-session \
+            --provider "$RLM_PROVIDER" \
+            --model "$RLM_MODEL" \
+            "$PROMPT_E9" \
+            >"$STDOUT_E9" 2>"$STDERR_E9"
+        RC=$?
+        set -e
+        ELAPSED=$(( $(date +%s) - START ))
+
+        CALLS=$(grep -c "depth=0→1" "$TRACE_E9" 2>/dev/null || true)
+        CALLS=${CALLS:-0}
+
+        if [ "$RC" -ne 0 ]; then
+            fail "E9: full ypi recursive child call" "ypi exited $RC; stdout=$(head -3 "$STDOUT_E9"); stderr=$(head -5 "$STDERR_E9")"
+        elif ! grep -q "CHILD_OK" "$STDOUT_E9"; then
+            fail "E9: full ypi recursive child call" "missing child answer; stdout=$(head -5 "$STDOUT_E9"); trace=$(tail -5 "$TRACE_E9" 2>/dev/null || true)"
+        elif [ "$CALLS" -ne 1 ]; then
+            fail "E9: full ypi recursive child call" "expected exactly one depth=0→1 trace entry, got $CALLS; trace=$(tail -10 "$TRACE_E9" 2>/dev/null || true)"
+        elif ! grep -q "prompt: Reply with exactly CHILD_OK" "$TRACE_E9"; then
+            fail "E9: full ypi recursive child call" "trace did not record the child prompt; trace=$(tail -10 "$TRACE_E9" 2>/dev/null || true)"
+        elif ! grep -q "COMPLETED exit=0" "$TRACE_E9"; then
+            fail "E9: full ypi recursive child call" "child did not complete cleanly; trace=$(tail -10 "$TRACE_E9" 2>/dev/null || true)"
+        else
+            cat "$TRACE_E9" >> "$TEST_TMP/trace.log"
+            pass "E9: full ypi recursive child call" "$ELAPSED"
+        fi
+
+        export PI_TRACE_FILE="$TEST_TMP/trace.log"
     fi
 fi
 # ─── Summary ──────────────────────────────────────────────────────────────

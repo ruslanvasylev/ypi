@@ -51,6 +51,100 @@ set -euo pipefail
 # Structured error helper
 rlm_error() { echo "✗ $1" >&2; [ -n "${2:-}" ] && echo "  Why: $2" >&2; [ -n "${3:-}" ] && echo "  Fix: $3" >&2; }
 
+resolve_script_dir() {
+    local source="${BASH_SOURCE[0]}"
+    local dir target
+    while [ -h "$source" ]; do
+        dir="$(cd -P "$(dirname "$source")" && pwd)"
+        target="$(readlink "$source")"
+        if [[ "$target" == /* ]]; then
+            source="$target"
+        else
+            source="$dir/$target"
+        fi
+    done
+    cd -P "$(dirname "$source")" && pwd
+}
+
+SCRIPT_DIR="$(resolve_script_dir)"
+
+safe_trace_id() {
+    printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'
+}
+
+with_counter_lock() {
+    local counter_file="$1"
+    local lock_dir="${counter_file}.lock"
+    local attempts=0
+    mkdir -p "$(dirname "$counter_file")"
+    until mkdir "$lock_dir" 2>/dev/null; do
+        attempts=$((attempts + 1))
+        if [ "$attempts" -gt 500 ]; then
+            rlm_error "Call counter lock timed out" "$lock_dir stayed locked" "Remove stale *.lock directories in ${TMPDIR:-/tmp}"
+            exit 1
+        fi
+        sleep 0.01
+    done
+}
+
+next_call_count() {
+    local initial="${RLM_CALL_COUNT:-0}"
+    local current
+    with_counter_lock "$RLM_CALL_COUNTER_FILE"
+    if [ -f "$RLM_CALL_COUNTER_FILE" ]; then
+        current="$(cat "$RLM_CALL_COUNTER_FILE" 2>/dev/null || echo "$initial")"
+    else
+        current="$initial"
+    fi
+    current="${current:-0}"
+    RLM_CALL_COUNT=$(( current + 1 ))
+    printf '%s\n' "$RLM_CALL_COUNT" > "$RLM_CALL_COUNTER_FILE"
+    rm -rf "${RLM_CALL_COUNTER_FILE}.lock"
+    export RLM_CALL_COUNT
+}
+
+timeout_prefix() {
+    local seconds="$1"
+    if command -v timeout >/dev/null 2>&1; then
+        TIMEOUT_PREFIX=(timeout "$seconds")
+    elif command -v gtimeout >/dev/null 2>&1; then
+        TIMEOUT_PREFIX=(gtimeout "$seconds")
+    elif command -v perl >/dev/null 2>&1; then
+        TIMEOUT_PREFIX=(perl -e 'my $t=shift; my $pid=fork(); die "fork failed: $!" unless defined $pid; if ($pid == 0) { exec @ARGV; die "exec failed: $!" } local $SIG{ALRM}=sub{ kill "TERM", $pid; sleep 1; kill "KILL", $pid; exit 124; }; alarm $t; waitpid($pid, 0); exit($? >> 8);' "$seconds")
+    else
+        rlm_error "Timeout command unavailable" "RLM_TIMEOUT is set but neither timeout, gtimeout, nor perl is available" "Install GNU coreutils or unset RLM_TIMEOUT"
+        exit 127
+    fi
+}
+
+append_allowed_env() {
+    local key
+    for key in \
+        HOME PATH TMPDIR TEMP TMP SHELL USER LOGNAME \
+        PI_CODING_AGENT_DIR PI_CODING_AGENT_SESSION_DIR PI_PACKAGE_DIR PI_OFFLINE PI_TELEMETRY PI_SHARE_VIEWER_URL \
+        ANTHROPIC_API_KEY ANTHROPIC_OAUTH_TOKEN COPILOT_GITHUB_TOKEN HF_TOKEN ANT_LING_API_KEY OPENAI_API_KEY \
+        AZURE_OPENAI_API_KEY AZURE_OPENAI_BASE_URL AZURE_OPENAI_RESOURCE_NAME AZURE_OPENAI_API_VERSION AZURE_OPENAI_DEPLOYMENT_NAME_MAP \
+        DEEPSEEK_API_KEY NVIDIA_API_KEY GEMINI_API_KEY GROQ_API_KEY CEREBRAS_API_KEY XAI_API_KEY FIREWORKS_API_KEY TOGETHER_API_KEY \
+        OPENROUTER_API_KEY AI_GATEWAY_API_KEY ZAI_API_KEY ZAI_CODING_CN_API_KEY MISTRAL_API_KEY MINIMAX_API_KEY MOONSHOT_API_KEY \
+        OPENCODE_API_KEY KIMI_API_KEY CLOUDFLARE_API_KEY CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_GATEWAY_ID \
+        XIAOMI_API_KEY XIAOMI_TOKEN_PLAN_CN_API_KEY XIAOMI_TOKEN_PLAN_AMS_API_KEY XIAOMI_TOKEN_PLAN_SGP_API_KEY \
+        AWS_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_BEARER_TOKEN_BEDROCK AWS_REGION \
+        GOOGLE_CLOUD_API_KEY OLLAMA_API_KEY PORTKEY_API_KEY MINIMAX_CN_API_KEY \
+        AWS_DEFAULT_REGION AWS_ENDPOINT_URL_BEDROCK_RUNTIME AWS_CONTAINER_CREDENTIALS_FULL_URI AWS_CONTAINER_CREDENTIALS_RELATIVE_URI AWS_WEB_IDENTITY_TOKEN_FILE \
+        AZURE_API_VERSION CLOUDFLARE_API_HOST CLOUDFLARE_AI_GATEWAY_HOST CLOUDFLARE_AI_GATEWAY_ANTHROPIC_BASE_URL CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL CLOUDFLARE_AI_GATEWAY_COMPAT_BASE_URL CLOUDFLARE_WORKERS_AI_BASE_URL; do
+        if [ -n "${!key:-}" ]; then
+            CHILD_ENV+=("$key=${!key}")
+        fi
+    done
+    while IFS='=' read -r key _; do
+        case "$key" in
+            RLM_*|YPI_*|CONTEXT|PI_TRACE_FILE)
+                CHILD_ENV+=("$key=${!key:-}")
+                ;;
+        esac
+    done < <(env)
+}
+
 # ----------------------------------------------------------------------
 # Parse flags
 # ----------------------------------------------------------------------
@@ -74,6 +168,17 @@ PROMPT="${1:?Usage: rlm_query [--fork] [--async] [--notify PID] \"your prompt he
 # ----------------------------------------------------------------------
 DEPTH="${RLM_DEPTH:-0}"
 MAX_DEPTH="${RLM_MAX_DEPTH:-3}"
+
+# Fail closed: a malformed depth config must not bypass the recursion limiter.
+case "$DEPTH" in ''|*[!0-9]*)
+    rlm_error "Invalid RLM_DEPTH" "RLM_DEPTH='$DEPTH' is not a non-negative integer" "Unset RLM_DEPTH or set it to an integer >= 0"
+    exit 1 ;;
+esac
+case "$MAX_DEPTH" in ''|*[!0-9]*)
+    rlm_error "Invalid RLM_MAX_DEPTH" "RLM_MAX_DEPTH='$MAX_DEPTH' is not a non-negative integer" "Unset RLM_MAX_DEPTH or set it to an integer >= 0"
+    exit 1 ;;
+esac
+
 NEXT_DEPTH=$((DEPTH + 1))
 
 if [ "$NEXT_DEPTH" -gt "$MAX_DEPTH" ]; then
@@ -88,9 +193,9 @@ fi
 if [ "$DEPTH" -eq 0 ]; then
     (
         # Delete rlm temp files older than 2 hours whose parent process is gone
-        find /tmp -maxdepth 1 -name 'rlm_*' -mmin +120 -delete 2>/dev/null
+        find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'rlm_*' -mmin +120 -delete 2>/dev/null
         # Remove stale jj workspace directories older than 2 hours
-        find /tmp -maxdepth 1 -name 'rlm_ws_*' -type d -mmin +120 -exec rm -rf {} + 2>/dev/null
+        find "${TMPDIR:-/tmp}" -maxdepth 1 \( -name 'rlm_ws_*' -o -name 'ypi_ws_*' \) -type d -mmin +120 -exec rm -rf {} + 2>/dev/null
     ) &
 fi
 
@@ -100,19 +205,39 @@ SYSTEM_PROMPT_FILE="${RLM_SYSTEM_PROMPT:-}"
 
 # ----------------------------------------------------------------------
 # Timeout start time initialization
+# Anchor the wall-clock budget when a top-level (depth 0) tree begins so a
+# long-running parent never passes down a stale start time. Children inherit it.
 # ----------------------------------------------------------------------
-if [ -z "${RLM_START_TIME:-}" ]; then
+if [ "$DEPTH" -eq 0 ] || [ -z "${RLM_START_TIME:-}" ]; then
     export RLM_START_TIME=$(date +%s)
 fi
 
 # ----------------------------------------------------------------------
+# Session tree — each child gets a persisted session file
+# Trace ID groups all sessions from one recursive invocation.
+# ----------------------------------------------------------------------
+if [ -z "${RLM_TRACE_ID:-}" ]; then
+    export RLM_TRACE_ID=$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')
+fi
+SAFE_TRACE_ID="$(safe_trace_id "$RLM_TRACE_ID")"
+# Normalize in place so session filenames, async IDs, trace lines, and child env all use
+# the path-safe value rather than raw user input.
+export RLM_TRACE_ID="$SAFE_TRACE_ID"
+export RLM_CALL_COUNTER_FILE="${RLM_CALL_COUNTER_FILE:-${TMPDIR:-/tmp}/rlm_calls_${SAFE_TRACE_ID}.counter}"
+
+# ----------------------------------------------------------------------
 # Call counting & max‑calls guard
 # ----------------------------------------------------------------------
-RLM_CALL_COUNT=$(( ${RLM_CALL_COUNT:-0} + 1 ))
-export RLM_CALL_COUNT
-if [ -n "${RLM_MAX_CALLS:-}" ] && [ "$RLM_CALL_COUNT" -ge "$RLM_MAX_CALLS" ]; then
-    rlm_error "Max calls exceeded" "$RLM_CALL_COUNT of $RLM_MAX_CALLS calls used" "Increase RLM_MAX_CALLS or reduce recursion depth"
+next_call_count
+# RLM_MAX_CALLS=N permits calls 1..N; only the (N+1)th invocation is rejected.
+if [ -n "${RLM_MAX_CALLS:-}" ] && [ "$RLM_CALL_COUNT" -gt "$RLM_MAX_CALLS" ]; then
+    rlm_error "Max calls exceeded" "$RLM_MAX_CALLS of $RLM_MAX_CALLS calls already used" "Increase RLM_MAX_CALLS or reduce recursion depth"
     exit 1
+fi
+
+# Initialize cost file if budget is set but no file exists yet
+if [ -n "${RLM_BUDGET:-}" ] && [ -z "${RLM_COST_FILE:-}" ]; then
+    export RLM_COST_FILE="${TMPDIR:-/tmp}/rlm_cost_${SAFE_TRACE_ID}.jsonl"
 fi
 
 # ----------------------------------------------------------------------
@@ -137,21 +262,8 @@ print(f'{total:.6f}')
     fi
 fi
 
-# Initialize cost file if budget is set but no file exists yet
-if [ -n "${RLM_BUDGET:-}" ] && [ -z "${RLM_COST_FILE:-}" ]; then
-    export RLM_COST_FILE=$(mktemp "${TMPDIR:-/tmp}/rlm_cost.XXXXXX")
-fi
-
-# ----------------------------------------------------------------------
-# Session tree — each child gets a persisted session file
-# Trace ID groups all sessions from one recursive invocation.
-# ----------------------------------------------------------------------
-if [ -z "${RLM_TRACE_ID:-}" ]; then
-    export RLM_TRACE_ID=$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')
-fi
-
 CHILD_SESSION_FILE=""
-if [ -n "${RLM_SESSION_DIR:-}" ]; then
+if [ "${RLM_SHARED_SESSIONS:-1}" != "0" ] && [ -n "${RLM_SESSION_DIR:-}" ]; then
     mkdir -p "$RLM_SESSION_DIR"
     CHILD_SESSION_FILE="${RLM_SESSION_DIR}/${RLM_TRACE_ID}_d${NEXT_DEPTH}_c${RLM_CALL_COUNT}.jsonl"
 
@@ -204,6 +316,9 @@ trap '{
     if [ -n "$JJ_WS_NAME" ]; then
         jj workspace forget "$JJ_WS_NAME" 2>/dev/null || true
     fi
+    if [ -n "$JJ_WORKSPACE" ]; then
+        rm -rf "$JJ_WORKSPACE"
+    fi
 }' EXIT
 fi
 trap 'rlm_error "Interrupted" "Received signal" "Re-run the command"; exit 130' INT TERM
@@ -236,7 +351,7 @@ fi
 # ----------------------------------------------------------------------
 # Model routing for child calls (depth > 0)
 # ----------------------------------------------------------------------
-if [ "$DEPTH" -gt 0 ] && [ -n "${RLM_CHILD_MODEL:-}" ]; then
+if [ "$NEXT_DEPTH" -gt 0 ] && [ -n "${RLM_CHILD_MODEL:-}" ]; then
     MODEL="${RLM_CHILD_MODEL}"
     if [ -n "${RLM_CHILD_PROVIDER:-}" ]; then
         PROVIDER="${RLM_CHILD_PROVIDER}"
@@ -260,31 +375,44 @@ export RLM_SESSION_DIR="${RLM_SESSION_DIR:-}"
 export RLM_BUDGET="${RLM_BUDGET:-}"
 export RLM_COST_FILE="${RLM_COST_FILE:-}"
 export RLM_SHARED_SESSIONS="${RLM_SHARED_SESSIONS:-1}"
+export YPI_EXTENSION_ROOT="${YPI_EXTENSION_ROOT:-}"
+export YPI_EXTENSION_PATH="${YPI_EXTENSION_PATH:-}"
+export YPI_EXTENSION_PROMPT_MODE="${YPI_EXTENSION_PROMPT_MODE:-}"
 
 # At max depth: remove rlm_query from PATH so the child can't recurse.
 # The child still gets full tools (bash, read, write, edit) — it just
 # can't spawn sub-agents. The depth guard above is a safety net.
-# Follow symlinks — npm install -g creates symlinks in .bin/
-SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 if [ "$NEXT_DEPTH" -ge "$MAX_DEPTH" ]; then
     export PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "^${SCRIPT_DIR}$" | paste -sd ':' -)
 fi
 
 if [ -n "$CHILD_SESSION_FILE" ]; then
     export RLM_SESSION_FILE="$CHILD_SESSION_FILE"
+else
+    unset RLM_SESSION_FILE
 fi
+
+PI_BIN="${YPI_PI_BIN:-pi}"
 
 CMD_ARGS=(-p)
 [ -n "$PROVIDER" ] && CMD_ARGS+=(--provider "$PROVIDER")
 [ -n "$MODEL" ] && CMD_ARGS+=(--model "$MODEL")
 
-# Extensions: on by default, configurable per-instance like model routing
+if [ -z "$JJ_WORKSPACE" ] && [ "${RLM_UNSAFE_NO_JJ_WRITE:-0}" != "1" ]; then
+    CMD_ARGS+=(--tools read,grep,find,ls,rlm_query)
+fi
+
+# Extensions: on by default, configurable per-instance like model routing.
+# Always disable ambient extension discovery; ypi's own extension is loaded
+# explicitly below (when enabled) via -e "$YPI_EXTENSION_PATH".
 CHILD_EXT="${RLM_EXTENSIONS:-1}"
-if [ "$DEPTH" -gt 0 ] && [ -n "${RLM_CHILD_EXTENSIONS:-}" ]; then
+if [ "$NEXT_DEPTH" -gt 0 ] && [ -n "${RLM_CHILD_EXTENSIONS:-}" ]; then
     CHILD_EXT="${RLM_CHILD_EXTENSIONS}"
 fi
-if [ "$CHILD_EXT" = "0" ]; then
-    CMD_ARGS+=(--no-extensions)
+CMD_ARGS+=(--no-extensions)
+
+if [ "${RLM_CHILD_DISCOVERY:-0}" != "1" ]; then
+    CMD_ARGS+=(--no-skills --no-prompt-templates --no-themes --no-context-files --no-approve)
 fi
 
 # Session: use dedicated file if we have a session dir, otherwise ephemeral
@@ -294,12 +422,21 @@ else
     CMD_ARGS+=(--no-session)
 fi
 
-# Build combined system prompt with rlm_query source embedded
+# Prefer the canonical ypi extension when the root session provided it. Fall
+# back to --system-prompt so rlm_query still works standalone.
+USE_YPI_EXTENSION=false
+if [ "$CHILD_EXT" != "0" ] && [ -n "${YPI_EXTENSION_PATH:-}" ] && [ -f "${YPI_EXTENSION_PATH:-}" ]; then
+    CMD_ARGS+=(-e "$YPI_EXTENSION_PATH")
+    USE_YPI_EXTENSION=true
+fi
+
+# Build combined system prompt with rlm_query source embedded when no ypi
+# extension is available for this child.
 COMBINED_PROMPT=""
-if [ -n "$SYSTEM_PROMPT_FILE" ] && [ -f "$SYSTEM_PROMPT_FILE" ]; then
+if [ "$USE_YPI_EXTENSION" != true ] && [ -n "$SYSTEM_PROMPT_FILE" ] && [ -f "$SYSTEM_PROMPT_FILE" ]; then
     COMBINED_PROMPT=$(mktemp "${TMPDIR:-/tmp}/rlm_system_prompt.XXXXXX")
     cat "$SYSTEM_PROMPT_FILE" > "$COMBINED_PROMPT"
-    SELF_SOURCE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)/rlm_query"
+    SELF_SOURCE="$SCRIPT_DIR/rlm_query"
     if [ -f "$SELF_SOURCE" ]; then
         cat >> "$COMBINED_PROMPT" << 'SYSEOF'
 
@@ -317,7 +454,7 @@ SYSEOF
 fi
 
 # Timeout wrapper
-TIMEOUT_CMD=""
+TIMEOUT_PREFIX=()
 if [ -n "${RLM_TIMEOUT:-}" ]; then
     ELAPSED=$(( $(date +%s) - RLM_START_TIME ))
     REMAINING=$(( RLM_TIMEOUT - ELAPSED ))
@@ -325,8 +462,11 @@ if [ -n "${RLM_TIMEOUT:-}" ]; then
         rlm_error "Timeout exceeded" "Ran for ${ELAPSED}s of ${RLM_TIMEOUT}s" "Increase RLM_TIMEOUT or simplify the task"
         exit 124
     fi
-    TIMEOUT_CMD="timeout $REMAINING"
+    timeout_prefix "$REMAINING"
 fi
+
+CHILD_ENV=()
+append_allowed_env
 
 # Enter jj workspace if available (child gets isolated working copy)
 if [ -n "$JJ_WORKSPACE" ]; then
@@ -338,14 +478,11 @@ fi
 # ----------------------------------------------------------------------
 if [ "$ASYNC" = true ]; then
     ASYNC_ID="rlm_async_${RLM_TRACE_ID}_c${RLM_CALL_COUNT}_$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-    ASYNC_OUTPUT="/tmp/${ASYNC_ID}.txt"
-    ASYNC_SENTINEL="/tmp/${ASYNC_ID}.done"
+    ASYNC_OUTPUT="${TMPDIR:-/tmp}/${ASYNC_ID}.txt"
+    ASYNC_SENTINEL="${TMPDIR:-/tmp}/${ASYNC_ID}.done"
 
     # Build the full command
-    CHILD_CMD=(pi "${CMD_ARGS[@]}" "$PROMPT")
-    if [ -n "$TIMEOUT_CMD" ]; then
-        CHILD_CMD=($TIMEOUT_CMD "${CHILD_CMD[@]}")
-    fi
+    CHILD_CMD=(env -i "${CHILD_ENV[@]}" "${TIMEOUT_PREFIX[@]}" "$PI_BIN" "${CMD_ARGS[@]}" "$PROMPT")
 
     # Spawn in background: run child, capture output, touch sentinel, optionally notify
     (
@@ -360,12 +497,30 @@ if [ "$ASYNC" = true ]; then
                 fi
             done)
             if [ -n "$INBOX_DIR" ] && [ -d "$INBOX_DIR" ]; then
-                RESULT=$(cat "$ASYNC_OUTPUT" | tail -c 50000)
-                MSG=$(cat <<MSGJSON
-{"from_pid":$$,"from_project":"rlm_query","message":"[rlm_query --async result]\n\n$RESULT","timestamp":"$(date -Iseconds)","id":"async_${ASYNC_ID}"}
-MSGJSON
+                # Build the inbox line with python3 so child output containing quotes,
+                # backslashes, newlines, or control characters can never break the JSON.
+                MSG=$(RLM_NOTIFY_PID="$$" \
+                      RLM_NOTIFY_ID="async_${ASYNC_ID}" \
+                      RLM_NOTIFY_TS="$(date -Iseconds)" \
+                      python3 - "$ASYNC_OUTPUT" <<'PYJSON'
+import json, os, sys
+try:
+    with open(sys.argv[1], "r", errors="replace") as fh:
+        result = fh.read()[-50000:]
+except OSError:
+    result = ""
+print(json.dumps({
+    "from_pid": int(os.environ["RLM_NOTIFY_PID"]),
+    "from_project": "rlm_query",
+    "message": "[rlm_query --async result]\n\n" + result,
+    "timestamp": os.environ["RLM_NOTIFY_TS"],
+    "id": os.environ["RLM_NOTIFY_ID"],
+}))
+PYJSON
 )
-                echo "$MSG" >> "$INBOX_DIR/inbox.jsonl"
+                if [ -n "$MSG" ]; then
+                    printf '%s\n' "$MSG" >> "$INBOX_DIR/inbox.jsonl"
+                fi
             fi
         fi
 
@@ -373,6 +528,9 @@ MSGJSON
         rm -f "$CHILD_CONTEXT" "$PROMPT_FILE" "${COMBINED_PROMPT:-}"
         if [ -n "$JJ_WS_NAME" ]; then
             jj workspace forget "$JJ_WS_NAME" 2>/dev/null || true
+        fi
+        if [ -n "$JJ_WORKSPACE" ]; then
+            rm -rf "$JJ_WORKSPACE"
         fi
     ) &
     ASYNC_PID=$!
@@ -390,12 +548,16 @@ fi
 # JSON mode streams text to stdout and captures cost via fd 3.
 # ----------------------------------------------------------------------
 COST_OUT=$(mktemp "${TMPDIR:-/tmp}/rlm_cost_out.XXXXXX")
+ERR_OUT=$(mktemp "${TMPDIR:-/tmp}/rlm_stderr.XXXXXX")
 trap '{
     rm -f "$CHILD_CONTEXT" "$PROMPT_FILE"
     rm -f "${COMBINED_PROMPT:-}"
-    rm -f "$COST_OUT"
+    rm -f "$COST_OUT" "$ERR_OUT"
     if [ -n "$JJ_WS_NAME" ]; then
         jj workspace forget "$JJ_WS_NAME" 2>/dev/null || true
+    fi
+    if [ -n "$JJ_WORKSPACE" ]; then
+        rm -rf "$JJ_WORKSPACE"
     fi
 }' EXIT
 
@@ -409,14 +571,24 @@ if [ "${RLM_JSON:-1}" != "0" ]; then
     done
     JSON_CMD_ARGS+=(--mode json)
 
-    PARSER="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)/rlm_parse_json"
+    PARSER="$SCRIPT_DIR/rlm_parse_json"
 
-    $TIMEOUT_CMD pi "${JSON_CMD_ARGS[@]}" "$PROMPT" 2>/dev/null | python3 "$PARSER" 3>"$COST_OUT"
-    RC=${PIPESTATUS[0]}
+    set +e
+    env -i "${CHILD_ENV[@]}" "${TIMEOUT_PREFIX[@]}" "$PI_BIN" "${JSON_CMD_ARGS[@]}" "$PROMPT" 2>"$ERR_OUT" | python3 "$PARSER" 3>"$COST_OUT"
+    PIPE_STATUS=("${PIPESTATUS[@]}")
+    set -e
+    RC="${PIPE_STATUS[0]}"
+    PARSER_RC="${PIPE_STATUS[1]:-0}"
+    if [ "$PARSER_RC" -ne 0 ] && [ "$RC" -eq 0 ]; then
+        RC="$PARSER_RC"
+    fi
 
     # Record cost if we got data
     if [ -s "$COST_OUT" ] && [ -n "${RLM_COST_FILE:-}" ]; then
         cat "$COST_OUT" >> "$RLM_COST_FILE"
+    fi
+    if [ "$RC" -ne 0 ] && [ -s "$ERR_OUT" ]; then
+        cat "$ERR_OUT" >&2
     fi
 
     # Log cost to trace
@@ -430,8 +602,10 @@ if [ "${RLM_JSON:-1}" != "0" ]; then
     fi
 else
     # Plain text mode (RLM_JSON=0): no cost tracking
-    $TIMEOUT_CMD pi "${CMD_ARGS[@]}" "$PROMPT"
+    set +e
+    env -i "${CHILD_ENV[@]}" "${TIMEOUT_PREFIX[@]}" "$PI_BIN" "${CMD_ARGS[@]}" "$PROMPT"
     RC=$?
+    set -e
 
     if [ -n "${PI_TRACE_FILE:-}" ]; then
         ELAPSED=$(( $(date +%s) - RLM_START_TIME ))

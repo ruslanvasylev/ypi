@@ -12,9 +12,9 @@
  *   # or place in ~/.pi/agent/extensions/hashline.ts
  */
 
-import type { TextContent } from "@mariozechner/pi-ai";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import type { TextContent } from "@earendil-works/pi-ai";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { readFile, writeFile, access, mkdir } from "fs/promises";
 import { constants } from "fs";

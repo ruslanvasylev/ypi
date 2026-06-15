@@ -30,6 +30,42 @@ echo ""
 echo "=== Extension Compatibility Tests (pi $PI_VERSION) ==="
 echo ""
 
+# ─── Assert we are based on latest released Pi ───────────────────────────
+
+echo "--- Latest Pi release ---"
+
+KNOWN_GOOD=$(tr -d '[:space:]' < "$PROJECT_DIR/.pi-version")
+PINNED=$(node -e "const p=require('$PROJECT_DIR/package.json'); console.log(p.dependencies['@earendil-works/pi-coding-agent'] || '')")
+PI_MANIFEST=$(node -e "const p=require('$PROJECT_DIR/package.json'); console.log((p.pi?.extensions || []).join('\\n'))")
+LATEST=""
+if command -v bun &>/dev/null; then
+    LATEST=$(bun pm view @earendil-works/pi-coding-agent version 2>/dev/null | tail -1 | tr -d '[:space:]' || true)
+elif command -v npm &>/dev/null; then
+    LATEST=$(npm view @earendil-works/pi-coding-agent version 2>/dev/null | tr -d '[:space:]' || true)
+fi
+
+if [ -z "$LATEST" ]; then
+    fail "latest Pi version discovered" "could not query @earendil-works/pi-coding-agent"
+elif [ "$KNOWN_GOOD" != "$LATEST" ]; then
+    fail "known-good Pi version is latest" ".pi-version=$KNOWN_GOOD latest=$LATEST"
+elif [ "$PINNED" != "$LATEST" ]; then
+    fail "package pins latest Pi" "package.json=$PINNED latest=$LATEST"
+elif [ "$PI_VERSION" != "$LATEST" ]; then
+    fail "installed Pi is latest" "installed=$PI_VERSION latest=$LATEST"
+else
+    pass "latest Pi release pinned and installed ($LATEST)"
+fi
+
+echo ""
+
+if [ "$PI_MANIFEST" = "./extensions/recursive.ts" ]; then
+    pass "pi package manifest exposes only canonical extension"
+else
+    fail "pi package manifest exposes only canonical extension" "pi.extensions=$PI_MANIFEST"
+fi
+
+echo ""
+
 # ─── Test each extension loads without error ──────────────────────────────
 
 test_extension_loads() {
@@ -42,11 +78,18 @@ test_extension_loads() {
     local stderr_file
     stderr_file=$(mktemp "${TMPDIR:-/tmp}/ext_test.txt.XXXXXX")
 
-    # Load the extension in print mode with a trivial prompt
-    echo "test" | timeout 15 pi -p --no-session --no-extensions -e "$path" "say ok" \
-        >"$stderr_file.stdout" 2>"$stderr_file" || true
+    # Load the extension without making an LLM call. --list-models still
+    # initializes explicit extensions, so syntax/API breakage is caught.
+    local rc
+    set +e
+    timeout 15 pi --no-extensions -e "$path" --list-models test \
+        >"$stderr_file.stdout" 2>"$stderr_file"
+    rc=$?
+    set -e
 
-    if grep -qi "Failed to load extension" "$stderr_file"; then
+    if [ "$rc" -ne 0 ]; then
+        fail "$name loads" "exit=$rc stderr=$(cat "$stderr_file")"
+    elif grep -qi "Failed to load extension" "$stderr_file"; then
         local err
         err=$(cat "$stderr_file")
         fail "$name loads" "$err"
@@ -57,7 +100,8 @@ test_extension_loads() {
     rm -f "$stderr_file" "$stderr_file.stdout"
 }
 
-# Test ypi status extension
+# Test canonical ypi recursive extension and compatibility alias
+test_extension_loads "recursive.ts" "$PROJECT_DIR/extensions/recursive.ts"
 test_extension_loads "ypi.ts" "$PROJECT_DIR/extensions/ypi.ts"
 
 # Test hashline extension (if present — it's in contrib/)
@@ -65,22 +109,72 @@ if [ -f "$PROJECT_DIR/contrib/extensions/hashline.ts" ]; then
     test_extension_loads "hashline.ts" "$PROJECT_DIR/contrib/extensions/hashline.ts"
 fi
 
-# Test that ypi.ts works with RLM env vars set (as it would in real usage)
+# Test that recursive.ts works with RLM env vars set (as it would in real usage)
 echo ""
 echo "--- Environment integration ---"
 
 stderr_file=$(mktemp "${TMPDIR:-/tmp}/ext_test.txt.XXXXXX")
+set +e
 RLM_DEPTH=0 RLM_MAX_DEPTH=5 \
-    echo "test" | timeout 15 pi -p --no-session --no-extensions \
-    -e "$PROJECT_DIR/extensions/ypi.ts" "say ok" \
-    >"$stderr_file.stdout" 2>"$stderr_file" || true
+    timeout 15 pi --no-extensions \
+    -e "$PROJECT_DIR/extensions/recursive.ts" --list-models test \
+    >"$stderr_file.stdout" 2>"$stderr_file"
+rc=$?
+set -e
 
-if grep -qi "Failed to load extension\|Error\|TypeError\|ReferenceError" "$stderr_file"; then
-    fail "ypi.ts with RLM env vars" "$(cat "$stderr_file")"
+if [ "$rc" -ne 0 ]; then
+    fail "recursive.ts with RLM env vars" "exit=$rc stderr=$(cat "$stderr_file")"
+elif grep -qi "Failed to load extension\|Error\|TypeError\|ReferenceError" "$stderr_file"; then
+    fail "recursive.ts with RLM env vars" "$(cat "$stderr_file")"
 else
-    pass "ypi.ts with RLM env vars"
+    pass "recursive.ts with RLM env vars"
 fi
 rm -f "$stderr_file" "$stderr_file.stdout"
+
+# Test the minimal pure-Pi extension mode: only Pi plus the extension files.
+# No ypi launcher, no shell rlm_query helper, no SYSTEM_PROMPT.md, and no jj.
+echo ""
+echo "--- Minimal pure-Pi extension mode ---"
+
+mkdir -p "${HOME}/scratch"
+MIN_ROOT=$(mktemp -d "${HOME}/scratch/ypi-minimal-extension.XXXXXX")
+mkdir -p "$MIN_ROOT/extensions"
+cp "$PROJECT_DIR/extensions/recursive.ts" "$MIN_ROOT/extensions/recursive.ts"
+cp -R "$PROJECT_DIR/extensions/ypi" "$MIN_ROOT/extensions/ypi"
+
+if [ ! -e "$MIN_ROOT/rlm_query" ] && [ ! -e "$MIN_ROOT/SYSTEM_PROMPT.md" ]; then
+    pass "minimal root has no shell helper or external prompt"
+else
+    fail "minimal root has no shell helper or external prompt" "$(find "$MIN_ROOT" -maxdepth 1 -type f -printf '%f ' 2>/dev/null || true)"
+fi
+
+stderr_file="$MIN_ROOT/minimal.stderr"
+stdout_file="$MIN_ROOT/minimal.stdout"
+set +e
+env -u YPI_EXTENSION_ROOT -u YPI_EXTENSION_PATH \
+    RLM_JJ=0 \
+    RLM_MAX_DEPTH=1 \
+    YPI_EXTENSION_DEBUG=1 \
+    timeout 15 pi --no-extensions \
+    -e "$MIN_ROOT/extensions/recursive.ts" --list-models test \
+    >"$stdout_file" 2>"$stderr_file"
+rc=$?
+set -e
+
+if [ "$rc" -ne 0 ]; then
+    fail "minimal extension loads without ypi shell files" "exit=$rc stderr=$(cat "$stderr_file")"
+elif grep -qi "Failed to load extension\|Error\|TypeError\|ReferenceError" "$stderr_file"; then
+    fail "minimal extension loads without ypi shell files" "$(cat "$stderr_file")"
+else
+    pass "minimal extension loads without ypi shell files"
+fi
+
+if grep -q "__YPI_NATIVE_TOOL_REGISTERED__" "$stderr_file" \
+    && grep -q "__YPI_EXTENSION_LOADED__" "$stderr_file"; then
+    pass "minimal extension registers native recursion tool"
+else
+    fail "minimal extension registers native recursion tool" "stderr=$(cat "$stderr_file")"
+fi
 
 # ─── Results ──────────────────────────────────────────────────────────────
 

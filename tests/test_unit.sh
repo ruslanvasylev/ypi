@@ -113,6 +113,7 @@ export RLM_JSON=0
 
 # Temp dir for test artifacts
 TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/rlm_test.XXXXXX")
+export TMPDIR="$TEST_TMP"
 trap 'rm -rf "$TEST_TMP" "$MOCK_BIN"' EXIT
 
 # ─── Test Group: Basic Invocation ─────────────────────────────────────────
@@ -239,6 +240,21 @@ OUTPUT=$(
 assert_contains "T8: --system-prompt in args" "--system-prompt" "$OUTPUT"
 assert_contains "T8: system prompt is file path" "SYSTEM_PROMPT.md" "$OUTPUT"
 
+# T8b: when the canonical ypi extension is available, child Pi reuses it
+# instead of rebuilding the prompt in rlm_query.
+OUTPUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" \
+    RLM_DEPTH=0 \
+    RLM_MAX_DEPTH=3 \
+    RLM_PROVIDER=test-provider \
+    RLM_MODEL=test-model \
+    RLM_SYSTEM_PROMPT="$PROJECT_DIR/SYSTEM_PROMPT.md" \
+    YPI_EXTENSION_PATH="$PROJECT_DIR/extensions/recursive.ts" \
+    rlm_query "Question?"
+)
+assert_contains "T8b: ypi extension passed to child" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
+assert_not_contains "T8b: no duplicate system prompt with extension" "--system-prompt" "$OUTPUT"
+
 # T9: missing system prompt file → no --system-prompt arg
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
@@ -335,12 +351,36 @@ OUTPUT=$(
 assert_contains "T14c: explicit provider passes through" "--provider anthropic" "$OUTPUT"
 assert_contains "T14c: explicit model passes through" "--model claude-opus-4-6" "$OUTPUT"
 
+# T14e: ypi root launcher honors RLM_PROVIDER/RLM_MODEL
+OUTPUT=$(
+    RLM_PROVIDER=openrouter \
+    RLM_MODEL=openai/gpt-5.5:xhigh \
+    YPI_QUIET=1 \
+    "$PROJECT_DIR/ypi" -p --no-session "Launcher model routing?"
+)
+assert_contains "T14e: launcher provider from env" "--provider openrouter" "$OUTPUT"
+assert_contains "T14e: launcher model from env" "--model openai/gpt-5.5:xhigh" "$OUTPUT"
+assert_contains "T14e: launcher loads canonical extension" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
+assert_not_contains "T14e: launcher does not build system prompt" "--system-prompt" "$OUTPUT"
+
+# T14f: explicit ypi CLI provider/model wins over environment routing
+OUTPUT=$(
+    RLM_PROVIDER=openrouter \
+    RLM_MODEL=openai/gpt-5.5:xhigh \
+    YPI_QUIET=1 \
+    "$PROJECT_DIR/ypi" --provider anthropic --model claude-haiku -p --no-session "Launcher explicit routing?"
+)
+assert_contains "T14f: launcher explicit provider" "--provider anthropic" "$OUTPUT"
+assert_contains "T14f: launcher explicit model" "--model claude-haiku" "$OUTPUT"
+assert_not_contains "T14f: launcher provider not duplicated" "--provider openrouter" "$OUTPUT"
+assert_not_contains "T14f: launcher model not duplicated" "--model openai/gpt-5.5:xhigh" "$OUTPUT"
+
 # T14d: RLM_PROMPT_FILE is set and contains the original prompt (symbolic access)
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     rlm_query "How many r's in strawberry?"
 )
-assert_contains "T14d: prompt file is set" "RLM_PROMPT_FILE=/tmp/rlm_prompt_" "$OUTPUT"
+assert_contains "T14d: prompt file is set" "RLM_PROMPT_FILE=$TMPDIR/rlm_prompt_" "$OUTPUT"
 assert_contains "T14d: prompt file has content" "PROMPT_CONTENT=How many r's in strawberry?" "$OUTPUT"
 
 # ─── Test Group: Temp File Cleanup ────────────────────────────────────────
@@ -349,7 +389,7 @@ echo ""
 echo "=== Temp File Cleanup ==="
 
 # T15: temp context files are created in /tmp with expected naming
-BEFORE_COUNT=$(ls /tmp/rlm_ctx_d* 2>/dev/null | wc -l || echo 0)
+BEFORE_COUNT=$(ls "$TMPDIR"/rlm_ctx_d* 2>/dev/null | wc -l || echo 0)
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=0 \
@@ -360,7 +400,7 @@ OUTPUT=$(
 )
 # Note: with exec, the temp file may linger (this tests the CURRENT behavior;
 # after we fix cleanup, this test should verify files are removed)
-AFTER_COUNT=$(ls /tmp/rlm_ctx_d* 2>/dev/null | wc -l || echo 0)
+AFTER_COUNT=$(ls "$TMPDIR"/rlm_ctx_d* 2>/dev/null | wc -l || echo 0)
 # For now just verify it created one
 assert_contains "T15: temp context created" "MOCK_PI_CALLED" "$OUTPUT"
 

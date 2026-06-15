@@ -6,7 +6,7 @@
  * a `clock` tool for on-demand time queries.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 function fmt(ms: number): string {
 	const s = Math.floor(ms / 1000);
@@ -46,7 +46,7 @@ export default function timestamps(pi: ExtensionAPI) {
 		lastTurnEnd = t;
 	});
 
-	const { Type } = require("@sinclair/typebox");
+	const { Type } = require("typebox");
 	pi.registerTool({
 		name: "clock",
 		label: "Current time",

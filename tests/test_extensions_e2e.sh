@@ -36,29 +36,52 @@ echo ""
 echo "=== Extension E2E Tests (pi $PI_VERSION) ==="
 echo ""
 
-# ─── EXT1: ypi.ts loads and hooks session_start ──────────────────────────
+PI_E2E_PROVIDER="${PI_E2E_PROVIDER:-}"
+PI_E2E_MODEL="${PI_E2E_MODEL:-}"
+if [ -z "$PI_E2E_PROVIDER" ]; then
+    if [ -n "${OPENROUTER_API_KEY:-}" ]; then
+        PI_E2E_PROVIDER="openrouter"
+        PI_E2E_MODEL="${PI_E2E_MODEL:-openai/gpt-5.5:xhigh}"
+    elif [ -n "${OPENAI_API_KEY:-}" ]; then
+        PI_E2E_PROVIDER="openai"
+        PI_E2E_MODEL="${PI_E2E_MODEL:-gpt-5.5}"
+    elif [ -n "${ANTHROPIC_API_KEY:-}${ANTHROPIC_OAUTH_TOKEN:-}" ]; then
+        PI_E2E_PROVIDER="anthropic"
+        PI_E2E_MODEL="${PI_E2E_MODEL:-claude-haiku}"
+    else
+        echo "SKIP: no supported live-test API key found"
+        exit 0
+    fi
+fi
+
+PI_E2E_ARGS=(--provider "$PI_E2E_PROVIDER")
+[ -n "$PI_E2E_MODEL" ] && PI_E2E_ARGS+=(--model "$PI_E2E_MODEL")
+echo "Using provider=$PI_E2E_PROVIDER model=${PI_E2E_MODEL:-default}"
+echo ""
+
+# ─── EXT1: recursive.ts loads and hooks session_start ────────────────────
 # The extension sets terminal title to "ypi" — we can't check that in CI,
 # but we CAN verify it loads without crashing during a real session.
 
-echo "--- EXT1: ypi.ts loads and runs without error ---"
+echo "--- EXT1: recursive.ts loads and runs without error ---"
 
 STDERR_FILE="$TEST_TMP/ext1_stderr.txt"
 STDOUT_FILE="$TEST_TMP/ext1_stdout.txt"
 
-# Run a minimal prompt with the ypi extension
-timeout 30 pi -p --no-session \
-    -e "$PROJECT_DIR/extensions/ypi.ts" \
+# Run a minimal prompt with the canonical ypi extension
+timeout 30 pi -p --no-session "${PI_E2E_ARGS[@]}" \
+    -e "$PROJECT_DIR/extensions/recursive.ts" \
     "Reply with exactly: EXTENSION_TEST_OK" \
     >"$STDOUT_FILE" 2>"$STDERR_FILE" || true
 
 if grep -qi "EXTENSION_TEST_OK" "$STDOUT_FILE"; then
     if grep -qi "Failed to load extension\|Error\|TypeError\|Cannot find" "$STDERR_FILE"; then
-        fail "EXT1: ypi.ts loads" "extension error: $(head -3 "$STDERR_FILE")"
+        fail "EXT1: recursive.ts loads" "extension error: $(head -3 "$STDERR_FILE")"
     else
-        pass "EXT1: ypi.ts loads and runs"
+        pass "EXT1: recursive.ts loads and runs"
     fi
 else
-    fail "EXT1: ypi.ts loads" "no response or crash: stdout=$(head -1 "$STDOUT_FILE") stderr=$(head -3 "$STDERR_FILE")"
+    fail "EXT1: recursive.ts loads" "no response or crash: stdout=$(head -1 "$STDOUT_FILE") stderr=$(head -3 "$STDERR_FILE")"
 fi
 
 # ─── EXT2: Extension API — event hooks work ──────────────────────────────
@@ -67,7 +90,7 @@ fi
 echo "--- EXT2: Extension event hooks (session_start) ---"
 
 cat > "$TEST_TMP/test_hook.ts" << 'TSEXT'
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function (pi: ExtensionAPI) {
     pi.on("session_start", async (_event, ctx) => {
@@ -80,7 +103,7 @@ TSEXT
 STDERR_FILE="$TEST_TMP/ext2_stderr.txt"
 STDOUT_FILE="$TEST_TMP/ext2_stdout.txt"
 
-timeout 30 pi -p --no-session \
+timeout 30 pi -p --no-session "${PI_E2E_ARGS[@]}" \
     -e "$TEST_TMP/test_hook.ts" \
     "Say OK" \
     >"$STDOUT_FILE" 2>"$STDERR_FILE" || true
@@ -101,7 +124,7 @@ fi
 echo "--- EXT3: Extension UI API (theme.fg) ---"
 
 cat > "$TEST_TMP/test_theme.ts" << 'TSEXT'
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function (pi: ExtensionAPI) {
     pi.on("session_start", async (_event, ctx) => {
@@ -123,7 +146,7 @@ TSEXT
 STDERR_FILE="$TEST_TMP/ext3_stderr.txt"
 STDOUT_FILE="$TEST_TMP/ext3_stdout.txt"
 
-timeout 30 pi -p --no-session \
+timeout 30 pi -p --no-session "${PI_E2E_ARGS[@]}" \
     -e "$TEST_TMP/test_theme.ts" \
     "Say OK" \
     >"$STDOUT_FILE" 2>"$STDERR_FILE" || true
@@ -143,7 +166,7 @@ fi
 echo "--- EXT4: Extension UI API (setStatus) ---"
 
 cat > "$TEST_TMP/test_status.ts" << 'TSEXT'
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function (pi: ExtensionAPI) {
     pi.on("session_start", async (_event, ctx) => {
@@ -164,7 +187,7 @@ TSEXT
 STDERR_FILE="$TEST_TMP/ext4_stderr.txt"
 STDOUT_FILE="$TEST_TMP/ext4_stdout.txt"
 
-timeout 30 pi -p --no-session \
+timeout 30 pi -p --no-session "${PI_E2E_ARGS[@]}" \
     -e "$TEST_TMP/test_status.ts" \
     "Say OK" \
     >"$STDOUT_FILE" 2>"$STDERR_FILE" || true
@@ -190,7 +213,7 @@ STDOUT_FILE="$TEST_TMP/ext5_stdout.txt"
 export RLM_DEPTH=0
 export RLM_MAX_DEPTH=1
 
-timeout 45 "$PROJECT_DIR/ypi" -p --no-session \
+timeout 45 "$PROJECT_DIR/ypi" -p --no-session "${PI_E2E_ARGS[@]}" \
     "What is 2+2? Reply with ONLY the number." \
     >"$STDOUT_FILE" 2>"$STDERR_FILE" || true
 
@@ -213,7 +236,7 @@ if [ -f "$PROJECT_DIR/contrib/extensions/hashline.ts" ]; then
     STDERR_FILE="$TEST_TMP/ext6_stderr.txt"
     STDOUT_FILE="$TEST_TMP/ext6_stdout.txt"
 
-    timeout 30 pi -p --no-session \
+    timeout 30 pi -p --no-session "${PI_E2E_ARGS[@]}" \
         -e "$PROJECT_DIR/contrib/extensions/hashline.ts" \
         "Say OK" \
         >"$STDOUT_FILE" 2>"$STDERR_FILE" || true
@@ -233,7 +256,7 @@ fi
 echo "--- EXT7: Extension tool_call handler ---"
 
 cat > "$TEST_TMP/test_tool_hook.ts" << 'TSEXT'
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function (pi: ExtensionAPI) {
     pi.on("tool_call", async (event, _ctx) => {
@@ -252,7 +275,7 @@ STDERR_FILE="$TEST_TMP/ext7_stderr.txt"
 STDOUT_FILE="$TEST_TMP/ext7_stdout.txt"
 
 # Ask something that triggers bash tool
-timeout 45 pi -p --no-session \
+timeout 45 pi -p --no-session "${PI_E2E_ARGS[@]}" \
     -e "$TEST_TMP/test_tool_hook.ts" \
     "Run: echo TOOL_TEST_MARKER" \
     >"$STDOUT_FILE" 2>"$STDERR_FILE" || true

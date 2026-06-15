@@ -22,8 +22,8 @@
  *   CACHEBRO_DIFF_CMD     Custom diff command (default: diff -u)
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { TextContent } from "@mariozechner/pi-ai";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { TextContent } from "@earendil-works/pi-ai";
 import { createHash } from "crypto";
 import { readFileSync, writeFileSync, unlinkSync } from "fs";
 import { execSync } from "child_process";

@@ -7,8 +7,8 @@
 #   rlm_cleanup --age 60     # override age threshold (default: 120 min)
 #
 # What it cleans:
-#   1. /tmp/rlm_* temp files (context, prompts, cost, async output)
-#   2. /tmp/rlm_ws_* workspace directories
+#   1. ${TMPDIR:-/tmp}/rlm_* temp files (context, prompts, cost, async output)
+#   2. ${TMPDIR:-/tmp}/rlm_ws_* and ypi_ws_* workspace directories
 #   3. Stale jj workspaces named rlm-* in the current repo (if in a jj repo)
 #
 # Safe by default: dry-run unless --force is passed.
@@ -31,10 +31,11 @@ while [[ "${1:-}" == --* ]]; do
 done
 
 echo "rlm_cleanup — age threshold: ${AGE_MIN}m, mode: $( $FORCE && echo 'FORCE' || echo 'dry-run' )"
+TMP_ROOT="${TMPDIR:-/tmp}"
 echo ""
 
 # --- 1. Temp files ---
-FILES=$(find /tmp -maxdepth 1 -name 'rlm_*' ! -type d -mmin +"$AGE_MIN" 2>/dev/null || true)
+FILES=$(find "$TMP_ROOT" -maxdepth 1 -name 'rlm_*' ! -type d -mmin +"$AGE_MIN" 2>/dev/null || true)
 FILE_COUNT=0
 [ -n "$FILES" ] && FILE_COUNT=$(echo "$FILES" | wc -l)
 FILE_SIZE="0"
@@ -51,7 +52,7 @@ if [ "$FILE_COUNT" -gt 0 ]; then
 fi
 
 # --- 2. Workspace directories ---
-WS_DIRS=$(find /tmp -maxdepth 1 -name 'rlm_ws_*' -type d -mmin +"$AGE_MIN" 2>/dev/null || true)
+WS_DIRS=$(find "$TMP_ROOT" -maxdepth 1 \( -name 'rlm_ws_*' -o -name 'ypi_ws_*' \) -type d -mmin +"$AGE_MIN" 2>/dev/null || true)
 WS_COUNT=0
 [ -n "$WS_DIRS" ] && WS_COUNT=$(echo "$WS_DIRS" | wc -l)
 WS_SIZE="0"
@@ -69,10 +70,10 @@ fi
 
 # --- 3. Stale jj workspaces (rlm-* pattern) ---
 if jj root &>/dev/null 2>&1; then
-    STALE_WS=$(jj workspace list 2>/dev/null | grep '^rlm-' | awk '{print $1}' | sed 's/:$//' || true)
+    STALE_WS=$(jj workspace list 2>/dev/null | grep -E '^(rlm-|ypi-)' | awk '{print $1}' | sed 's/:$//' || true)
     STALE_WS_COUNT=$(echo "$STALE_WS" | grep -c . 2>/dev/null || echo 0)
 
-    echo "Stale jj workspaces (rlm-*): $STALE_WS_COUNT"
+    echo "Stale jj workspaces (rlm-* / ypi-*): $STALE_WS_COUNT"
     if [ "$STALE_WS_COUNT" -gt 0 ]; then
         if [ "$FORCE" = true ]; then
             echo "$STALE_WS" | while read -r ws; do

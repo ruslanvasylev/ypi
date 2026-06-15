@@ -24,7 +24,7 @@
  *   Or load with: pi -e path/to/persist-system-prompt.ts
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
 
 export default function persistSystemPromptExtension(pi: ExtensionAPI) {

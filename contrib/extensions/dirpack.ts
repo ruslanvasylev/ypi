@@ -12,7 +12,7 @@
  *   Place at ~/.pi/agent/extensions/dirpack.ts
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { execSync } from "node:child_process";
 
 const TOKEN_BUDGET = 4000;

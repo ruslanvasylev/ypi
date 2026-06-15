@@ -8,21 +8,21 @@
 
 let known_good = exec "cat .pi-version 2>/dev/null || echo unknown"
 let installed = exec "pi --version 2>/dev/null || echo not-installed"
-let latest = exec "npm view @mariozechner/pi-coding-agent version"
+let latest = exec "bun pm view @earendil-works/pi-coding-agent version"
 
 session "Report version state"
   prompt: """
     Versions:
       Known-good: {known_good}
       Installed:  {installed}
-      Latest npm: {latest}
+      Latest package: {latest}
 
     If all three match, say "Already up to date" and we're done.
     Otherwise, summarize what changed.
   """
 
 if **the installed version is not the latest**:
-  exec "bun install -g @mariozechner/pi-coding-agent@{latest}"
+  exec "bun install -g @earendil-works/pi-coding-agent@{latest}"
   let installed = exec "pi --version"
 
 # --- Run tests ---

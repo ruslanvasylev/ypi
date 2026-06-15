@@ -86,10 +86,10 @@ delegation fails, that's a bug you just found.
 
 ## Architectural Invariants
 
-Three properties make ypi work. All are tested (E7, E8 in test_e2e.sh):
+Three properties make ypi work. All are tested (E7, E8, E9 in test_e2e.sh):
 
 1. **Self-similarity** — Same prompt, same tools, same agent at every depth. No specialized roles. The intelligence is in decomposition, not specialization.
-2. **Self-hosting** — SYSTEM_PROMPT.md (SECTION 6) contains the full source of `rlm_query`. The agent reads its own recursion machinery. When it modifies `rlm_query`, it's modifying itself.
+2. **Self-hosting** — When the shell helper is enabled (`YPI_SHELL_HELPER=1`, set by the `ypi` wrapper), the system prompt's SECTION 6 is generated with the full source of `rlm_query`, so the agent can read its own recursion machinery — when it modifies `rlm_query`, it's modifying itself. A bare `pi -e` / native-tool install omits SECTION 6 and recurses through the native tool.
 3. **Bounded recursion** — 5 guardrails (depth, PATH scrubbing, call count, budget, timeout) guarantee termination. The system prompt adds *cognitive* pressure: deeper agents prefer direct action.
 4. **Symbolic access** — Anything the agent needs to manipulate precisely is a file, not just tokens in context. `$CONTEXT` for data, `$RLM_PROMPT_FILE` for the original prompt, hashline for edits. Agents grep/sed/cat instead of copying tokens from memory. (T14d)
 
@@ -270,13 +270,16 @@ testing between changes. One variable at a time.
 | `RLM_SYSTEM_PROMPT` | Path to system prompt file | (required) |
 | `PI_TRACE_FILE` | Trace log path | (none) |
 | `RLM_TIMEOUT` | Max wall-clock seconds | (none = unlimited) |
-| `RLM_START_TIME` | Epoch timestamp of root call | (auto-set) |
-| `RLM_MAX_CALLS` | Max total rlm_query invocations | (none = unlimited) |
+| `RLM_START_TIME` | Epoch seconds when the current depth-0 tree began | (auto-set per top-level call) |
+| `RLM_MAX_CALLS` | Max total rlm_query invocations (permits 1..N, rejects N+1) | (none = unlimited) |
 | `RLM_CALL_COUNT` | Running count of calls so far | `0` |
 | `RLM_CHILD_MODEL` | Model override for depth > 0 | (none = same as parent) |
 | `RLM_CHILD_PROVIDER` | Provider override for depth > 0 | (none = same as parent) |
 | `RLM_JJ` | Enable jj workspace isolation | `1` (set `0` to disable) |
-| `RLM_SHARED_SESSIONS` | Allow agents to read sibling/parent session logs | `1` (set `0` to disable) |
+| `RLM_UNSAFE_NO_JJ_WRITE` | Allow writable child tools when jj is disabled/unavailable | `0` |
+| `RLM_SHARED_SESSIONS` | Allow child agents to write trace-named Pi sessions | `1` (set `0` for `--no-session`) |
+| `RLM_CHILD_DISCOVERY` | Allow child Pi to load project skills, prompt templates, themes, context files, and approval prompts | `0` |
+| `YPI_SHELL_HELPER` | Expose the shell `rlm_query` helper (its dir on `PATH` + its source in the prompt); the `ypi` wrapper sets this | `0` (a bare `pi -e` / npm install uses the native tool only) |
 
 ## Bugs We've Found (and must not re-introduce)
 
@@ -298,6 +301,46 @@ fall back to inherited `CONTEXT`.
 **Symptom**: Model calls rlm_query on 11-line contexts, creating infinite chains.
 **Fix**: "Check context size first, read directly if small."
 **Test**: E1 (small context, should answer directly without sub-calls).
+
+### 4. `RLM_MAX_CALLS` off-by-one (the Nth call was blocked)
+**Symptom**: `RLM_MAX_CALLS=1` allowed zero calls; the budget under-counted by one.
+**Cause**: the call count is allocated 1-based, but the guard used `>=` / `-ge`, rejecting call N.
+**Fix**: reject only when the count exceeds the limit (`>` native, `-gt` shell) in both `native-tool.ts` and `rlm_query`.
+**Test**: N2 (native harness), G8/G8b (guardrails).
+
+### 5. Unsanitized trace IDs in session/temp filenames
+**Symptom**: a hostile `RLM_TRACE_ID` (e.g. `../../x`) could traverse out of the session directory.
+**Cause**: the raw `RLM_TRACE_ID` was interpolated into the child session filename and async job ID.
+**Fix**: normalize `RLM_TRACE_ID` in place (`safe_trace_id` / `safeTraceId`) before any path use; also sanitize at the native filename site.
+**Test**: N13 (native harness), G52 (guardrails).
+
+### 6. Stale `RLM_START_TIME` on a long-running root Pi
+**Symptom**: after a root Pi session was open longer than `RLM_TIMEOUT`, every `rlm_query` immediately "timed out."
+**Cause**: the extension froze `RLM_START_TIME` at session start instead of when a recursion tree begins.
+**Fix**: anchor `RLM_START_TIME` at each depth-0 call (native tool + shell); the extension no longer seeds it at load.
+**Test**: N3/N12 (native harness), G4/G16 (guardrails).
+
+### 7. Async `--notify` wrote invalid JSON; async temp files ignored `TMPDIR`
+**Symptom**: child output with quotes/newlines/backslashes produced malformed peer-inbox JSONL; async temp files were hardcoded to `/tmp`.
+**Cause**: raw string interpolation into the JSON message; `ASYNC_OUTPUT`/`ASYNC_SENTINEL` ignored `${TMPDIR:-/tmp}`.
+**Fix**: build the inbox line with `python3 json.dumps`; honor `${TMPDIR:-/tmp}`.
+**Test**: G53 (guardrails).
+
+### 8. Provider env allowlist drift from upstream Pi (incl. a blind completeness test)
+**Symptom**: a recursive child could not authenticate where the parent could — for env-var-only
+auth on github-copilot (`COPILOT_GITHUB_TOKEN`) and huggingface (`HF_TOKEN`). The native tool's
+`buildChildEnvironment` forwards only an allowlist, and both names were missing. A regression
+versus master, which used no allowlist and inherited the full ambient env.
+**Cause (two layers)**: (1) the hand-maintained allowlist drifted from Pi's provider env vars;
+(2) the first completeness test only matched names ending in `_API_KEY`/`_OAUTH_TOKEN`, so it was
+structurally blind to `COPILOT_GITHUB_TOKEN` / `HF_TOKEN` and passed despite the real gap.
+**Fix**: added both names to the native + shell allowlists, and rewrote the completeness check to
+derive the credential set from pi-mono's `getApiKeyEnvVars()` (the source of truth) by extracting
+the actual env var NAMES — suffix-agnostic, so it can never go blind to a new provider name.
+**Lesson**: a self-validating test must derive from the source of truth, not a guessed pattern;
+a pattern-based "completeness" check gives false confidence.
+**Test**: `tests/test_provider_allowlist.sh` (P1/P2 parity, P3 populated, C1 completeness derived
+from `getApiKeyEnvVars()` in pinned pi-mono).
 
 ### Secrets & Encryption
 Files in `private/`, `experiments/`, `.prose/runs/`, and `.prose/agents/` are encrypted with

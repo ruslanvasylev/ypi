@@ -2,7 +2,7 @@
 # ypi installer — one-line install:
 #   curl -fsSL https://raw.githubusercontent.com/rawwerks/ypi/master/install.sh | bash
 #
-# Installs ypi + Pi coding agent. Requires: npm (or bun), git, bash.
+# Installs ypi + Pi coding agent. Requires: bun (or npm), git, bash.
 # Optional: jj (for workspace isolation), sops + age (for encrypted notes)
 
 set -euo pipefail
@@ -45,9 +45,9 @@ fi
 if ! command -v pi &>/dev/null; then
     info "Installing Pi coding agent..."
     if [ "$HAS_BUN" = true ]; then
-        bun install -g @mariozechner/pi-coding-agent
+        bun install -g @earendil-works/pi-coding-agent
     else
-        npm install -g @mariozechner/pi-coding-agent
+        npm install -g @earendil-works/pi-coding-agent
     fi
     dim "Installed $(pi --version 2>/dev/null | head -1 || echo 'pi')"
 else

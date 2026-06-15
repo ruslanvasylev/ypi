@@ -14,7 +14,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
 
       - name: Install Pi
-        run: bun install -g @mariozechner/pi-coding-agent
+        run: bun install -g @earendil-works/pi-coding-agent
 
       - name: Show versions
         run: |

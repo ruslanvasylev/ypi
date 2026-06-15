@@ -1,13 +1,13 @@
 # pi-lsp
 
-LSP extension for [Pi](https://github.com/badlogic/pi-mono) — compiler-grade code intelligence via Language Server Protocol.
+LSP extension for [Pi](https://github.com/earendil-works/pi) — compiler-grade code intelligence via Language Server Protocol.
 
 ## Install
 
 ```bash
 # Copy to Pi's extensions directory
 git clone https://github.com/rawwerks/pi-lsp.git ~/.pi/agent/extensions/lsp
-cd ~/.pi/agent/extensions/lsp && npm install
+cd ~/.pi/agent/extensions/lsp && bun install
 ```
 
 That's it. Pi auto-discovers extensions in `~/.pi/agent/extensions/`.

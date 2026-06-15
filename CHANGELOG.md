@@ -3,6 +3,32 @@
 All notable changes to ypi are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.0] - Unreleased
+
+### Added
+- **`pi-recursive` package**: the pure Pi extension (the `pi.extensions` surface, no `bin`) is now published as its own companion package — `pi install npm:pi-recursive`. `ypi` remains the CLI wrapper. Both are built from one canonical source: `pi-recursive` is staged from the root `extensions/` + `SYSTEM_PROMPT.md` by `scripts/build-pi-recursive` (an explicit build step, not an npm lifecycle hook), and `tests/test_pi_recursive_pack.sh` proves the packed extension installs and registers the native tool.
+- **Extension-first architecture**: `extensions/recursive.ts` is now the canonical Pi extension; the `ypi` launcher and shell `rlm_query` are convenience layers around it. Split into modules under `extensions/ypi/` (`runtime`, `env`, `guardrails`, `prompt`, `status`, `native-tool`).
+- **Native `rlm_query` Pi tool**: recursion works from a bare `pi -e ./extensions/recursive.ts` (or npm extension install) with no `ypi` launcher, shell helper, or jj. Verified against Pi 0.79.4.
+- **`pure-extension/` proof + parity harness** (`test.sh`, `compare.sh`, `DIFFERENCES.md`) and a native-tool unit harness (`tests/test_native_tool.sh`).
+- **Self-validating provider env allowlist** (`tests/test_provider_allowlist.sh`): enforces native/shell parity and completeness, deriving the required credential set from pi-mono's `getApiKeyEnvVars()` (suffix-agnostic) so the allowlist cannot silently drift or go blind to names like `COPILOT_GITHUB_TOKEN` / `HF_TOKEN`.
+- **`.gitleaks.toml`**: extends the default ruleset with a narrow allowlist for Cloudflare provider env-var *names* (identifiers, not secrets).
+- Packed-consumer smoke (`tests/test_consumer_pack.sh`) asserts the tarball ships `rlm_cleanup` and installs it as an executable.
+
+### Changed
+- **Shell helper is opt-in** via `YPI_SHELL_HELPER=1` (set by the `ypi` wrapper). A bare `pi -e` / npm extension install defaults to the native tool only — no shell helper on `PATH`, no shell source folded into the prompt.
+- Provider env allowlist extended to cover additional Pi 0.79.4 credentials (Google Cloud, Ollama, Portkey, MiniMax CN, AWS container/web-identity, Azure API version, Cloudflare gateway routing).
+- `package.json`: `typebox` moved to runtime `dependencies`; `rlm_cleanup` added to `bin` and `files`.
+
+### Fixed
+- **`RLM_MAX_CALLS` off-by-one**: `RLM_MAX_CALLS=N` now permits exactly N calls (was N−1) in both the native tool and shell `rlm_query`.
+- **Trace-ID path traversal**: `RLM_TRACE_ID` is sanitized before use in session/temp filenames and async job IDs.
+- **Stale timeout budget**: `RLM_START_TIME` is anchored when each depth-0 recursion tree begins instead of frozen at extension load, so a long-running root Pi no longer falsely times out.
+- **Async `--notify`**: peer-inbox lines are JSON-encoded with `python3` (valid even with quotes/newlines in child output); async temp files honor `${TMPDIR:-/tmp}` instead of hardcoded `/tmp`.
+- **`check-upstream --dry-run`**: now runs the test suite even when the pinned version is already known-good (previously skipped tests via an early exit).
+- **Provider credential forwarding**: recursive children now inherit `COPILOT_GITHUB_TOKEN` (github-copilot) and `HF_TOKEN` (huggingface), which were dropped by the child-env allowlist — env-var-only-authed parents could not authenticate their children for those providers.
+- **Recursion depth config fails closed**: a non-integer `RLM_DEPTH`/`RLM_MAX_DEPTH` now errors instead of silently bypassing the depth limiter (native and shell).
+- Collapsed a dead `--no-extensions` if/else branch in the shell `rlm_query` (both arms were identical).
+
 ## [0.5.1] - 2026-03-23
 
 ### Fixed

@@ -24,7 +24,7 @@
  *     share trace ID and depth 0, distinguished by ppid being another pi
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { execSync, spawn } from "child_process";
 import {
 	readFileSync,
@@ -912,7 +912,7 @@ export default function findTheOthers(pi: ExtensionAPI) {
 	});
 
 	// LLM-callable tool
-	const { Type } = require("@sinclair/typebox");
+	const { Type } = require("typebox");
 
 	pi.registerTool({
 		name: "peers",

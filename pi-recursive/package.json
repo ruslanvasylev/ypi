@@ -1,12 +1,13 @@
 {
-  "name": "ypi",
+  "name": "pi-recursive",
   "version": "0.6.0",
-  "description": "ypi — a recursive coding agent. Pi that can call itself via rlm_query.",
+  "description": "Pure Pi extension that lets Pi recursively call itself via a native rlm_query tool.",
   "license": "MIT",
   "author": "Raymond Weitekamp",
   "repository": {
     "type": "git",
-    "url": "https://github.com/rawwerks/ypi.git"
+    "url": "https://github.com/rawwerks/ypi.git",
+    "directory": "pi-recursive"
   },
   "homepage": "https://github.com/rawwerks/ypi#readme",
   "bugs": {
@@ -21,37 +22,23 @@
     "llm",
     "pi",
     "pi-package",
-    "cli"
+    "pi-extension"
   ],
   "pi": {
     "extensions": [
       "./extensions/recursive.ts"
     ]
   },
-  "bin": {
-    "ypi": "./ypi",
-    "rlm_query": "./rlm_query",
-    "rlm_cost": "./rlm_cost",
-    "rlm_parse_json": "./rlm_parse_json",
-    "rlm_sessions": "./rlm_sessions",
-    "rlm_cleanup": "./rlm_cleanup"
-  },
   "files": [
-    "ypi",
-    "rlm_query",
-    "rlm_cost",
-    "rlm_parse_json",
-    "rlm_sessions",
-    "rlm_cleanup",
+    "extensions/**/*.ts",
     "SYSTEM_PROMPT.md",
-    "install.sh",
     "README.md",
-    "LICENSE",
-    "CHANGELOG.md",
-    "extensions/**/*.ts"
+    "LICENSE"
   ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "0.79.4"
+  },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.79.4",
     "typebox": "1.1.38"
   },
   "os": [

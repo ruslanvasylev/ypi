@@ -58,6 +58,8 @@ echo "RLM_MAX_CALLS=${RLM_MAX_CALLS:-unset}"
 echo "RLM_CALL_COUNT=${RLM_CALL_COUNT:-unset}"
 echo "RLM_CHILD_MODEL=${RLM_CHILD_MODEL:-unset}"
 echo "RLM_CHILD_PROVIDER=${RLM_CHILD_PROVIDER:-unset}"
+echo "RLM_TRACE_ID=${RLM_TRACE_ID:-unset}"
+echo "RLM_SESSION_FILE=${RLM_SESSION_FILE:-unset}"
 # Simulate a slow call if MOCK_SLEEP is set
 if [ -n "${MOCK_SLEEP:-}" ]; then
     sleep "$MOCK_SLEEP"
@@ -78,6 +80,7 @@ unset RLM_EXTENSIONS RLM_CHILD_EXTENSIONS RLM_HASHLINE RLM_JJ RLM_JSON RLM_STDIN
 export RLM_JSON=0
 
 TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/rlm_test.XXXXXX")
+export TMPDIR="$TEST_TMP"
 cat > "$TEST_TMP/ctx.txt" << 'EOF'
 Test context for guardrail tests.
 EOF
@@ -192,7 +195,7 @@ fi
 echo ""
 echo "=== Model Routing ==="
 
-# G5: child model override at depth > 0
+# G5: child model override applies to root-to-child calls
 if _feature_exists "RLM_CHILD_MODEL"; then
     OUTPUT=$(
         CONTEXT="$TEST_TMP/ctx.txt" \
@@ -201,25 +204,21 @@ if _feature_exists "RLM_CHILD_MODEL"; then
         RLM_CHILD_MODEL=claude-haiku RLM_CHILD_PROVIDER=anthropic \
         rlm_query "Model routing test?"
     )
-    # At depth 0→1, should the child see the child model?
-    # The parent rlm_query is at depth 0, spawning depth 1
-    # If depth > 0, use child model
-    assert_contains "G5: child model propagated" "RLM_CHILD_MODEL" "$OUTPUT"
+    assert_contains "G5: root-to-child uses child model" "--model claude-haiku" "$OUTPUT"
+    assert_contains "G5: root-to-child uses child provider" "--provider anthropic" "$OUTPUT"
 else
     skip "G5: child model override" "RLM_CHILD_MODEL not implemented yet"
 fi
 
-# G6: root (depth=0) uses root model, not child model
+# G6: root model is used when no child override is set
 if _feature_exists "RLM_CHILD_MODEL"; then
     OUTPUT=$(
         CONTEXT="$TEST_TMP/ctx.txt" \
         RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
         RLM_PROVIDER=anthropic RLM_MODEL=claude-sonnet \
-        RLM_CHILD_MODEL=claude-haiku \
-        rlm_query "Root model test?"
+        rlm_query "Root model test without child override?"
     )
-    # The pi call should use claude-sonnet (root model), not claude-haiku
-    assert_contains "G6: root uses root model" "claude-sonnet" "$OUTPUT"
+    assert_contains "G6: root model passes through without override" "--model claude-sonnet" "$OUTPUT"
 else
     skip "G6: root uses root model" "RLM_CHILD_MODEL not implemented yet"
 fi
@@ -247,19 +246,35 @@ else
     skip "G7: call counter increments" "RLM_CALL_COUNT not implemented yet"
 fi
 
-# G8: max calls exceeded → error, no pi call
+# G8: the (N+1)th call is blocked → error, no pi call
 if _feature_exists "RLM_MAX_CALLS"; then
     OUTPUT=$(
         CONTEXT="$TEST_TMP/ctx.txt" \
         RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
         RLM_PROVIDER=test RLM_MODEL=test \
-        RLM_CALL_COUNT=19 \
+        RLM_CALL_COUNT=20 \
         RLM_MAX_CALLS=20 \
         rlm_query "Should be blocked?" 2>&1 || true
     )
     assert_not_contains "G8: blocked → no pi call" "MOCK_PI_CALLED" "$OUTPUT"
+    assert_contains "G8: blocked → error message" "Max calls exceeded" "$OUTPUT"
 else
     skip "G8: max calls exceeded" "RLM_MAX_CALLS not implemented yet"
+fi
+
+# G8b: RLM_MAX_CALLS=N permits exactly N calls (the boundary call is allowed)
+if _feature_exists "RLM_MAX_CALLS"; then
+    OUTPUT=$(
+        CONTEXT="$TEST_TMP/ctx.txt" \
+        RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
+        RLM_PROVIDER=test RLM_MODEL=test \
+        RLM_CALL_COUNT=0 \
+        RLM_MAX_CALLS=1 \
+        rlm_query "First call allowed?" 2>&1 || true
+    )
+    assert_contains "G8b: RLM_MAX_CALLS=1 allows the first call" "MOCK_PI_CALLED" "$OUTPUT"
+else
+    skip "G8b: max calls boundary" "RLM_MAX_CALLS not implemented yet"
 fi
 
 
@@ -272,14 +287,14 @@ echo "=== Temp File Cleanup ==="
 
 # G9: temp context file cleaned up after successful run
 # (This tests post-exec cleanup — currently broken because of `exec`)
-BEFORE=$(find /tmp -maxdepth 1 -type f -name 'rlm_ctx_d*' 2>/dev/null | wc -l)
+BEFORE=$(find "$TMPDIR" -maxdepth 1 -type f -name 'rlm_ctx_d*' 2>/dev/null | wc -l)
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
     RLM_PROVIDER=test RLM_MODEL=test \
     rlm_query "Cleanup test?"
 )
-AFTER=$(find /tmp -maxdepth 1 -type f -name 'rlm_ctx_d*' 2>/dev/null | wc -l)
+AFTER=$(find "$TMPDIR" -maxdepth 1 -type f -name 'rlm_ctx_d*' 2>/dev/null | wc -l)
 
 if grep -q 'rm -f "$CHILD_CONTEXT"' "$RLM_QUERY" 2>/dev/null; then
     # After implementing cleanup, AFTER should equal BEFORE
@@ -297,14 +312,14 @@ exit 1
 ERRPI
     chmod +x "$MOCK_BIN/pi"
 
-    BEFORE=$(find /tmp -maxdepth 1 -type f -name 'rlm_ctx_d*' 2>/dev/null | wc -l)
+    BEFORE=$(find "$TMPDIR" -maxdepth 1 -type f -name 'rlm_ctx_d*' 2>/dev/null | wc -l)
     OUTPUT=$(
         CONTEXT="$TEST_TMP/ctx.txt" \
         RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
         RLM_PROVIDER=test RLM_MODEL=test \
         rlm_query "Error cleanup test?" 2>&1 || true
     )
-    AFTER=$(find /tmp -maxdepth 1 -type f -name 'rlm_ctx_d*' 2>/dev/null | wc -l)
+    AFTER=$(find "$TMPDIR" -maxdepth 1 -type f -name 'rlm_ctx_d*' 2>/dev/null | wc -l)
     assert_eq "G10: temp cleaned after error" "$BEFORE" "$AFTER"
 
     # Restore normal mock
@@ -463,11 +478,11 @@ echo "RLM_CALL_COUNT=${RLM_CALL_COUNT:-unset}"
 MOCK_PI
 chmod +x "$MOCK_BIN/pi"
 
-# G16: Timeout error has Why + Fix
+# G16: Timeout error has Why + Fix (depth>0 child inheriting an expired tree budget)
 PAST=$(($(date +%s) - 100))
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
-    RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
+    RLM_DEPTH=1 RLM_MAX_DEPTH=3 \
     RLM_TIMEOUT=1 \
     RLM_START_TIME=$PAST \
     RLM_PROVIDER=test RLM_MODEL=test \
@@ -624,13 +639,13 @@ OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
     RLM_PROVIDER=test RLM_MODEL=test \
-    RLM_TRACE_ID="abc12345" \
+    RLM_TRACE_ID="abcg25" \
     RLM_SESSION_DIR="$SESSION_TMP" \
     RLM_CALL_COUNT=0 \
     rlm_query "Session filename test"
 )
-# Depth 0→1, call count becomes 1: abc12345_d1_c1.jsonl
-assert_contains "G25: session has trace ID" "abc12345" "$OUTPUT"
+# Depth 0→1, call count becomes 1: abcg25_d1_c1.jsonl
+assert_contains "G25: session has trace ID" "abcg25" "$OUTPUT"
 assert_contains "G25: session has depth" "_d1_" "$OUTPUT"
 assert_contains "G25: session has call count" "_c1.jsonl" "$OUTPUT"
 
@@ -639,12 +654,12 @@ OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
     RLM_PROVIDER=test RLM_MODEL=test \
-    RLM_TRACE_ID="abc12345" \
+    RLM_TRACE_ID="abcg26" \
     RLM_SESSION_DIR="$SESSION_TMP" \
     RLM_CALL_COUNT=0 \
     rlm_query "Session file env test"
 )
-assert_contains "G26: RLM_SESSION_FILE set" "abc12345_d1_c1.jsonl" "$OUTPUT"
+assert_contains "G26: RLM_SESSION_FILE set" "abcg26_d1_c1.jsonl" "$OUTPUT"
 assert_not_contains "G26: RLM_SESSION_FILE not unset" "RLM_SESSION_FILE=unset" "$OUTPUT"
 
 # G27: max depth nodes still get sessions (they have full tools)
@@ -789,44 +804,51 @@ echo "RLM_MODEL=$RLM_MODEL"
 MOCK_PI
 chmod +x "$MOCK_BIN/pi"
 
-# G34: children have extensions by default
+# G34: children load only ypi's explicit extension by default
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
+    YPI_EXTENSION_PATH="$PROJECT_DIR/extensions/recursive.ts" \
     RLM_PROVIDER=test RLM_MODEL=test \
     rlm_query "Extensions default test"
 )
-assert_not_contains "G34: extensions on by default" "--no-extensions" "$OUTPUT"
+assert_contains "G34: ambient extension discovery disabled" "--no-extensions" "$OUTPUT"
+assert_contains "G34: ypi extension explicitly loaded" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
 
-# G35: RLM_EXTENSIONS=0 disables extensions
+# G35: RLM_EXTENSIONS=0 disables even ypi's explicit extension
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
+    YPI_EXTENSION_PATH="$PROJECT_DIR/extensions/recursive.ts" \
     RLM_PROVIDER=test RLM_MODEL=test \
     RLM_EXTENSIONS=0 \
     rlm_query "Extensions disabled test"
 )
 assert_contains "G35: RLM_EXTENSIONS=0 disables" "--no-extensions" "$OUTPUT"
+assert_not_contains "G35: no explicit extension when disabled" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
 
-# G36: max depth nodes still get extensions by default
+# G36: max depth nodes still get ypi's explicit extension by default
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=2 RLM_MAX_DEPTH=3 \
+    YPI_EXTENSION_PATH="$PROJECT_DIR/extensions/recursive.ts" \
     RLM_PROVIDER=test RLM_MODEL=test \
     rlm_query "Max depth extensions test"
 )
-assert_not_contains "G36: max depth has extensions" "--no-extensions" "$OUTPUT"
+assert_contains "G36: max depth disables ambient discovery" "--no-extensions" "$OUTPUT"
+assert_contains "G36: max depth has ypi extension" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
 
-# G37: RLM_CHILD_EXTENSIONS=0 disables extensions for children only
+# G37: RLM_CHILD_EXTENSIONS=0 disables root-to-child extension loading
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
+    YPI_EXTENSION_PATH="$PROJECT_DIR/extensions/recursive.ts" \
     RLM_PROVIDER=test RLM_MODEL=test \
     RLM_CHILD_EXTENSIONS=0 \
     rlm_query "Root with child ext off"
 )
-# At depth 0, RLM_CHILD_EXTENSIONS doesn't apply (depth not > 0)
-assert_not_contains "G37: root keeps extensions" "--no-extensions" "$OUTPUT"
+assert_contains "G37: root-to-child extensions disabled" "--no-extensions" "$OUTPUT"
+assert_not_contains "G37: root-to-child no explicit extension" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
 
 # G38: RLM_CHILD_EXTENSIONS=0 applies at depth > 0
 OUTPUT=$(
@@ -1022,6 +1044,124 @@ OUTPUT=$(
 assert_contains "G51: trace filter includes matching" "abc123_d0_c1.jsonl" "$OUTPUT"
 assert_not_contains "G51: trace filter excludes other" "other99_d0_c1.jsonl" "$OUTPUT"
 rm -rf "$SESSION_DIR"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TRACE ID SANITIZATION
+# ═══════════════════════════════════════════════════════════════════════════
+
+echo ""
+echo "=== Trace ID Sanitization ==="
+
+# G52: a hostile RLM_TRACE_ID cannot traverse out of the session directory
+if _feature_exists "safe_trace_id"; then
+    cat > "$MOCK_BIN/pi" << 'TRACEPI'
+#!/bin/bash
+echo "ARGS: $*"
+echo "RLM_TRACE_ID=${RLM_TRACE_ID:-unset}"
+echo "RLM_SESSION_FILE=${RLM_SESSION_FILE:-unset}"
+TRACEPI
+    chmod +x "$MOCK_BIN/pi"
+    OUTPUT=$(
+        CONTEXT="$TEST_TMP/ctx.txt" \
+        RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
+        RLM_PROVIDER=test RLM_MODEL=test \
+        RLM_SESSION_DIR="$TEST_TMP/san_sessions" \
+        RLM_TRACE_ID="../../etc/evil" \
+        rlm_query "Sanitize trace?" 2>&1 || true
+    )
+    assert_contains "G52: hostile trace id is sanitized for the child" "RLM_TRACE_ID=.._.._etc_evil" "$OUTPUT"
+    assert_contains "G52: session file uses the sanitized trace id" ".._.._etc_evil_d1_c1.jsonl" "$OUTPUT"
+    assert_not_contains "G52: session file cannot traverse out of the dir" "/etc/evil_d1" "$OUTPUT"
+else
+    skip "G52: trace id sanitization" "safe_trace_id not implemented yet"
+fi
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ASYNC NOTIFY
+# ═══════════════════════════════════════════════════════════════════════════
+
+echo ""
+echo "=== Async Notify ==="
+
+# G53: --async --notify writes valid JSON to the peer inbox even when child output
+# contains quotes/backslashes/newlines, and async temp files honor TMPDIR.
+if _feature_exists "NOTIFY_PID"; then
+    cat > "$MOCK_BIN/pi" << 'NASTYPI'
+#!/bin/bash
+printf '%s\n' 'He said "hello" and used C:\path\to\file'
+printf '%s\n' 'second line with a } brace and , comma'
+NASTYPI
+    chmod +x "$MOCK_BIN/pi"
+
+    # The inbox finder searches /tmp/pi_peer_* by agent-mail convention, so the fake
+    # peer must live there. Unique per test pid; cleaned up afterward.
+    PEER_DIR="/tmp/pi_peer_rlmtest_$$"
+    mkdir -p "$PEER_DIR"
+    printf '{"pid":%s}\n' "$$" > "$PEER_DIR/meta.json"
+
+    JOB=$(
+        CONTEXT="$TEST_TMP/ctx.txt" \
+        RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=0 \
+        RLM_PROVIDER=test RLM_MODEL=test \
+        rlm_query --async --notify "$$" "Async hostile output?" 2>/dev/null || true
+    )
+
+    OUT_PATH=$(printf '%s' "$JOB" | python3 -c "import json,sys; print(json.load(sys.stdin).get('output',''))" 2>/dev/null || echo "")
+    case "$OUT_PATH" in
+        "$TEST_TMP"/*) pass "G53: async temp output honors TMPDIR" ;;
+        *) fail "G53: async temp output honors TMPDIR" "output=$OUT_PATH" ;;
+    esac
+
+    INBOX="$PEER_DIR/inbox.jsonl"
+    for _ in $(seq 1 100); do [ -s "$INBOX" ] && break; sleep 0.1; done
+
+    if [ -s "$INBOX" ]; then
+        LINE=$(tail -n 1 "$INBOX")
+        if printf '%s' "$LINE" | python3 -c "import json,sys; json.loads(sys.stdin.read())" 2>/dev/null; then
+            pass "G53: notify writes valid JSON despite hostile child output"
+        else
+            fail "G53: notify writes valid JSON despite hostile child output" "invalid JSON: $LINE"
+        fi
+        MSG_OK=$(printf '%s' "$LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print('yes' if 'He said \"hello\"' in d.get('message','') else 'no')" 2>/dev/null || echo "no")
+        assert_eq "G53: notify message preserves the hostile content" "yes" "$MSG_OK"
+    else
+        fail "G53: notify writes to the peer inbox" "no inbox content at $INBOX"
+    fi
+
+    rm -rf "$PEER_DIR"
+    # Restore the canonical mock for any later additions.
+    cat > "$MOCK_BIN/pi" << 'MOCK_PI'
+#!/bin/bash
+echo "MOCK_PI_CALLED"
+MOCK_PI
+    chmod +x "$MOCK_BIN/pi"
+else
+    skip "G53: async notify" "NOTIFY_PID not implemented yet"
+fi
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DEPTH CONFIG VALIDATION
+# ═══════════════════════════════════════════════════════════════════════════
+
+echo ""
+echo "=== Depth Validation ==="
+
+# G54: a non-integer RLM_MAX_DEPTH fails closed (no pi call) instead of bypassing the limiter
+if grep -q 'Invalid RLM_MAX_DEPTH' "$RLM_QUERY" 2>/dev/null; then
+    OUTPUT=$(
+        CONTEXT="$TEST_TMP/ctx.txt" \
+        RLM_DEPTH=0 RLM_MAX_DEPTH=abc \
+        RLM_PROVIDER=test RLM_MODEL=test \
+        rlm_query "Malformed depth?" 2>&1 || true
+    )
+    assert_not_contains "G54: malformed depth → no pi call" "MOCK_PI_CALLED" "$OUTPUT"
+    assert_contains "G54: malformed depth → error message" "Invalid RLM_MAX_DEPTH" "$OUTPUT"
+else
+    skip "G54: depth validation" "RLM_MAX_DEPTH validation not implemented yet"
+fi
 
 
 # ─── Summary ──────────────────────────────────────────────────────────────

@@ -9,7 +9,7 @@
  *   cp contrib/extensions/grep-find.ts ~/.pi/agent/extensions/
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function grepFind(pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {

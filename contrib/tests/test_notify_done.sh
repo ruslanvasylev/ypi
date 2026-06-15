@@ -70,7 +70,7 @@ TEST_EXTENSION=$(mktemp "${TMPDIR:-/tmp}/ndtest_ext.ts.XXXXXX")
 CLEANUP_FILES+=("$TEST_EXTENSION")
 
 cat > "$TEST_EXTENSION" << EXTEOF
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFileSync, readdirSync, unlinkSync } from "fs";
 
 const SIGNAL_DIR = "/tmp";
@@ -317,7 +317,7 @@ CLEANUP_FILES+=("$TEST_EXT_4")
 TEST_PREFIX_4="ndtest4-${TEST_ID}-"
 
 cat > "$TEST_EXT_4" << EXT4EOF
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFileSync, readdirSync, unlinkSync, writeFileSync } from "fs";
 import { randomBytes } from "crypto";
 
@@ -457,7 +457,7 @@ CLEANUP_FILES+=("$TEST_EXT_5A" "$TEST_EXT_5B")
 for WHICH in A B; do
     if [ "$WHICH" = "A" ]; then EXT_FILE=$TEST_EXT_5A; else EXT_FILE=$TEST_EXT_5B; fi
     cat > "$EXT_FILE" << EXT5EOF
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFileSync, readdirSync, unlinkSync, writeFileSync } from "fs";
 import { randomBytes } from "crypto";
 

@@ -15,7 +15,7 @@ extensions by symlinking, directory extensions by copying:
 ln -s "$(pwd)/contrib/extensions/hashline.ts" ~/.pi/agent/extensions/hashline.ts
 # Directory extension with npm deps (copy + install)
 cp -r contrib/extensions/lsp ~/.pi/agent/extensions/lsp
-cd ~/.pi/agent/extensions/lsp && npm install
+cd ~/.pi/agent/extensions/lsp && bun install
 ```
 
 ### dirpack.ts
@@ -91,7 +91,7 @@ This is a directory extension (has npm dependencies), so copy + install:
 
 ```bash
 cp -r contrib/extensions/lsp ~/.pi/agent/extensions/lsp
-cd ~/.pi/agent/extensions/lsp && npm install
+cd ~/.pi/agent/extensions/lsp && bun install
 ```
 
 Requires at least one language server on PATH. The extension is **depth-aware**:

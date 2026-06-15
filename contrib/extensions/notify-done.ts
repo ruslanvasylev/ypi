@@ -19,7 +19,7 @@
  * Instance ID is generated at startup and exposed as $YPI_INSTANCE_ID in child processes.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFileSync, readdirSync, unlinkSync } from "fs";
 import { randomBytes } from "crypto";
 
