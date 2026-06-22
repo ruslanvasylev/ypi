@@ -1,12 +1,12 @@
 {
   "name": "pi-recursive",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Pure Pi extension that lets Pi recursively call itself via a native rlm_query tool.",
   "license": "MIT",
   "author": "Raymond Weitekamp",
   "repository": {
     "type": "git",
-    "url": "https://github.com/rawwerks/ypi.git",
+    "url": "git+https://github.com/rawwerks/ypi.git",
     "directory": "pi-recursive"
   },
   "homepage": "https://github.com/rawwerks/ypi#readme",
@@ -14,15 +14,16 @@
     "url": "https://github.com/rawwerks/ypi/issues"
   },
   "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "pi-coding-agent",
+    "coding-agent",
     "ai",
     "agent",
-    "coding-agent",
-    "recursive",
-    "rlm",
     "llm",
-    "pi",
-    "pi-package",
-    "pi-extension"
+    "recursive",
+    "rlm"
   ],
   "pi": {
     "extensions": [

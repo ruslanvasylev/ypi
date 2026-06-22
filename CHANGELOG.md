@@ -3,6 +3,15 @@
 All notable changes to ypi are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.1] - 2026-06-22
+
+### Changed
+- **npm keywords aligned with the pi package gallery.** The gallery at `pi.dev/packages` discovers packages by the `pi-package` keyword (already present on both); this adds `pi-coding-agent` to both packages and `pi-extension` to `ypi` to match the convention used by featured pi packages and improve in-ecosystem search ranking.
+- `pi-recursive` `repository.url` normalized to `git+https://…` (was emitting an npm publish warning).
+
+### Verified
+- Real `pi install npm:pi-recursive` from the registry, in an isolated `PI_CODING_AGENT_DIR`: installs, writes `settings.json`, and registers the native `rlm_query` tool (`__YPI_NATIVE_TOOL_REGISTERED__`).
+
 ## [0.6.0] - 2026-06-22
 
 ### Added

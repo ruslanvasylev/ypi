@@ -1,6 +1,6 @@
 {
   "name": "ypi",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "ypi — a recursive coding agent. Pi that can call itself via rlm_query.",
   "license": "MIT",
   "author": "Raymond Weitekamp",
@@ -13,15 +13,17 @@
     "url": "https://github.com/rawwerks/ypi/issues"
   },
   "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "pi-coding-agent",
+    "coding-agent",
     "ai",
     "agent",
-    "coding-agent",
-    "recursive",
-    "rlm",
     "llm",
-    "pi",
-    "pi-package",
-    "cli"
+    "cli",
+    "recursive",
+    "rlm"
   ],
   "pi": {
     "extensions": [
