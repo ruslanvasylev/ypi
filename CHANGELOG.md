@@ -3,7 +3,7 @@
 All notable changes to ypi are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [0.6.0] - Unreleased
+## [0.6.0] - 2026-06-22
 
 ### Added
 - **`pi-recursive` package**: the pure Pi extension (the `pi.extensions` surface, no `bin`) is now published as its own companion package — `pi install npm:pi-recursive`. `ypi` remains the CLI wrapper. Both are built from one canonical source: `pi-recursive` is staged from the root `extensions/` + `SYSTEM_PROMPT.md` by `scripts/build-pi-recursive` (an explicit build step, not an npm lifecycle hook), and `tests/test_pi_recursive_pack.sh` proves the packed extension installs and registers the native tool.
