@@ -36,7 +36,7 @@
     "LICENSE"
   ],
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "0.79.4"
+    "@earendil-works/pi-coding-agent": "^0.79.4"
   },
   "dependencies": {
     "typebox": "1.1.38"

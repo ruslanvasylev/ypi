@@ -57,8 +57,8 @@ resolve_pi_bin() {
     for candidate in \
         "$SCRIPT_DIR/../.bin/pi" \
         "$SCRIPT_DIR/node_modules/.bin/pi" \
-        "$SCRIPT_DIR/../@earendil-works/pi-coding-agent/bin/pi" \
-        "$SCRIPT_DIR/node_modules/@earendil-works/pi-coding-agent/bin/pi"; do
+        "$SCRIPT_DIR/../@earendil-works/pi-coding-agent/dist/cli.js" \
+        "$SCRIPT_DIR/node_modules/@earendil-works/pi-coding-agent/dist/cli.js"; do
         if [ -x "$candidate" ]; then
             printf '%s\n' "$candidate"
             return 0
