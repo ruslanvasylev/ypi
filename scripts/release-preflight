@@ -13,6 +13,12 @@ echo "==> install hooks"
 echo "==> run shared quality gate"
 ./scripts/pre-push-checks
 
+echo "==> verify host pi runtime (doctor)"
+./scripts/doctor
+
+echo "==> verify two-package lockstep + changelog consistency"
+./scripts/check-release-consistency
+
 echo "==> check upstream pi compatibility (dry-run)"
 ./scripts/check-upstream --dry-run
 

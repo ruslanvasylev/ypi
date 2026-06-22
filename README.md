@@ -160,6 +160,15 @@ ypi is a thin layer on top of Pi. We strive not to break or duplicate what Pi al
 
 If Pi changes how sessions or extensions work, our guardrail tests should catch it.
 
+### Troubleshooting
+
+If `ypi` or recursion **seems broken**, run `make doctor` first. The most common
+cause is the wrong host `pi`: either the old `@mariozechner/pi-coding-agent`
+shadowing the current `@earendil-works/pi-coding-agent`, or a version older than
+`.pi-version`. `make doctor` reports the exact mismatch and the one-line fix
+(`bun add -g @earendil-works/pi-coding-agent@<pinned>`). It honors `YPI_PI_BIN`,
+so it checks the same binary recursion actually spawns.
+
 ### Package Boundary
 
 There are two published packages, built from one canonical source:

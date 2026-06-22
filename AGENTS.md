@@ -95,6 +95,10 @@ Three properties make ypi work. All are tested (E7, E8, E9 in test_e2e.sh):
 
 **Don't write static architecture docs.** Encode claims as tests. If a property matters, there should be an E2E test that breaks when it stops being true.
 
+## Troubleshooting — run this first
+
+If recursion misbehaves or `ypi` "seems broken," run `make doctor` before anything else. The #1 cause is a wrong/stale host `pi` — the old `@mariozechner/pi-coding-agent` shadowing `@earendil-works/pi-coding-agent`, or a version below `.pi-version` — which fails silently with no clear signal. `make doctor` names the exact problem and the fix. (This guard exists because that failure cost a full debugging session; it must never be silent again.)
+
 ## Project Layout
 ```
 ypi/

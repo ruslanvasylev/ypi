@@ -1,4 +1,4 @@
-.PHONY: test test-unit test-guardrails test-native test-provider-allowlist test-extensions test-consumer-pack test-pi-recursive-pack build-pi-recursive test-e2e test-recursion-e2e test-extension-recursion-e2e test-parity-e2e test-fast pre-push-checks check-upstream install-hooks release-preflight land ci-status ci-last-failure clean
+.PHONY: test test-unit test-guardrails test-native test-provider-allowlist test-extensions test-consumer-pack test-pi-recursive-pack build-pi-recursive test-e2e test-recursion-e2e test-extension-recursion-e2e test-parity-e2e test-fast doctor test-doctor check-release-consistency test-release-consistency pre-push-checks check-upstream install-hooks release-preflight land ci-status ci-last-failure clean
 
 # Fast tests — no LLM calls, uses mock pi
 test-unit:
@@ -19,8 +19,24 @@ test-provider-allowlist:
 	@echo "Running provider allowlist tests..."
 	@bash tests/test_provider_allowlist.sh
 
-# All fast tests (unit + guardrails)
-test-fast: test-unit test-guardrails test-native test-provider-allowlist
+# Host pi runtime health (no LLM) — catches a wrong/stale pi before it "seems broken"
+doctor:
+	@scripts/doctor
+
+test-doctor:
+	@echo "Running doctor tests..."
+	@bash tests/test_doctor.sh
+
+# Two-package lockstep + changelog invariants (no LLM)
+check-release-consistency:
+	@scripts/check-release-consistency
+
+test-release-consistency:
+	@echo "Running release-consistency tests..."
+	@bash tests/test_release_consistency.sh
+
+# All fast tests (no LLM calls)
+test-fast: test-unit test-guardrails test-native test-provider-allowlist test-doctor test-release-consistency
 
 # Extension compatibility — requires real pi installed
 test-extensions:

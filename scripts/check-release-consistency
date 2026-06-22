@@ -1,0 +1,74 @@
+#!/bin/bash
+# check-release-consistency — enforce the two-package lockstep + changelog invariants.
+# No LLM, fast. Catches:
+#   * ypi vs pi-recursive version skew,
+#   * pinned-pi skew across package.json dep / pi-recursive peerDep / .pi-version,
+#   * a missing (and, with --require-dated, undated) CHANGELOG entry for the version.
+#
+# Usage: scripts/check-release-consistency [--require-dated]
+#   YPI_CHECK_ROOT=<dir> overrides the repo root (used by tests with fixtures).
+# Exit: 0 = consistent, 1 = a hard invariant is violated.
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="${YPI_CHECK_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+
+REQUIRE_DATED=false
+[ "${1:-}" = "--require-dated" ] && REQUIRE_DATED=true
+
+PASS=0; FAIL=0
+pass() { PASS=$((PASS + 1)); echo "  ✓ $1"; }
+fail() { FAIL=$((FAIL + 1)); echo "  ✗ $1: $2"; }
+note() { echo "  ! $1"; }
+
+jget() { node -e "try{const p=require('$1');let v=p;for(const k of '$2'.split('.')){v=v&&v[k];}console.log(v||'')}catch(e){console.log('')}" 2>/dev/null; }
+strip_range() { echo "${1#[\^~>=]}"; }
+
+YPI_V="$(jget "$ROOT/package.json" version)"
+PIR_V="$(jget "$ROOT/pi-recursive/package.json" version)"
+DEP="$(jget "$ROOT/package.json" "dependencies.@earendil-works/pi-coding-agent")"
+PEER="$(jget "$ROOT/pi-recursive/package.json" "peerDependencies.@earendil-works/pi-coding-agent")"
+PIVER="unknown"; [ -f "$ROOT/.pi-version" ] && PIVER="$(tr -d '[:space:]' < "$ROOT/.pi-version")"
+
+echo ""
+echo "=== Release consistency (root: $ROOT) ==="
+
+# 1. ypi and pi-recursive share a version (lockstep)
+if [ -n "$YPI_V" ] && [ "$YPI_V" = "$PIR_V" ]; then
+    pass "ypi and pi-recursive share version ($YPI_V)"
+else
+    fail "package versions in lockstep" "ypi=$YPI_V pi-recursive=$PIR_V"
+fi
+
+# 2. pinned pi consistent across dep / peerDep / .pi-version (compare base versions)
+DEP_B="$(strip_range "$DEP")"; PEER_B="$(strip_range "$PEER")"
+if [ -n "$PIVER" ] && [ "$PIVER" != "unknown" ] && [ "$DEP_B" = "$PIVER" ] && [ "$PEER_B" = "$PIVER" ]; then
+    pass "pinned pi consistent across dep/peerDep/.pi-version ($PIVER)"
+else
+    fail "pinned pi consistent" "dep=$DEP peerDep=$PEER .pi-version=$PIVER"
+fi
+
+# 3. CHANGELOG has an entry for the release version (and, if --require-dated, it is dated)
+CL="$ROOT/CHANGELOG.md"
+HEAD=""
+[ -f "$CL" ] && [ -n "$YPI_V" ] && HEAD="$(grep -m1 -E "^## \[$YPI_V\]" "$CL" || true)"
+if [ -z "$HEAD" ]; then
+    fail "CHANGELOG has entry for $YPI_V" "no '## [$YPI_V]' heading in CHANGELOG.md"
+else
+    pass "CHANGELOG has entry for $YPI_V"
+    if printf '%s' "$HEAD" | grep -qiE 'unreleased|tbd' || ! printf '%s' "$HEAD" | grep -qE '[0-9]{4}-[0-9]{2}-[0-9]{2}'; then
+        if [ "$REQUIRE_DATED" = true ]; then
+            fail "CHANGELOG $YPI_V entry is dated" "heading: $HEAD"
+        else
+            note "CHANGELOG $YPI_V entry is not yet dated (\"$HEAD\") — set the date at publish (RELEASING.md)"
+        fi
+    else
+        pass "CHANGELOG $YPI_V entry is dated"
+    fi
+fi
+
+echo ""
+echo "  Results: $PASS passed, $FAIL failed"
+[ "$FAIL" -eq 0 ] || { echo "check-release-consistency: FAIL"; exit 1; }
+echo "check-release-consistency: OK"

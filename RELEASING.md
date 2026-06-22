@@ -31,7 +31,7 @@ pair — do not do this.
 
 ### 1. Run release preflight checks
 ```bash
-make release-preflight   # hooks + shared checks + upstream dry-run
+make release-preflight   # hooks + quality gate + doctor + lockstep/changelog + upstream dry-run
 ```
 
 After preflight passes:

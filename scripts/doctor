@@ -1,0 +1,98 @@
+#!/bin/bash
+# doctor — verify the host `pi` runtime is the one ypi / pi-recursive need.
+#
+# The most common ypi setup failure is a wrong or stale `pi`:
+#   * the OLD package (@mariozechner/pi-coding-agent) shadowing the new one, or
+#   * a version older than the pinned, compatible release (.pi-version).
+# Either way ypi "seems broken" with no clear signal. This makes it loud and
+# self-fixing, so the failure we hit (pi 0.73.1 instead of @earendil 0.79.4)
+# can never silently happen again.
+#
+# Honors YPI_PI_BIN (same override ypi/rlm_query use) so it checks the exact
+# binary recursion will spawn.
+#
+# Exit: 0 = healthy, 1 = problem (with fix instructions), 2 = could not determine.
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+PKG="@earendil-works/pi-coding-agent"
+OLD_PKG="@mariozechner/pi-coding-agent"
+
+GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[0;33m'; DIM='\033[0;90m'; RESET='\033[0m'
+ok()   { echo -e "${GREEN}✓${RESET} $1"; }
+bad()  { echo -e "${RED}✗${RESET} $1"; }
+note() { echo -e "${YELLOW}!${RESET} $1"; }
+fixln(){ echo -e "${DIM}  Fix: $1${RESET}"; }
+
+PINNED="unknown"
+[ -f "$PROJECT_DIR/.pi-version" ] && PINNED="$(tr -d '[:space:]' < "$PROJECT_DIR/.pi-version")"
+
+# ─── Resolve the pi binary (YPI_PI_BIN wins, like ypi/rlm_query) ──────────
+if [ -n "${YPI_PI_BIN:-}" ]; then
+    PI_BIN="$YPI_PI_BIN"
+    if [ ! -x "$PI_BIN" ] && ! command -v "$PI_BIN" >/dev/null 2>&1; then
+        bad "pi not found at YPI_PI_BIN=$PI_BIN"
+        fixln "bun add -g ${PKG}@${PINNED}  # then unset YPI_PI_BIN or point it at the real pi"
+        exit 1
+    fi
+else
+    PI_BIN="$(command -v pi 2>/dev/null || true)"
+    if [ -z "$PI_BIN" ]; then
+        bad "pi not found on PATH"
+        fixln "bun add -g ${PKG}@${PINNED}"
+        exit 1
+    fi
+fi
+
+# ─── Package identity (which package provides this pi) ────────────────────
+REAL="$(readlink -f "$PI_BIN" 2>/dev/null || echo "$PI_BIN")"
+case "$REAL" in
+    *"$OLD_PKG"*)
+        bad "pi is the OLD package: $OLD_PKG"
+        echo -e "${DIM}  ypi/pi-recursive require ${PKG}; the old package is shadowing it.${RESET}"
+        fixln "bun add -g ${PKG}@${PINNED}   (or repoint ~/.bun/bin/pi at the @earendil-works cli.js)"
+        exit 1 ;;
+    *"$PKG"*)
+        ok "pi provided by ${PKG}" ;;
+    *)
+        note "pi binary is not under ${PKG} (path: $REAL) — verifying by version only" ;;
+esac
+
+# ─── Version satisfies the pinned, compatible release ─────────────────────
+INSTALLED="$("$PI_BIN" --version 2>/dev/null | tr -d '[:space:]' || true)"
+if [ -z "$INSTALLED" ]; then
+    bad "could not read 'pi --version' from $PI_BIN"
+    exit 2
+fi
+
+# Portable numeric semver compare (avoids sort -V; works on linux + macOS).
+ver_lt() {  # returns 0 if $1 < $2
+    local a1 a2 a3 b1 b2 b3
+    IFS=. read -r a1 a2 a3 <<<"${1%%[-+]*}"
+    IFS=. read -r b1 b2 b3 <<<"${2%%[-+]*}"
+    a1=${a1:-0}; a2=${a2:-0}; a3=${a3:-0}; b1=${b1:-0}; b2=${b2:-0}; b3=${b3:-0}
+    if [ "$a1" -ne "$b1" ]; then [ "$a1" -lt "$b1" ]; return; fi
+    if [ "$a2" -ne "$b2" ]; then [ "$a2" -lt "$b2" ]; return; fi
+    [ "$a3" -lt "$b3" ]
+}
+
+if [ "$PINNED" = "unknown" ]; then
+    note "no .pi-version pin found; installed pi is $INSTALLED"
+elif [ "${INSTALLED%%.*}" != "${PINNED%%.*}" ]; then
+    bad "pi major-version mismatch: installed $INSTALLED, pinned $PINNED"
+    fixln "bun add -g ${PKG}@${PINNED}"
+    exit 1
+elif ver_lt "$INSTALLED" "$PINNED"; then
+    bad "pi too old: installed $INSTALLED < pinned $PINNED"
+    fixln "bun add -g ${PKG}@${PINNED}"
+    exit 1
+else
+    ok "pi version $INSTALLED satisfies pinned $PINNED"
+    [ "$INSTALLED" != "$PINNED" ] && note "installed $INSTALLED is ahead of pinned $PINNED (.pi-version may be due for a re-pin)"
+fi
+
+echo -e "${GREEN}doctor: pi runtime OK${RESET}"
+exit 0

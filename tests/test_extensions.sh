@@ -30,9 +30,9 @@ echo ""
 echo "=== Extension Compatibility Tests (pi $PI_VERSION) ==="
 echo ""
 
-# ─── Assert we are based on latest released Pi ───────────────────────────
+# ─── Pi version pin: internal consistency is HARD, "is latest" is advisory ───
 
-echo "--- Latest Pi release ---"
+echo "--- Pi version pin ---"
 
 KNOWN_GOOD=$(tr -d '[:space:]' < "$PROJECT_DIR/.pi-version")
 PINNED=$(node -e "const p=require('$PROJECT_DIR/package.json'); console.log(p.dependencies['@earendil-works/pi-coding-agent'] || '')")
@@ -44,16 +44,22 @@ elif command -v npm &>/dev/null; then
     LATEST=$(npm view @earendil-works/pi-coding-agent version 2>/dev/null | tr -d '[:space:]' || true)
 fi
 
-if [ -z "$LATEST" ]; then
-    fail "latest Pi version discovered" "could not query @earendil-works/pi-coding-agent"
-elif [ "$KNOWN_GOOD" != "$LATEST" ]; then
-    fail "known-good Pi version is latest" ".pi-version=$KNOWN_GOOD latest=$LATEST"
-elif [ "$PINNED" != "$LATEST" ]; then
-    fail "package pins latest Pi" "package.json=$PINNED latest=$LATEST"
-elif [ "$PI_VERSION" != "$LATEST" ]; then
-    fail "installed Pi is latest" "installed=$PI_VERSION latest=$LATEST"
+# HARD: the pin must be internally consistent — .pi-version and the package.json
+# dependency must agree. This can never silently drift.
+if [ -n "$KNOWN_GOOD" ] && [ "$KNOWN_GOOD" = "$PINNED" ]; then
+    pass "pinned Pi consistent (.pi-version=$KNOWN_GOOD == package.json=$PINNED)"
 else
-    pass "latest Pi release pinned and installed ($LATEST)"
+    fail "pinned Pi consistent (.pi-version == package.json)" ".pi-version=$KNOWN_GOOD package.json=$PINNED"
+fi
+
+# ADVISORY: upstream advancing past the pin is a re-pin SIGNAL, not a failure.
+# (Previously a hard fail, which turned CI red every time pi published a release.)
+if [ -z "$LATEST" ]; then
+    echo "  ! upstream Pi version unknown (offline?) — drift advisory skipped"
+elif [ "$KNOWN_GOOD" != "$LATEST" ]; then
+    echo "  ! advisory: newer Pi available (pinned=$KNOWN_GOOD, latest=$LATEST) — re-pin via: scripts/check-upstream"
+else
+    echo "  ✓ pinned Pi is the latest upstream release ($LATEST)"
 fi
 
 echo ""
