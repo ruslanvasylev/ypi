@@ -32,8 +32,8 @@ echo "==> step 3/5: push master"
 jj bookmark set master -r @-
 jj git push
 
-echo "==> step 4/5: show CI status"
-./scripts/ci-status 5
+echo "==> step 4/5: recent CI (informational — the local preflight is the gate, not CI)"
+./scripts/ci-status 5 || true
 
 if [ "$AGENT_CHECK" = true ] && command -v ypi >/dev/null 2>&1; then
   echo "==> step 5/5: agent audit"
@@ -51,11 +51,13 @@ if [ "$AGENT_CHECK" = true ] && command -v ypi >/dev/null 2>&1; then
     ./scripts/ci-status 8 2>&1
   } > "$SNAP"
 
-  timeout 120s ypi -p --no-session "Given the provided context (jj status, git status, recent CI runs), return strict JSON: {\"land_ok\":true|false,\"reasons\":[...],\"next_actions\":[...]} . Mark land_ok=true only if working copy is clean and latest master CI is success." < "$SNAP" || {
+  timeout 120s ypi -p --no-session "Given the provided context (jj status, git status, recent CI runs), return strict JSON: {\"land_ok\":true|false,\"reasons\":[...],\"next_actions\":[...]} . Mark land_ok=true only if the working copy is clean and the local release-preflight passed; treat CI as informational, not a required gate." < "$SNAP" || {
     echo "⚠️  agent audit failed or timed out (landing already pushed)."
   }
 else
   echo "==> step 5/5: agent audit skipped"
 fi
 
-echo "✅ land flow complete"
+echo "✅ land flow complete (code pushed; nothing published)"
+echo "   to publish to npm:  make publish        (preview: make publish-dry)"
+echo "   post-publish smoke: YPI_TEST_REGISTRY_INSTALL=1 PKG_MIN_AGE_DAYS=0 make test-install-from-registry"

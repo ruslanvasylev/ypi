@@ -1,4 +1,4 @@
-.PHONY: test test-unit test-guardrails test-native test-provider-allowlist test-extensions test-consumer-pack test-pi-recursive-pack build-pi-recursive test-e2e test-recursion-e2e test-extension-recursion-e2e test-parity-e2e test-fast doctor test-doctor check-release-consistency test-release-consistency pre-push-checks check-upstream install-hooks release-preflight land ci-status ci-last-failure clean
+.PHONY: test test-unit test-guardrails test-native test-provider-allowlist test-extensions test-consumer-pack test-pi-recursive-pack build-pi-recursive test-e2e test-recursion-e2e test-extension-recursion-e2e test-parity-e2e test-fast doctor test-doctor check-release-consistency test-release-consistency test-install-from-registry publish publish-dry pre-push-checks check-upstream install-hooks release-preflight land ci-status ci-last-failure clean
 
 # Fast tests — no LLM calls, uses mock pi
 test-unit:
@@ -56,6 +56,11 @@ test-pi-recursive-pack:
 	@echo "Running pi-recursive pack tests..."
 	@bash tests/test_pi_recursive_pack.sh
 
+# Real registry-install smoke (GATED: network + published pkg). Skips unless
+# YPI_TEST_REGISTRY_INSTALL=1. Proves `pi install npm:pi-recursive` end-to-end.
+test-install-from-registry:
+	@bash tests/test_install_from_registry.sh
+
 # Extension E2E tests — REAL LLM calls, tests extension API compatibility
 test-extensions-e2e:
 	@echo "Running extension e2e tests (real LLM calls)..."
@@ -99,9 +104,16 @@ install-hooks:
 release-preflight:
 	@scripts/release-preflight
 
-# Deterministic-ish land helper (preflight + encrypt-check + push + CI status + optional agent audit)
+# Deterministic-ish land helper (preflight + encrypt-check + push + optional agent audit)
 land:
 	@scripts/land
+
+# Publish ypi + pi-recursive to npm in lockstep (sops-backed npm-publish wrapper)
+publish:
+	@scripts/publish-packages
+
+publish-dry:
+	@scripts/publish-packages --dry-run
 
 # CI helper: show recent runs (usage: make ci-status [N])
 ci-status:

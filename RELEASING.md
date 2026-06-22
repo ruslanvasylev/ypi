@@ -60,29 +60,30 @@ jj git push --bookmark master --bookmark v0.6.0
 
 ### 5. Publish BOTH packages to npm
 
-**5a. Publish `ypi` from the repo root:**
 ```bash
-npm publish
+make publish-dry    # preview: npm publish --dry-run for both packages
+make publish        # publish ypi + pi-recursive in lockstep
 ```
 
-**5b. Stage and publish `pi-recursive`:**
-```bash
-make build-pi-recursive          # MANDATORY — stages extensions/ + SYSTEM_PROMPT.md + LICENSE
-(cd pi-recursive && npm publish)
-```
+`make publish` (→ `scripts/publish-packages`) does the whole sequence safely: it verifies
+lockstep + a **dated** CHANGELOG (`check-release-consistency --require-dated`), runs the
+mandatory `make build-pi-recursive` staging, then publishes **both** via the sops-backed
+`npm-publish` wrapper — `ypi` from the repo root and `pi-recursive` from its staged build
+view.
 
-> **`make build-pi-recursive` is mandatory and must run on a clean tree immediately
-> before packing/publishing `pi-recursive`.** It is an explicit build step, **not** an
-> npm lifecycle hook, so it will NOT run automatically under `npm publish` / `bun pm pack
-> --ignore-scripts`. `pi-recursive/extensions/`, `pi-recursive/SYSTEM_PROMPT.md`, and
-> `pi-recursive/LICENSE` are **gitignored build artifacts**: if you publish without
-> running this step, the tarball ships whatever happens to be staged from a prior run
-> (possibly empty, stale, or out of sync with the root source).
->
-> Verify the packed extension before publishing:
-> ```bash
-> make test-pi-recursive-pack   # packs pi-recursive and proves the native tool registers
-> ```
+> **Why the wrapper:** `make build-pi-recursive` is mandatory (an explicit build step, not
+> an npm lifecycle hook) and `pi-recursive/extensions/`, `SYSTEM_PROMPT.md`, `LICENSE` are
+> **gitignored build artifacts** — publishing without staging ships a stale/empty tarball.
+> `scripts/publish-packages` runs that step for you. The npm token is injected from an
+> encrypted store by `npm-publish`; there is no token in `~/.npmrc` and no `npm login`.
+
+**5a. Smoke-test the real install (post-publish):**
+```bash
+YPI_TEST_REGISTRY_INSTALL=1 PKG_MIN_AGE_DAYS=0 make test-install-from-registry
+```
+Proves `pi install npm:pi-recursive` works end-to-end against the registry and registers
+the native tool. (`PKG_MIN_AGE_DAYS=0` bypasses the local 72h cooldown for a just-published
+version.)
 
 ### 6. Create GitHub Release
 Go to https://github.com/rawwerks/ypi/releases/new, select the tag, paste the changelog
@@ -103,5 +104,5 @@ jj new
   reference them. True git tags (`jj git push --tag`) are not yet stable in jj.
 - **No auto-changelog tooling**: The jj log is the source of truth. We manually
   curate CHANGELOG.md to keep it human-readable.
-- **npm login**: Publishing requires `npm login` as `rawwerks`.
-- **Pre-push parity**: Local pre-push hook and CI both call `scripts/pre-push-checks`, so failures are caught before network push and re-verified in a clean runner.
+- **npm auth**: `make publish` injects the npm token from a sops-encrypted store via the `npm-publish` wrapper — no `npm login`, no token in `~/.npmrc`.
+- **Local-first; CI is a hermetic PR gate, not the release driver.** The single `.github/workflows/ci.yml` runs `scripts/pre-push-checks` on PRs/pushes with Pi **pinned to `.pi-version`** (never "latest") and **no LLM e2e**, so an upstream Pi release can never redden it. It exists mainly to gate inbound contributor PRs (local git hooks / jj don't run on their machines) and to give a clean-room repro. The old scheduled `upstream.yml` (auto-PR/issue on drift) was **removed** — it failed constantly for a non-defect (the now-advisory "is latest" drift check) with no one watching; `make release-preflight` already covers upstream-compat at release time.
