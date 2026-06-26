@@ -174,6 +174,8 @@ const PROVIDER_ENV_ALLOWLIST = new Set([
 	// Provider credentials that don't end in _API_KEY / _OAUTH_TOKEN (pi reads them by
 	// these exact names; an env-var-only-authed parent must pass them to its children).
 	"COPILOT_GITHUB_TOKEN",
+	"GH_TOKEN",
+	"GITHUB_TOKEN",
 	"HF_TOKEN",
 	"ANT_LING_API_KEY",
 	"OPENAI_API_KEY",
@@ -214,6 +216,10 @@ const PROVIDER_ENV_ALLOWLIST = new Set([
 	// Additional provider credentials/routing read by pi 0.79.4. Keep in sync with the shell
 	// rlm_query allowlist and pi-mono; tests/test_provider_allowlist.sh enforces both.
 	"GOOGLE_CLOUD_API_KEY",
+	"GOOGLE_APPLICATION_CREDENTIALS",
+	"GOOGLE_CLOUD_PROJECT",
+	"GCLOUD_PROJECT",
+	"GOOGLE_CLOUD_LOCATION",
 	"OLLAMA_API_KEY",
 	"PORTKEY_API_KEY",
 	"MINIMAX_CN_API_KEY",
