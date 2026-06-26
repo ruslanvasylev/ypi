@@ -70,14 +70,26 @@ else
 fi
 
 # ── Invariant 2: completeness vs pinned pi-mono (skips if submodule absent) ─────
-# Source of truth is getApiKeyEnvVars() in env-api-keys.ts: it maps each provider to its
-# exact credential env var NAME(s). We extract those names directly (not by suffix regex),
-# so credentials like COPILOT_GITHUB_TOKEN and HF_TOKEN — which end in neither _API_KEY nor
-# _OAUTH_TOKEN — are still enforced and the check can never go blind to a new provider name.
+# Source of truth is env-api-keys.ts: getEnvApiKey() reads some names directly
+# through process.env.KEY and maps others through envMap string values. We extract
+# those exact names directly (not by suffix regex), so credentials like
+# COPILOT_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN, and HF_TOKEN — which end in
+# neither _API_KEY nor _OAUTH_TOKEN — are still enforced.
 ENV_KEY_SRC="$PI_MONO/packages/ai/src/env-api-keys.ts"
 if [ -f "$ENV_KEY_SRC" ]; then
-    REAL_KEYS="$(awk '/function getApiKeyEnvVars/{f=1} f{print} f&&/^}/{exit}' "$ENV_KEY_SRC" \
-        | grep -oE '"[A-Z][A-Z0-9_]+"' | tr -d '"' | sort -u)"
+    REAL_KEYS="$(node - "$ENV_KEY_SRC" <<'NODE'
+const fs = require("node:fs");
+const source = fs.readFileSync(process.argv[2], "utf8");
+const keys = new Set();
+for (const match of source.matchAll(/process\.env\.([A-Z][A-Z0-9_]+)/g)) {
+    keys.add(match[1]);
+}
+for (const match of source.matchAll(/:\s*"([A-Z][A-Z0-9_]+)"/g)) {
+    keys.add(match[1]);
+}
+console.log([...keys].sort().join("\n"));
+NODE
+)"
     REAL_COUNT="$(printf '%s\n' "$REAL_KEYS" | grep -c . || true)"
     MISSING=""
     for key in $REAL_KEYS; do
@@ -86,11 +98,11 @@ if [ -f "$ENV_KEY_SRC" ]; then
         fi
     done
     if [ "$REAL_COUNT" -lt 20 ]; then
-        fail "C1: extracted provider credentials from getApiKeyEnvVars()" "parsed only $REAL_COUNT — extraction likely broke"
+        fail "C1: extracted provider credentials from env-api-keys.ts" "parsed only $REAL_COUNT — extraction likely broke"
     elif [ -z "$MISSING" ]; then
-        pass "C1: allowlist covers every getApiKeyEnvVars() provider credential ($REAL_COUNT names)"
+        pass "C1: allowlist covers every env-api-keys.ts provider credential ($REAL_COUNT names)"
     else
-        fail "C1: allowlist covers every getApiKeyEnvVars() provider credential" "not allowlisted:$MISSING"
+        fail "C1: allowlist covers every env-api-keys.ts provider credential" "not allowlisted:$MISSING"
     fi
 else
     echo "  - C1 skipped (pi-mono env-api-keys.ts not present)"
