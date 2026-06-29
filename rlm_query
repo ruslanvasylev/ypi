@@ -27,6 +27,7 @@
 #   RLM_MAX_DEPTH     — max recursion depth (default: 3)
 #   RLM_PROVIDER      — LLM provider
 #   RLM_MODEL         — LLM model
+#   RLM_THINKING_LEVEL — Pi thinking level for child calls
 #   RLM_SYSTEM_PROMPT — path to the RLM system prompt file
 #   CONTEXT           — path to the current context file
 #   RLM_STDIN         — set to "1" by the calling pattern to indicate piped input
@@ -201,6 +202,7 @@ fi
 
 PROVIDER="${RLM_PROVIDER:-}"
 MODEL="${RLM_MODEL:-}"
+THINKING_LEVEL="${RLM_THINKING_LEVEL:-}"
 SYSTEM_PROMPT_FILE="${RLM_SYSTEM_PROMPT:-}"
 
 # ----------------------------------------------------------------------
@@ -367,6 +369,7 @@ export RLM_DEPTH="$NEXT_DEPTH"
 export RLM_MAX_DEPTH="$MAX_DEPTH"
 export RLM_PROVIDER="$PROVIDER"
 export RLM_MODEL="$MODEL"
+export RLM_THINKING_LEVEL="$THINKING_LEVEL"
 export RLM_SYSTEM_PROMPT="${SYSTEM_PROMPT_FILE:-}"
 export RLM_START_TIME="${RLM_START_TIME}"
 export RLM_TIMEOUT="${RLM_TIMEOUT:-}"
@@ -397,6 +400,7 @@ PI_BIN="${YPI_PI_BIN:-pi}"
 CMD_ARGS=(-p)
 [ -n "$PROVIDER" ] && CMD_ARGS+=(--provider "$PROVIDER")
 [ -n "$MODEL" ] && CMD_ARGS+=(--model "$MODEL")
+[ -n "$THINKING_LEVEL" ] && CMD_ARGS+=(--thinking "$THINKING_LEVEL")
 
 if [ -z "$JJ_WORKSPACE" ] && [ "${RLM_UNSAFE_NO_JJ_WRITE:-0}" != "1" ]; then
     CMD_ARGS+=(--tools read,grep,find,ls,rlm_query)

@@ -122,9 +122,10 @@ function maybeCreateJjWorkspace(cwd: string, depth: number): Workspace {
 	};
 }
 
-function providerModel(ctx: ExtensionContext, childDepth: number): { provider: string; model: string } {
+function providerModel(ctx: ExtensionContext, childDepth: number, rootThinkingLevel: string): { provider: string; model: string; thinkingLevel: string } {
 	let provider = process.env.RLM_PROVIDER || ctx.model?.provider || "";
 	let model = process.env.RLM_MODEL || ctx.model?.id || "";
+	let thinkingLevel = process.env.RLM_THINKING_LEVEL || rootThinkingLevel || "";
 
 	if (childDepth > 0 && process.env.RLM_CHILD_MODEL) {
 		model = process.env.RLM_CHILD_MODEL;
@@ -133,7 +134,7 @@ function providerModel(ctx: ExtensionContext, childDepth: number): { provider: s
 		}
 	}
 
-	return { provider, model };
+	return { provider, model, thinkingLevel };
 }
 
 function sessionFile(ctx: ExtensionContext, depth: number, callCount: number): string | undefined {
@@ -407,7 +408,7 @@ export function registerNativeRlmQueryTool(pi: ExtensionAPI, runtime: YpiRuntime
 			const timeoutSeconds = assertTimeoutAvailable();
 			const promptFile = createPromptFile(params.prompt);
 			const contextFile = createContextFile(params);
-			const { provider, model } = providerModel(ctx, childDepth);
+			const { provider, model, thinkingLevel } = providerModel(ctx, childDepth, pi.getThinkingLevel());
 			const childSession = sessionFile(ctx, childDepth, callCount);
 			copyForkSession(ctx, childSession, params.fork);
 			const workspace = maybeCreateJjWorkspace(ctx.cwd, childDepth);
@@ -417,6 +418,7 @@ export function registerNativeRlmQueryTool(pi: ExtensionAPI, runtime: YpiRuntime
 				RLM_CALL_COUNT: String(callCount),
 				RLM_PROVIDER: provider,
 				RLM_MODEL: model,
+				RLM_THINKING_LEVEL: thinkingLevel,
 				RLM_SYSTEM_PROMPT: runtime.systemPromptPath,
 				RLM_PROMPT_FILE: promptFile,
 				RLM_SESSION_DIR: process.env.RLM_SESSION_DIR || "",
@@ -433,6 +435,7 @@ export function registerNativeRlmQueryTool(pi: ExtensionAPI, runtime: YpiRuntime
 			const args = jsonMode ? ["--mode", "json"] : ["-p"];
 			if (provider) args.push("--provider", provider);
 			if (model) args.push("--model", model);
+			if (thinkingLevel) args.push("--thinking", thinkingLevel);
 			if (workspace.readOnly) args.push("--tools", READ_ONLY_TOOLS);
 			if (process.env.RLM_CHILD_DISCOVERY !== "1") {
 				args.push("--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve");

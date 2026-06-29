@@ -61,6 +61,7 @@ writeFileSync(fakePi, `#!/usr/bin/env bash
   echo "RLM_DEPTH=$RLM_DEPTH"
   echo "RLM_MODEL=$RLM_MODEL"
   echo "RLM_PROVIDER=$RLM_PROVIDER"
+  echo "RLM_THINKING_LEVEL=\${RLM_THINKING_LEVEL:-unset}"
   echo "RLM_CALL_COUNT=$RLM_CALL_COUNT"
   echo "RLM_SESSION_FILE=\${RLM_SESSION_FILE:-unset}"
   echo "RLM_SESSION_DIR=\${RLM_SESSION_DIR:-unset}"
@@ -86,7 +87,10 @@ const pi = {
 	registerTool(registered: Tool) {
 		tool = registered;
 	},
-} as Pick<ExtensionAPI, "registerTool"> as ExtensionAPI;
+	getThinkingLevel() {
+		return "xhigh";
+	},
+} as Pick<ExtensionAPI, "registerTool" | "getThinkingLevel"> as ExtensionAPI;
 
 function context(): ExtensionContext {
 	return {
@@ -219,6 +223,20 @@ async function run(): Promise<void> {
 	await invoke();
 	assertContains("N7: root-to-child uses child model", readLog(), "--model child-model");
 	assertContains("N7: root-to-child uses child provider", readLog(), "--provider child-provider");
+
+	clearYpiEnv();
+	resetLog();
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	process.env.RLM_PROVIDER = "stale-provider";
+	process.env.RLM_MODEL = "stale-model";
+	process.env.RLM_THINKING_LEVEL = "low";
+	process.env.RLM_JSON = "0";
+	ensureEnvironment(runtime, context(), pi);
+	await invoke();
+	assertContains("N7b: stale provider refreshed from active root", readLog(), "--provider test-provider");
+	assertContains("N7b: stale model refreshed from active root", readLog(), "--model test-root-model");
+	assertContains("N7b: stale thinking refreshed from active root", readLog(), "--thinking xhigh");
 
 	clearYpiEnv();
 	resetLog();

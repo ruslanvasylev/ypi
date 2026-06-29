@@ -379,6 +379,8 @@ assert_contains "T14f: launcher explicit provider" "--provider anthropic" "$OUTP
 assert_contains "T14f: launcher explicit model" "--model claude-haiku" "$OUTPUT"
 assert_not_contains "T14f: launcher provider not duplicated" "--provider openrouter" "$OUTPUT"
 assert_not_contains "T14f: launcher model not duplicated" "--model openai/gpt-5.5:xhigh" "$OUTPUT"
+assert_contains "T14f: launcher explicit provider clears env" "RLM_PROVIDER=" "$OUTPUT"
+assert_contains "T14f: launcher explicit model clears env" "RLM_MODEL=" "$OUTPUT"
 
 # T14d: RLM_PROMPT_FILE is set and contains the original prompt (symbolic access)
 OUTPUT=$(

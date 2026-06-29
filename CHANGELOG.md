@@ -3,6 +3,11 @@
 All notable changes to ypi are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Changed
+- Bare `ypi` now explicitly preserves Pi-native root model selection: root provider/model/thinking come from Pi settings (`defaultProvider`, `defaultModel`, `defaultThinkingLevel`), `/model`, or CLI flags, while children inherit the active root route by default.
+
 ## [0.6.1] - 2026-06-22
 
 ### Changed
