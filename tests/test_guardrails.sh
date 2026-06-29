@@ -69,13 +69,17 @@ chmod +x "$MOCK_BIN/pi"
 
 export PATH="$MOCK_BIN:$PROJECT_DIR:$PATH"
 
-# Clean slate — unset all RLM_* vars so ambient env doesn't leak into tests
+# Clean slate — unset inherited ypi/rlm vars so ambient live-session env doesn't
+# bypass the mock or leak into tests.
 for _v in $(env | grep '^RLM_' | cut -d= -f1); do unset "$_v"; done
+for _v in $(env | grep '^YPI_' | cut -d= -f1); do unset "$_v"; done
 unset RLM_SESSION_DIR RLM_SESSION_FILE RLM_TRACE_ID RLM_COST_FILE RLM_BUDGET
 unset RLM_DEPTH RLM_MAX_DEPTH RLM_TIMEOUT RLM_START_TIME RLM_MAX_CALLS RLM_CALL_COUNT
 unset RLM_PROVIDER RLM_MODEL RLM_CHILD_MODEL RLM_CHILD_PROVIDER
 unset RLM_EXTENSIONS RLM_CHILD_EXTENSIONS RLM_HASHLINE RLM_JJ RLM_JSON RLM_STDIN
 
+# Force tests to use the mock even when invoked from a live ypi session.
+export YPI_PI_BIN="$MOCK_BIN/pi"
 # Disable JSON mode in guardrail tests — mock pi doesn't output JSON
 export RLM_JSON=0
 
