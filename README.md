@@ -124,6 +124,20 @@ The design has three properties that compound:
 
 4. **Symbolic access** — Anything the agent needs to manipulate precisely is a file, not just tokens in context. `$CONTEXT` holds the data, `$RLM_PROMPT_FILE` holds the original prompt, and hashline provides line-addressed edits. Agents `grep`/`sed`/`cat` instead of copying tokens from memory.
 
+### Model Configuration
+
+Root model selection is owned by Pi, not ypi. Configure the default root model in Pi's native settings (`~/.pi/agent/settings.json` globally, or project `.pi/settings.json`):
+
+```json
+{
+  "defaultProvider": "openai",
+  "defaultModel": "gpt-5.5",
+  "defaultThinkingLevel": "xhigh"
+}
+```
+
+Bare `ypi` passes no provider/model by default, so Pi applies those settings (or `/model`, `--provider`, `--model`, and `--thinking`). ypi then captures the active root provider/model/thinking and forwards that route to recursive children unless child routing variables override it.
+
 ### Guardrails
 
 | Feature | Env var | What it does |
@@ -156,7 +170,7 @@ ypi is a thin layer on top of Pi. We strive not to break or duplicate what Pi al
 | **System prompt** | The extension injects `SYSTEM_PROMPT.md` when present and falls back to a minimal built-in prompt when it is not. If the shell `rlm_query` file exists, its source is appended as optional compatibility context. Standalone shell `rlm_query` falls back to Pi's `--system-prompt`. | T8–T9, parity E2E |
 | **`-p` mode** | All child Pi calls run non-interactive (`-p`). ypi never fakes a terminal. | T3–T4 |
 | **`--session` flag** | Used when session sharing is enabled and Pi has a session dir; `--no-session` otherwise. Never both. | G24, G28 |
-| **Provider/model** | Never hardcoded. ypi and `rlm_query` use Pi's defaults unless the user sets `RLM_PROVIDER`/`RLM_MODEL`. | T14, T14c |
+| **Provider/model** | Bare `ypi` defers root provider/model/thinking to Pi (`defaultProvider`, `defaultModel`, `defaultThinkingLevel`, `/model`, or CLI flags). The extension captures Pi's active root route into `RLM_PROVIDER`/`RLM_MODEL`/`RLM_THINKING_LEVEL` so children inherit it unless child routing variables override child model/provider. | T14, T14c, G6, N7b |
 
 If Pi changes how sessions or extensions work, our guardrail tests should catch it.
 

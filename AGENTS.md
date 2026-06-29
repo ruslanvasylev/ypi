@@ -269,8 +269,9 @@ testing between changes. One variable at a time.
 | `CONTEXT` | Path to context file on disk | (required for QA) |
 | `RLM_DEPTH` | Current recursion depth | `0` |
 | `RLM_MAX_DEPTH` | Maximum recursion depth | `3` |
-| `RLM_PROVIDER` | LLM provider for sub-calls | Pi's default |
-| `RLM_MODEL` | LLM model for sub-calls | Pi's default |
+| `RLM_PROVIDER` | LLM provider override for root + sub-calls; otherwise seeded from Pi's active/root provider | Pi settings/active model |
+| `RLM_MODEL` | LLM model override for root + sub-calls; otherwise seeded from Pi's active/root model | Pi settings/active model |
+| `RLM_THINKING_LEVEL` | Thinking level propagated to child calls; otherwise seeded from Pi's active/root thinking level | Pi settings/active thinking |
 | `RLM_SYSTEM_PROMPT` | Path to system prompt file | (required) |
 | `PI_TRACE_FILE` | Trace log path | (none) |
 | `RLM_TIMEOUT` | Max wall-clock seconds | (none = unlimited) |

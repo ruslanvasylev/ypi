@@ -52,6 +52,7 @@ echo "CONTEXT=$CONTEXT"
 echo "RLM_DEPTH=$RLM_DEPTH"
 echo "RLM_MODEL=$RLM_MODEL"
 echo "RLM_PROVIDER=$RLM_PROVIDER"
+echo "RLM_THINKING_LEVEL=${RLM_THINKING_LEVEL:-unset}"
 echo "RLM_TIMEOUT=${RLM_TIMEOUT:-unset}"
 echo "RLM_START_TIME=${RLM_START_TIME:-unset}"
 echo "RLM_MAX_CALLS=${RLM_MAX_CALLS:-unset}"
@@ -214,15 +215,16 @@ else
     skip "G5: child model override" "RLM_CHILD_MODEL not implemented yet"
 fi
 
-# G6: root model is used when no child override is set
+# G6: root model/thinking are used when no child override is set
 if _feature_exists "RLM_CHILD_MODEL"; then
     OUTPUT=$(
         CONTEXT="$TEST_TMP/ctx.txt" \
         RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
-        RLM_PROVIDER=anthropic RLM_MODEL=claude-sonnet \
+        RLM_PROVIDER=anthropic RLM_MODEL=claude-sonnet RLM_THINKING_LEVEL=xhigh \
         rlm_query "Root model test without child override?"
     )
     assert_contains "G6: root model passes through without override" "--model claude-sonnet" "$OUTPUT"
+    assert_contains "G6: root thinking passes through without override" "--thinking xhigh" "$OUTPUT"
 else
     skip "G6: root uses root model" "RLM_CHILD_MODEL not implemented yet"
 fi
