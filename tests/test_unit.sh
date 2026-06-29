@@ -85,6 +85,7 @@ echo "RLM_DEPTH=$RLM_DEPTH"
 echo "RLM_MAX_DEPTH=$RLM_MAX_DEPTH"
 echo "RLM_PROVIDER=$RLM_PROVIDER"
 echo "RLM_MODEL=$RLM_MODEL"
+echo "RLM_THINKING_LEVEL=${RLM_THINKING_LEVEL:-}"
 echo "RLM_SYSTEM_PROMPT=$RLM_SYSTEM_PROMPT"
 echo "RLM_PROMPT_FILE=$RLM_PROMPT_FILE"
 if [ -n "${RLM_PROMPT_FILE:-}" ] && [ -f "${RLM_PROMPT_FILE:-}" ]; then
@@ -356,31 +357,40 @@ OUTPUT=$(
 assert_contains "T14c: explicit provider passes through" "--provider anthropic" "$OUTPUT"
 assert_contains "T14c: explicit model passes through" "--model claude-opus-4-6" "$OUTPUT"
 
-# T14e: ypi root launcher honors RLM_PROVIDER/RLM_MODEL
+# T14e: bare ypi root launcher defers provider/model defaults to Pi settings
+OUTPUT=$(
+    YPI_QUIET=1 \
+    "$PROJECT_DIR/ypi" -p --no-session "Launcher default routing?"
+)
+assert_not_contains "T14e: launcher does not hardcode provider" "--provider" "$OUTPUT"
+assert_not_contains "T14e: launcher does not hardcode model" "--model" "$OUTPUT"
+assert_contains "T14e: launcher loads canonical extension" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
+assert_not_contains "T14e: launcher does not limit tools" "--tools" "$OUTPUT"
+assert_not_contains "T14e: launcher does not build system prompt" "--system-prompt" "$OUTPUT"
+
+# T14f: ypi root launcher honors RLM_PROVIDER/RLM_MODEL env overrides
 OUTPUT=$(
     RLM_PROVIDER=openrouter \
     RLM_MODEL=openai/gpt-5.5:xhigh \
     YPI_QUIET=1 \
     "$PROJECT_DIR/ypi" -p --no-session "Launcher model routing?"
 )
-assert_contains "T14e: launcher provider from env" "--provider openrouter" "$OUTPUT"
-assert_contains "T14e: launcher model from env" "--model openai/gpt-5.5:xhigh" "$OUTPUT"
-assert_contains "T14e: launcher loads canonical extension" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
-assert_not_contains "T14e: launcher does not build system prompt" "--system-prompt" "$OUTPUT"
+assert_contains "T14f: launcher provider from env" "--provider openrouter" "$OUTPUT"
+assert_contains "T14f: launcher model from env" "--model openai/gpt-5.5:xhigh" "$OUTPUT"
 
-# T14f: explicit ypi CLI provider/model wins over environment routing
+# T14g: explicit ypi CLI provider/model wins over environment routing and child env seeding
 OUTPUT=$(
     RLM_PROVIDER=openrouter \
     RLM_MODEL=openai/gpt-5.5:xhigh \
     YPI_QUIET=1 \
     "$PROJECT_DIR/ypi" --provider anthropic --model claude-haiku -p --no-session "Launcher explicit routing?"
 )
-assert_contains "T14f: launcher explicit provider" "--provider anthropic" "$OUTPUT"
-assert_contains "T14f: launcher explicit model" "--model claude-haiku" "$OUTPUT"
-assert_not_contains "T14f: launcher provider not duplicated" "--provider openrouter" "$OUTPUT"
-assert_not_contains "T14f: launcher model not duplicated" "--model openai/gpt-5.5:xhigh" "$OUTPUT"
-assert_contains "T14f: launcher explicit provider clears env" "RLM_PROVIDER=" "$OUTPUT"
-assert_contains "T14f: launcher explicit model clears env" "RLM_MODEL=" "$OUTPUT"
+assert_contains "T14g: launcher explicit provider" "--provider anthropic" "$OUTPUT"
+assert_contains "T14g: launcher explicit model" "--model claude-haiku" "$OUTPUT"
+assert_not_contains "T14g: launcher provider not duplicated" "--provider openrouter" "$OUTPUT"
+assert_not_contains "T14g: launcher model not duplicated" "--model openai/gpt-5.5:xhigh" "$OUTPUT"
+assert_contains "T14g: launcher explicit provider clears env" "RLM_PROVIDER=" "$OUTPUT"
+assert_contains "T14g: launcher explicit model clears env" "RLM_MODEL=" "$OUTPUT"
 
 # T14d: RLM_PROMPT_FILE is set and contains the original prompt (symbolic access)
 OUTPUT=$(

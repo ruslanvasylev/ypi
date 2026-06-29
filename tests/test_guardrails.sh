@@ -59,6 +59,10 @@ echo "RLM_MAX_CALLS=${RLM_MAX_CALLS:-unset}"
 echo "RLM_CALL_COUNT=${RLM_CALL_COUNT:-unset}"
 echo "RLM_CHILD_MODEL=${RLM_CHILD_MODEL:-unset}"
 echo "RLM_CHILD_PROVIDER=${RLM_CHILD_PROVIDER:-unset}"
+echo "RLM_CHILD_MODELS=${RLM_CHILD_MODELS:-unset}"
+echo "RLM_CHILD_PROVIDERS=${RLM_CHILD_PROVIDERS:-unset}"
+echo "RLM_CHILD_THINKING_LEVEL=${RLM_CHILD_THINKING_LEVEL:-unset}"
+echo "RLM_CHILD_THINKING_LEVELS=${RLM_CHILD_THINKING_LEVELS:-unset}"
 echo "RLM_TRACE_ID=${RLM_TRACE_ID:-unset}"
 echo "RLM_SESSION_FILE=${RLM_SESSION_FILE:-unset}"
 # Simulate a slow call if MOCK_SLEEP is set
@@ -76,11 +80,13 @@ for _v in $(env | grep '^RLM_' | cut -d= -f1); do unset "$_v"; done
 for _v in $(env | grep '^YPI_' | cut -d= -f1); do unset "$_v"; done
 unset RLM_SESSION_DIR RLM_SESSION_FILE RLM_TRACE_ID RLM_COST_FILE RLM_BUDGET
 unset RLM_DEPTH RLM_MAX_DEPTH RLM_TIMEOUT RLM_START_TIME RLM_MAX_CALLS RLM_CALL_COUNT
-unset RLM_PROVIDER RLM_MODEL RLM_CHILD_MODEL RLM_CHILD_PROVIDER
+unset RLM_PROVIDER RLM_MODEL RLM_THINKING_LEVEL RLM_CHILD_MODEL RLM_CHILD_PROVIDER
+unset RLM_CHILD_MODELS RLM_CHILD_PROVIDERS RLM_CHILD_THINKING_LEVEL RLM_CHILD_THINKING_LEVELS
 unset RLM_EXTENSIONS RLM_CHILD_EXTENSIONS RLM_HASHLINE RLM_JJ RLM_JSON RLM_STDIN
-
-# Force tests to use the mock even when invoked from a live ypi session.
+# Force rlm_query to use the mock even when a parent ypi session exported
+# YPI_PI_BIN to a real pi binary.
 export YPI_PI_BIN="$MOCK_BIN/pi"
+
 # Disable JSON mode in guardrail tests — mock pi doesn't output JSON
 export RLM_JSON=0
 
@@ -215,7 +221,7 @@ else
     skip "G5: child model override" "RLM_CHILD_MODEL not implemented yet"
 fi
 
-# G6: root model/thinking are used when no child override is set
+# G6: root model is used when no child override is set
 if _feature_exists "RLM_CHILD_MODEL"; then
     OUTPUT=$(
         CONTEXT="$TEST_TMP/ctx.txt" \
@@ -228,6 +234,19 @@ if _feature_exists "RLM_CHILD_MODEL"; then
 else
     skip "G6: root uses root model" "RLM_CHILD_MODEL not implemented yet"
 fi
+
+# G6b: per-depth child model/thinking lists override by child depth
+OUTPUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" \
+    RLM_DEPTH=1 RLM_MAX_DEPTH=3 \
+    RLM_PROVIDER=openai RLM_MODEL=gpt-5.5:xhigh RLM_THINKING_LEVEL=xhigh \
+    RLM_CHILD_MODELS='gpt-5.5:high,gpt-5.5:medium' \
+    RLM_CHILD_THINKING_LEVELS='high,medium' \
+    rlm_query "Depth-specific model routing?"
+)
+assert_contains "G6b: second-depth model selected" "--model gpt-5.5:medium" "$OUTPUT"
+assert_contains "G6b: second-depth thinking selected" "--thinking medium" "$OUTPUT"
+assert_contains "G6b: provider inherited" "--provider openai" "$OUTPUT"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
