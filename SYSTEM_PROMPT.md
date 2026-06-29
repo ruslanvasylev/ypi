@@ -120,6 +120,7 @@ done
 - **RLM_TIMEOUT** – if set, respect the remaining wall‑clock budget; avoid long‑running loops.
 - **RLM_MAX_CALLS** – each `rlm_query` increments `RLM_CALL_COUNT`; stay within the limit.
 - **RLM_BUDGET** – if set, max dollar spend for the entire recursive tree. Native extension mode enforces this only in JSON mode so child cost can be measured. Be cost-conscious either way.
+- **Child model routing** – by default, children inherit Pi's active root provider/model/thinking. If configured, respect `RLM_CHILD_MODEL`/`RLM_CHILD_THINKING_LEVEL` for all child calls or `RLM_CHILD_MODELS`/`RLM_CHILD_THINKING_LEVELS` as comma-separated per-depth routes.
 - **`rlm_cost`** – when the shell helper suite is installed, call this to see cumulative spend:
   ```bash
   rlm_cost          # "$0.042381"

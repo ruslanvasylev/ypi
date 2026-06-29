@@ -122,15 +122,38 @@ function maybeCreateJjWorkspace(cwd: string, depth: number): Workspace {
 	};
 }
 
+function commaEntry(value: string | undefined, oneBasedIndex: number): string {
+	if (!value || oneBasedIndex < 1) return "";
+	const parts = value.split(",").map((part) => part.trim());
+	return parts[oneBasedIndex - 1] || "";
+}
+
 function providerModel(ctx: ExtensionContext, childDepth: number, rootThinkingLevel: string): { provider: string; model: string; thinkingLevel: string } {
 	let provider = process.env.RLM_PROVIDER || ctx.model?.provider || "";
 	let model = process.env.RLM_MODEL || ctx.model?.id || "";
 	let thinkingLevel = process.env.RLM_THINKING_LEVEL || rootThinkingLevel || "";
 
-	if (childDepth > 0 && process.env.RLM_CHILD_MODEL) {
-		model = process.env.RLM_CHILD_MODEL;
-		if (process.env.RLM_CHILD_PROVIDER) {
+	const depthModel = commaEntry(process.env.RLM_CHILD_MODELS, childDepth);
+	const depthProvider = commaEntry(process.env.RLM_CHILD_PROVIDERS, childDepth);
+	const depthThinking = commaEntry(process.env.RLM_CHILD_THINKING_LEVELS, childDepth);
+
+	if (childDepth > 0) {
+		if (depthModel) {
+			model = depthModel;
+		} else if (process.env.RLM_CHILD_MODEL) {
+			model = process.env.RLM_CHILD_MODEL;
+		}
+
+		if (depthProvider) {
+			provider = depthProvider;
+		} else if (process.env.RLM_CHILD_PROVIDER && (depthModel || process.env.RLM_CHILD_MODEL)) {
 			provider = process.env.RLM_CHILD_PROVIDER;
+		}
+
+		if (depthThinking) {
+			thinkingLevel = depthThinking;
+		} else if (process.env.RLM_CHILD_THINKING_LEVEL) {
+			thinkingLevel = process.env.RLM_CHILD_THINKING_LEVEL;
 		}
 	}
 

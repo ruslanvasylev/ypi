@@ -226,6 +226,22 @@ async function run(): Promise<void> {
 
 	clearYpiEnv();
 	resetLog();
+	process.env.RLM_DEPTH = "1";
+	process.env.RLM_MAX_DEPTH = "3";
+	process.env.RLM_PROVIDER = "openai";
+	process.env.RLM_MODEL = "gpt-5.5:xhigh";
+	process.env.RLM_THINKING_LEVEL = "xhigh";
+	process.env.RLM_CHILD_MODELS = "gpt-5.5:high,gpt-5.5:medium";
+	process.env.RLM_CHILD_THINKING_LEVELS = "high,medium";
+	process.env.RLM_JSON = "0";
+	ensureEnvironment(runtime, context(), pi);
+	await invoke();
+	assertContains("N7b: second-depth child model selected", readLog(), "--model gpt-5.5:medium");
+	assertContains("N7b: second-depth child thinking selected", readLog(), "--thinking medium");
+	assertContains("N7b: child thinking env selected", readLog(), "RLM_THINKING_LEVEL=medium");
+
+	clearYpiEnv();
+	resetLog();
 	process.env.RLM_DEPTH = "0";
 	process.env.RLM_MAX_DEPTH = "2";
 	process.env.RLM_PROVIDER = "stale-provider";
@@ -234,9 +250,9 @@ async function run(): Promise<void> {
 	process.env.RLM_JSON = "0";
 	ensureEnvironment(runtime, context(), pi);
 	await invoke();
-	assertContains("N7b: stale provider refreshed from active root", readLog(), "--provider test-provider");
-	assertContains("N7b: stale model refreshed from active root", readLog(), "--model test-root-model");
-	assertContains("N7b: stale thinking refreshed from active root", readLog(), "--thinking xhigh");
+	assertContains("N7c: stale provider refreshed from active root", readLog(), "--provider test-provider");
+	assertContains("N7c: stale model refreshed from active root", readLog(), "--model test-root-model");
+	assertContains("N7c: stale thinking refreshed from active root", readLog(), "--thinking xhigh");
 
 	clearYpiEnv();
 	resetLog();
