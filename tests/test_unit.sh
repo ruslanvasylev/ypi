@@ -104,9 +104,14 @@ chmod +x "$MOCK_BIN/pi"
 # Override PATH so rlm_query finds our mock pi
 export PATH="$MOCK_BIN:$PROJECT_DIR:$PATH"
 
-# Clean environment — unset all RLM_ vars so tests check rlm_query's own defaults,
-# not whatever the parent ypi session exported.
+# Clean environment — unset inherited ypi/rlm vars so tests check this repo's
+# mock-Pi harness, not whatever live ypi session is running the tests.
 for var in $(env | grep '^RLM_' | cut -d= -f1); do unset "$var"; done
+for var in $(env | grep '^YPI_' | cut -d= -f1); do unset "$var"; done
+# Force both rlm_query (YPI_PI_BIN path) and the ypi launcher (PATH fallback) to
+# use the mock. A live parent ypi session exports YPI_PI_BIN to the real pi;
+# without this override unit tests accidentally make real model calls.
+export YPI_PI_BIN="$MOCK_BIN/pi"
 # Disable JSON mode in unit tests — mock pi doesn't output JSON
 export RLM_JSON=0
 
