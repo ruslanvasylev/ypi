@@ -90,7 +90,18 @@ const pi = {
 	getThinkingLevel() {
 		return "xhigh";
 	},
-} as Pick<ExtensionAPI, "registerTool" | "getThinkingLevel"> as ExtensionAPI;
+	getAllTools() {
+		return [
+			{ name: "read" },
+			{ name: "bash" },
+			{ name: "edit" },
+			{ name: "write" },
+			{ name: "rlm_query" },
+			{ name: "installed_status" },
+			{ name: "installed_context_pack" },
+		];
+	},
+} as Pick<ExtensionAPI, "registerTool" | "getThinkingLevel" | "getAllTools"> as ExtensionAPI;
 
 function context(): ExtensionContext {
 	return {
@@ -199,7 +210,12 @@ async function run(): Promise<void> {
 	ensureEnvironment(runtime, context());
 	const readOnlyText = await invoke();
 	assertContains("N5: child stdout returned", readOnlyText, "FAKE_CHILD_OK");
-	assertContains("N5: no-jj child is read-only", readLog(), "--tools read,grep,find,ls,rlm_query");
+	assertContains("N5: no-jj child keeps safe built-ins", readLog(), "--tools read,grep,find,ls");
+	assertContains("N5: no-jj child keeps recursive tool", readLog(), "rlm_query");
+	assertContains("N5: no-jj child keeps installed extension tools", readLog(), "installed_status,installed_context_pack");
+	assertNotContains("N5: no-jj child excludes bash", readLog(), "--tools read,grep,find,ls,bash");
+	assertNotContains("N5: no-jj child excludes edit", readLog(), "edit");
+	assertNotContains("N5: no-jj child excludes write", readLog(), "write");
 
 	clearYpiEnv();
 	resetLog();
@@ -258,12 +274,48 @@ async function run(): Promise<void> {
 	resetLog();
 	process.env.RLM_DEPTH = "0";
 	process.env.RLM_MAX_DEPTH = "2";
+	process.env.RLM_JSON = "0";
+	ensureEnvironment(runtime, context());
+	await invoke();
+	assertNotContains("N8: ambient extension discovery is enabled by default", readLog(), "--no-extensions");
+	assertNotContains("N8: skill discovery is enabled by default", readLog(), "--no-skills");
+	assertContains("N8: ypi extension remains explicit", readLog(), `-e ${runtime.extensionPath}`);
+
+	clearYpiEnv();
+	resetLog();
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
 	process.env.RLM_CHILD_EXTENSIONS = "0";
 	process.env.RLM_JSON = "0";
 	ensureEnvironment(runtime, context());
 	await invoke();
-	assertContains("N8: child extension override disables extensions", readLog(), "--no-extensions");
-	assertNotContains("N8: child extension override avoids explicit extension", readLog(), "-e ");
+	assertContains("N8b: child extension override disables extensions", readLog(), "--no-extensions");
+	assertNotContains("N8b: child extension override avoids explicit extension", readLog(), "-e ");
+
+	clearYpiEnv();
+	resetLog();
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	process.env.RLM_CHILD_DISCOVERY = "0";
+	process.env.RLM_JSON = "0";
+	ensureEnvironment(runtime, context());
+	await invoke();
+	assertContains("N8c: child discovery override disables non-extension skill discovery", readLog(), "--no-skills");
+	assertContains("N8c: child discovery override disables context files", readLog(), "--no-context-files");
+	assertNotContains("N8c: child discovery override keeps extensions enabled", readLog(), "--no-extensions");
+
+	clearYpiEnv();
+	resetLog();
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	process.env.RLM_CHILD_DISCOVERY = "0";
+	process.env.RLM_CHILD_EXTENSIONS = "0";
+	process.env.RLM_JSON = "0";
+	ensureEnvironment(runtime, context());
+	await invoke();
+	assertContains("N8d: full child isolation disables extensions", readLog(), "--no-extensions");
+	assertContains("N8d: full child isolation disables non-extension skills", readLog(), "--no-skills");
+	assertNotContains("N8d: full child isolation avoids explicit ypi extension", readLog(), "-e ");
 
 	clearYpiEnv();
 	resetLog();

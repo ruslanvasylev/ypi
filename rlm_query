@@ -44,6 +44,7 @@
 #   RLM_JJ            — set to "0" to disable jj workspace isolation
 #   RLM_EXTENSIONS    — set to "0" to disable Pi extensions (default: 1)
 #   RLM_CHILD_EXTENSIONS — override extensions for depth > 0 (default: same as parent)
+#   RLM_CHILD_DISCOVERY — set to 0 to disable child non-extension skills/templates/themes/context discovery (default: enabled)
 #   RLM_BUDGET        — max dollar spend for entire recursive tree (e.g. "0.50")
 #   RLM_COST_FILE     — shared file tracking cumulative cost (auto‑created)
 #   RLM_JSON          — set to "0" to disable JSON mode (plain text, no cost tracking)
@@ -436,19 +437,26 @@ CMD_ARGS=(-p)
 [ -n "$THINKING_LEVEL" ] && CMD_ARGS+=(--thinking "$THINKING_LEVEL")
 
 if [ -z "$JJ_WORKSPACE" ] && [ "${RLM_UNSAFE_NO_JJ_WRITE:-0}" != "1" ]; then
-    CMD_ARGS+=(--tools read,grep,find,ls,rlm_query)
+    # Avoid --tools here: Pi treats it as a global allowlist across built-in,
+    # extension, and custom tools, which would hide installed package tools.
+    # Exclude built-in mutators instead so installed extension tools remain
+    # available while no-jj children cannot use bash/edit/write.
+    CMD_ARGS+=(--exclude-tools bash,edit,write)
 fi
 
-# Extensions: on by default, configurable per-instance like model routing.
-# Always disable ambient extension discovery; ypi's own extension is loaded
-# explicitly below (when enabled) via -e "$YPI_EXTENSION_PATH".
+# Extensions and skills: on by default so installed Pi packages behave in
+# recursive children the same way they do in the root session. Use
+# RLM_CHILD_EXTENSIONS=0 for package/extension isolation and
+# RLM_CHILD_DISCOVERY=0 for non-extension skill/template/theme/context isolation.
 CHILD_EXT="${RLM_EXTENSIONS:-1}"
 if [ "$NEXT_DEPTH" -gt 0 ] && [ -n "${RLM_CHILD_EXTENSIONS:-}" ]; then
     CHILD_EXT="${RLM_CHILD_EXTENSIONS}"
 fi
-CMD_ARGS+=(--no-extensions)
+if [ "$CHILD_EXT" = "0" ]; then
+    CMD_ARGS+=(--no-extensions)
+fi
 
-if [ "${RLM_CHILD_DISCOVERY:-0}" != "1" ]; then
+if [ "${RLM_CHILD_DISCOVERY:-1}" = "0" ]; then
     CMD_ARGS+=(--no-skills --no-prompt-templates --no-themes --no-context-files --no-approve)
 fi
 

@@ -82,7 +82,7 @@ unset RLM_SESSION_DIR RLM_SESSION_FILE RLM_TRACE_ID RLM_COST_FILE RLM_BUDGET
 unset RLM_DEPTH RLM_MAX_DEPTH RLM_TIMEOUT RLM_START_TIME RLM_MAX_CALLS RLM_CALL_COUNT
 unset RLM_PROVIDER RLM_MODEL RLM_THINKING_LEVEL RLM_CHILD_MODEL RLM_CHILD_PROVIDER
 unset RLM_CHILD_MODELS RLM_CHILD_PROVIDERS RLM_CHILD_THINKING_LEVEL RLM_CHILD_THINKING_LEVELS
-unset RLM_EXTENSIONS RLM_CHILD_EXTENSIONS RLM_HASHLINE RLM_JJ RLM_JSON RLM_STDIN
+unset RLM_EXTENSIONS RLM_CHILD_EXTENSIONS RLM_CHILD_DISCOVERY RLM_HASHLINE RLM_JJ RLM_JSON RLM_STDIN
 # Force rlm_query to use the mock even when a parent ypi session exported
 # YPI_PI_BIN to a real pi binary.
 export YPI_PI_BIN="$MOCK_BIN/pi"
@@ -452,6 +452,8 @@ if [ -f "$JJ_LOG" ] && grep -qF -- "workspace add" "$JJ_LOG"; then
 else
     pass "G13: RLM_JJ=0 disables JJ"
 fi
+assert_contains "G13: no-jj read-only excludes mutating built-ins" "--exclude-tools bash,edit,write" "$OUTPUT"
+assert_not_contains "G13: no-jj read-only does not allowlist away extension tools" "--tools read,grep,find,ls,rlm_query" "$OUTPUT"
 
 # G14: Max depth nodes still get workspaces (they have tools now)
 rm -f "$JJ_LOG"
@@ -829,7 +831,7 @@ echo "RLM_MODEL=$RLM_MODEL"
 MOCK_PI
 chmod +x "$MOCK_BIN/pi"
 
-# G34: children load only ypi's explicit extension by default
+# G34: children keep normal Pi package discovery by default and still load ypi explicitly
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
@@ -837,7 +839,8 @@ OUTPUT=$(
     RLM_PROVIDER=test RLM_MODEL=test \
     rlm_query "Extensions default test"
 )
-assert_contains "G34: ambient extension discovery disabled" "--no-extensions" "$OUTPUT"
+assert_not_contains "G34: ambient extension discovery enabled by default" "--no-extensions" "$OUTPUT"
+assert_not_contains "G34: skill discovery enabled by default" "--no-skills" "$OUTPUT"
 assert_contains "G34: ypi extension explicitly loaded" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
 
 # G35: RLM_EXTENSIONS=0 disables even ypi's explicit extension
@@ -852,7 +855,7 @@ OUTPUT=$(
 assert_contains "G35: RLM_EXTENSIONS=0 disables" "--no-extensions" "$OUTPUT"
 assert_not_contains "G35: no explicit extension when disabled" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
 
-# G36: max depth nodes still get ypi's explicit extension by default
+# G36: max depth nodes still keep Pi package discovery and get ypi's explicit extension by default
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=2 RLM_MAX_DEPTH=3 \
@@ -860,7 +863,7 @@ OUTPUT=$(
     RLM_PROVIDER=test RLM_MODEL=test \
     rlm_query "Max depth extensions test"
 )
-assert_contains "G36: max depth disables ambient discovery" "--no-extensions" "$OUTPUT"
+assert_not_contains "G36: max depth keeps ambient extension discovery" "--no-extensions" "$OUTPUT"
 assert_contains "G36: max depth has ypi extension" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
 
 # G37: RLM_CHILD_EXTENSIONS=0 disables root-to-child extension loading
@@ -884,6 +887,33 @@ OUTPUT=$(
     rlm_query "Child with ext off"
 )
 assert_contains "G38: child extensions disabled" "--no-extensions" "$OUTPUT"
+
+# G38b: RLM_CHILD_DISCOVERY=0 disables non-extension skill/context discovery surfaces
+OUTPUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" \
+    RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
+    YPI_EXTENSION_PATH="$PROJECT_DIR/extensions/recursive.ts" \
+    RLM_PROVIDER=test RLM_MODEL=test \
+    RLM_CHILD_DISCOVERY=0 \
+    rlm_query "Child discovery off"
+)
+assert_contains "G38b: child discovery off disables non-extension skills" "--no-skills" "$OUTPUT"
+assert_contains "G38b: child discovery off disables context files" "--no-context-files" "$OUTPUT"
+assert_not_contains "G38b: child discovery off does not disable extensions" "--no-extensions" "$OUTPUT"
+
+# G38c: combine child discovery and extension opt-outs for full package/resource isolation
+OUTPUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" \
+    RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
+    YPI_EXTENSION_PATH="$PROJECT_DIR/extensions/recursive.ts" \
+    RLM_PROVIDER=test RLM_MODEL=test \
+    RLM_CHILD_DISCOVERY=0 \
+    RLM_CHILD_EXTENSIONS=0 \
+    rlm_query "Full child isolation"
+)
+assert_contains "G38c: full child isolation disables extensions" "--no-extensions" "$OUTPUT"
+assert_contains "G38c: full child isolation disables non-extension skills" "--no-skills" "$OUTPUT"
+assert_not_contains "G38c: full child isolation avoids explicit ypi extension" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
