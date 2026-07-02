@@ -18,7 +18,8 @@ import type { YpiRuntime } from "./runtime.ts";
 import { debug } from "./runtime.ts";
 
 const MAX_TOOL_OUTPUT_CHARS = 60 * 1024;
-const READ_ONLY_TOOLS = "read,grep,find,ls,rlm_query";
+const READ_ONLY_BUILTIN_TOOLS = ["read", "grep", "find", "ls"];
+const READ_ONLY_EXCLUDED_BUILTINS = new Set(["bash", "edit", "write"]);
 
 const RlmQueryParams = Type.Object({
 	prompt: Type.String({
@@ -185,6 +186,16 @@ function childExtensionsEnabled(childDepth: number): boolean {
 		enabled = process.env.RLM_CHILD_EXTENSIONS !== "0";
 	}
 	return enabled;
+}
+
+function readOnlyToolAllowlist(pi: ExtensionAPI): string {
+	const names = new Set(READ_ONLY_BUILTIN_TOOLS);
+	for (const tool of pi.getAllTools()) {
+		if (tool.name && !READ_ONLY_EXCLUDED_BUILTINS.has(tool.name)) {
+			names.add(tool.name);
+		}
+	}
+	return [...names].join(",");
 }
 
 function removePathEntry(currentPath: string | undefined, entry: string): string | undefined {
@@ -459,8 +470,8 @@ export function registerNativeRlmQueryTool(pi: ExtensionAPI, runtime: YpiRuntime
 			if (provider) args.push("--provider", provider);
 			if (model) args.push("--model", model);
 			if (thinkingLevel) args.push("--thinking", thinkingLevel);
-			if (workspace.readOnly) args.push("--tools", READ_ONLY_TOOLS);
-			if (process.env.RLM_CHILD_DISCOVERY !== "1") {
+			if (workspace.readOnly) args.push("--tools", readOnlyToolAllowlist(pi));
+			if (process.env.RLM_CHILD_DISCOVERY === "0") {
 				args.push("--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve");
 			}
 			args.push(childSession ? "--session" : "--no-session", childSession || "");
@@ -470,7 +481,7 @@ export function registerNativeRlmQueryTool(pi: ExtensionAPI, runtime: YpiRuntime
 			if (!childExtensionsEnabled(childDepth)) {
 				args.push("--no-extensions");
 			} else if (existsSync(runtime.extensionPath)) {
-				args.push("--no-extensions", "-e", runtime.extensionPath);
+				args.push("-e", runtime.extensionPath);
 			}
 			args.push(params.prompt);
 

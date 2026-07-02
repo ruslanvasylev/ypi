@@ -287,7 +287,7 @@ testing between changes. One variable at a time.
 | `RLM_JJ` | Enable jj workspace isolation | `1` (set `0` to disable) |
 | `RLM_UNSAFE_NO_JJ_WRITE` | Allow writable child tools when jj is disabled/unavailable | `0` |
 | `RLM_SHARED_SESSIONS` | Allow child agents to write trace-named Pi sessions | `1` (set `0` for `--no-session`) |
-| `RLM_CHILD_DISCOVERY` | Allow child Pi to load project skills, prompt templates, themes, context files, and approval prompts | `0` |
+| `RLM_CHILD_DISCOVERY` | Set to `0` to disable child Pi non-extension skill, prompt-template, theme, context-file, and approval-prompt discovery; use with `RLM_CHILD_EXTENSIONS=0` for full package/resource isolation | enabled by default |
 | `YPI_SHELL_HELPER` | Expose the shell `rlm_query` helper (its dir on `PATH` + its source in the prompt); the `ypi` wrapper sets this | `0` (a bare `pi -e` / npm install uses the native tool only) |
 
 ## Bugs We've Found (and must not re-introduce)

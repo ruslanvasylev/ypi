@@ -110,7 +110,7 @@ Depth 0 (root)    -> full Pi with native rlm_query + bash
     Depth 2 (leaf) -> full Pi with bash, but no rlm_query (max depth)
 ```
 
-**File isolation with jj:** When jj is available and `RLM_JJ` is not `0`, recursive children use [jj workspaces](https://martinvonz.github.io/jj/latest/working-copy/) for isolation. Without jj, the minimal extension still works, but children default to read-only tools in the current checkout. Set `RLM_UNSAFE_NO_JJ_WRITE=1` only when you intentionally want writable no-jj child agents.
+**File isolation with jj:** When jj is available and `RLM_JJ` is not `0`, recursive children use [jj workspaces](https://martinvonz.github.io/jj/latest/working-copy/) for isolation. Without jj, the minimal extension still works, but children exclude built-in mutators (`bash`, `edit`, `write`) unless `RLM_UNSAFE_NO_JJ_WRITE=1`. Installed extension tools remain available by default, so package trust still follows Pi's installed-package model.
 
 ### Why It Works
 
@@ -157,8 +157,9 @@ This means root uses Pi's configured default, depth-1 children use high thinking
 | Call limit | `RLM_MAX_CALLS=20` | Max total `rlm_query` invocations |
 | Model routing | `RLM_CHILD_MODEL=haiku` or `RLM_CHILD_MODELS=big:high,small:medium` | Use one child model for every sub-call, or a comma-separated depth route for depth 1, 2, ... |
 | Depth limit | `RLM_MAX_DEPTH=3` | How deep recursion can go |
-| jj disable | `RLM_JJ=0` | Skip workspace isolation; child agents are read-only unless `RLM_UNSAFE_NO_JJ_WRITE=1` |
+| jj disable | `RLM_JJ=0` | Skip workspace isolation; child agents exclude built-in mutators unless `RLM_UNSAFE_NO_JJ_WRITE=1`, while installed extension tools remain available |
 | Plain text | `RLM_JSON=0` | Disable JSON mode (no cost tracking) |
+| Child non-extension discovery isolation | `RLM_CHILD_DISCOVERY=0` | Pass Pi's `--no-skills`, `--no-prompt-templates`, `--no-themes`, `--no-context-files`, and `--no-approve`; installed extensions may still register commands/skills unless extension loading is also disabled |
 | Tracing | `PI_TRACE_FILE=$HOME/scratch/trace.log` | Log all calls with timing + cost |
 
 The agent can check spend at any time:
@@ -175,7 +176,7 @@ ypi is a thin layer on top of Pi. We strive not to break or duplicate what Pi al
 | Pi feature | ypi behavior | Tests |
 |---|---|---|
 | **Session history** | Uses Pi's native session manager when a parent session exists. Child sessions go in the same dir with trace-encoded filenames. `RLM_SHARED_SESSIONS=0` uses `--no-session` and clears child session env. No separate session store. | G24–G30 |
-| **Extensions** | Child processes disable ambient extension discovery and explicitly reload the ypi extension. `RLM_EXTENSIONS=0` disables recursion extension loading; `RLM_CHILD_EXTENSIONS=0` disables it for child depths. | G34–G38, N8 |
+| **Extensions** | Child processes keep normal Pi package/extension discovery enabled by default and explicitly load the ypi extension so installed Pi packages remain available recursively. `RLM_EXTENSIONS=0` disables recursion extension loading; `RLM_CHILD_EXTENSIONS=0` disables it for child depths; `RLM_CHILD_DISCOVERY=0` disables non-extension discovery surfaces only. Use both child opt-outs for full child package/resource isolation. | G34–G38, N8 |
 | **Native recursion** | The canonical `extensions/recursive.ts` extension registers a native Pi `rlm_query` tool. Minimal mode works with only Pi plus extension files: no `ypi` launcher, no shell helper, no jj. | extension smoke, pure-extension E2E |
 | **System prompt** | The extension injects `SYSTEM_PROMPT.md` when present and falls back to a minimal built-in prompt when it is not. If the shell `rlm_query` file exists, its source is appended as optional compatibility context. Standalone shell `rlm_query` falls back to Pi's `--system-prompt`. | T8–T9, parity E2E |
 | **`-p` mode** | All child Pi calls run non-interactive (`-p`). ypi never fakes a terminal. | T3–T4 |
