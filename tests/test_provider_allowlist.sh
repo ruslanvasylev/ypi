@@ -15,7 +15,7 @@ exec </dev/null
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-RUNTIME_CORE="$PROJECT_DIR/extensions/ypi/runtime-core.ts"
+RUNTIME_CONFIG="$PROJECT_DIR/extensions/ypi/internal/child-config.ts"
 CLI_ADAPTER="$PROJECT_DIR/extensions/ypi/cli.ts"
 LEGACY_RLM_QUERY="$PROJECT_DIR/rlm_query.legacy"
 PI_MONO="$PROJECT_DIR/pi-mono"
@@ -36,7 +36,7 @@ echo ""
 echo "=== Provider env allowlist ==="
 
 # ── Extract the native allowlist (the PROVIDER_ENV_ALLOWLIST Set) ──────────────
-NATIVE_KEYS="$(awk '/PROVIDER_ENV_ALLOWLIST = new Set\(\[/{f=1;next} /\]\);/{f=0} f' "$RUNTIME_CORE" \
+NATIVE_KEYS="$(awk '/PROVIDER_ENV_ALLOWLIST = new Set\(\[/{f=1;next} /\]\);/{f=0} f' "$RUNTIME_CONFIG" \
     | grep -oE '"[A-Z][A-Z0-9_]*"' | tr -d '"' | sort -u)"
 
 # ── Extract the shell allowlist (the append_allowed_env `for key in` block), then

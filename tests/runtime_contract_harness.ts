@@ -212,6 +212,12 @@ async function run(): Promise<void> {
 	ensureEnvironment(runtime, extensionContext(), pi);
 	registerNativeRlmQueryTool(pi, runtime);
 	record(Boolean(nativeTool), "native adapter registered");
+	const nativeAdapterSource = readFileSync(path.join(projectRoot, "extensions/ypi/native-tool.ts"), "utf8");
+	const cliAdapterSource = readFileSync(path.join(projectRoot, "extensions/ypi/cli.ts"), "utf8");
+	contains("native adapter depends on public runtime entrypoint", nativeAdapterSource, 'from "./runtime-core.ts"');
+	record(!nativeAdapterSource.includes("./internal/"), "native adapter does not bypass runtime-core internals");
+	contains("CLI adapter depends on public runtime entrypoint", cliAdapterSource, 'from "./runtime-core.ts"');
+	record(!cliAdapterSource.includes("./internal/child-config") && !cliAdapterSource.includes("./internal/child-process") && !cliAdapterSource.includes("./internal/child-resources"), "CLI adapter does not bypass child-runtime internals");
 
 	clearRuntimeEnv();
 	process.env.YPI_SHELL_HELPER = "1";
@@ -219,6 +225,7 @@ async function run(): Promise<void> {
 	const selfHostingPrompt = buildYpiPrompt(runtime);
 	contains("wrapper prompt exposes canonical runtime section", selfHostingPrompt, "SECTION 6 - Canonical rlm_query Runtime Implementation");
 	contains("wrapper prompt exposes runtime-core source", selfHostingPrompt, "export async function runRecursiveChild");
+	contains("wrapper prompt exposes internal runtime owners", selfHostingPrompt, "// child-process.ts");
 	contains("wrapper prompt exposes CLI adapter source", selfHostingPrompt, "export async function main");
 	record(!selfHostingPrompt.includes("# rlm_query — Recursive Language Model sub-call for Pi."), "wrapper prompt does not promote retained legacy CLI as an active owner");
 

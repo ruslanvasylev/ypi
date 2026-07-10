@@ -112,7 +112,8 @@ _feature_exists() {
         "$PROJECT_DIR/extensions/ypi/cli.ts" \
         "$PROJECT_DIR/extensions/ypi/runtime-core.ts" \
         "$PROJECT_DIR/extensions/ypi/guardrails.ts" \
-        "$PROJECT_DIR/extensions/ypi/env.ts" 2>/dev/null
+        "$PROJECT_DIR/extensions/ypi/env.ts" \
+        "$PROJECT_DIR/extensions/ypi/internal/"*.ts 2>/dev/null
 }
 
 if _feature_exists "RLM_TIMEOUT"; then

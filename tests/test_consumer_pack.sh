@@ -53,6 +53,7 @@ assert_contains "tarball contains package manifest" "package/package.json" "$TAR
 assert_contains "tarball contains canonical extension" "package/extensions/recursive.ts" "$TARBALL_LIST"
 assert_contains "tarball contains native adapter" "package/extensions/ypi/native-tool.ts" "$TARBALL_LIST"
 assert_contains "tarball contains canonical runtime core" "package/extensions/ypi/runtime-core.ts" "$TARBALL_LIST"
+assert_contains "tarball contains internal child-process owner" "package/extensions/ypi/internal/child-process.ts" "$TARBALL_LIST"
 assert_contains "tarball contains thin CLI adapter" "package/extensions/ypi/cli.ts" "$TARBALL_LIST"
 assert_contains "tarball contains generated Node CLI projection" "package/dist/rlm_query.mjs" "$TARBALL_LIST"
 assert_contains "tarball contains retained native fallback" "package/extensions/ypi/legacy-native-tool.ts" "$TARBALL_LIST"

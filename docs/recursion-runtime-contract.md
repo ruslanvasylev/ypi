@@ -7,7 +7,9 @@ grow different guardrails, routes, or child lifecycles.
 
 The executable contract is `tests/runtime_contract_harness.ts`. Prose changes do
 not alter behavior unless the harness and the owning implementation change with
-it.
+it. `runtime-core.ts` is the only child-runtime entrypoint available to adapters;
+configuration, resource, and process owners under `extensions/ypi/internal/`
+remain private and are checked against adapter bypass.
 
 ## Shared engine responsibilities
 

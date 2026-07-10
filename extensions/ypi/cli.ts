@@ -1,18 +1,9 @@
-import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import {
-	existsSync,
-	mkdtempSync,
-	readdirSync,
-	readFileSync,
-	rmSync,
-	statSync,
-	writeFileSync,
-} from "node:fs";
+import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ensureEnvironment, safeTraceId } from "./env.ts";
+import { ensureEnvironment } from "./env.ts";
+import { createAsyncJob, finishAsyncJob, launchAsyncWorker, readAsyncJob } from "./internal/cli-async.ts";
 import { RecursiveChildError, runRecursiveChild } from "./runtime-core.ts";
 import { resolveRuntime, type YpiRuntime } from "./runtime.ts";
 
@@ -26,19 +17,6 @@ interface CliFlags {
 interface ContextSource {
 	context?: string;
 	contextPath?: string;
-}
-
-interface AsyncJob {
-	prompt: string;
-	fork: boolean;
-	notifyPid?: number;
-	cwd: string;
-	contextPath?: string;
-	ownedContextPath?: string;
-	outputPath: string;
-	sentinelPath: string;
-	jobPath: string;
-	extensionPath: string | null;
 }
 
 const runtimeFromModule = resolveRuntime(new URL("../recursive.ts", import.meta.url).href);
@@ -163,86 +141,6 @@ function errorExitCode(error: unknown): number {
 	return error instanceof RecursiveChildError ? error.exitCode : 1;
 }
 
-function createOwnedContext(context: string): string {
-	const contextDir = mkdtempSync(path.join(process.env.TMPDIR || tmpdir(), "ypi_async_context_"));
-	const contextPath = path.join(contextDir, "context.txt");
-	writeFileSync(contextPath, context, { mode: 0o600 });
-	return contextPath;
-}
-
-function createAsyncJob(flags: CliFlags, source: ContextSource, extensionPath: string | null): AsyncJob {
-	const traceId = safeTraceId(process.env.RLM_TRACE_ID || randomBytes(4).toString("hex"));
-	process.env.RLM_TRACE_ID = traceId;
-	const id = `rlm_async_${traceId}_${randomBytes(4).toString("hex")}`;
-	const root = process.env.TMPDIR || tmpdir();
-	const ownedContextPath = source.context !== undefined ? createOwnedContext(source.context) : undefined;
-	const jobPath = path.join(root, `${id}.job.json`);
-	return {
-		prompt: flags.prompt,
-		fork: flags.fork,
-		notifyPid: flags.notifyPid,
-		cwd: process.cwd(),
-		contextPath: ownedContextPath || source.contextPath,
-		ownedContextPath,
-		outputPath: path.join(root, `${id}.txt`),
-		sentinelPath: path.join(root, `${id}.done`),
-		jobPath,
-		extensionPath,
-	};
-}
-
-function launchAsyncWorker(job: AsyncJob): number {
-	writeFileSync(job.jobPath, `${JSON.stringify(job)}\n`, { mode: 0o600 });
-	const cliPath = fileURLToPath(import.meta.url);
-	const child = spawn(process.execPath, [cliPath, "--ypi-async-worker", job.jobPath], {
-		cwd: job.cwd,
-		env: process.env,
-		stdio: "ignore",
-		detached: process.platform !== "win32",
-	});
-	child.unref();
-	return child.pid || 0;
-}
-
-function findPeerInbox(pid: number): string | undefined {
-	try {
-		for (const name of readdirSync("/tmp")) {
-			if (!name.startsWith("pi_peer_")) continue;
-			const directory = path.join("/tmp", name);
-			try {
-				const metadata = JSON.parse(readFileSync(path.join(directory, "meta.json"), "utf8"));
-				if (Number(metadata.pid) === pid) return path.join(directory, "inbox.jsonl");
-			} catch {
-				// Ignore unrelated or concurrently removed peer directories.
-			}
-		}
-	} catch {
-		// /tmp peer discovery is optional.
-	}
-	return undefined;
-}
-
-function notifyPeer(job: AsyncJob): void {
-	if (job.notifyPid === undefined) return;
-	const inbox = findPeerInbox(job.notifyPid);
-	if (!inbox) return;
-	let result = "";
-	try { result = readFileSync(job.outputPath, "utf8").slice(-50_000); } catch { /* no output */ }
-	const message = {
-		from_pid: process.pid,
-		from_project: "rlm_query",
-		message: `[rlm_query --async result]\n\n${result}`,
-		timestamp: new Date().toISOString(),
-		id: `async_${path.basename(job.outputPath, ".txt")}`,
-	};
-	writeFileSync(inbox, `${JSON.stringify(message)}\n`, { flag: "a" });
-}
-
-function cleanupAsyncJob(job: AsyncJob): void {
-	rmSync(job.jobPath, { force: true });
-	if (job.ownedContextPath) rmSync(path.dirname(job.ownedContextPath), { recursive: true, force: true });
-}
-
 async function executeRequest(runtime: YpiRuntime, flags: Pick<CliFlags, "prompt" | "fork">, source: ContextSource, cwd = process.cwd(), extensionPath: string | null = configuredExtensionPath()) {
 	return runRecursiveChild(runtime, {
 		prompt: flags.prompt,
@@ -256,21 +154,19 @@ async function executeRequest(runtime: YpiRuntime, flags: Pick<CliFlags, "prompt
 }
 
 async function runWorker(jobPath: string): Promise<void> {
-	const job = JSON.parse(readFileSync(jobPath, "utf8")) as AsyncJob;
+	const job = readAsyncJob(jobPath);
 	const runtime = activeRuntime();
 	ensureEnvironment(runtime);
 	let code = 0;
+	let output = "";
 	try {
 		const result = await executeRequest(runtime, { prompt: job.prompt, fork: job.fork }, { contextPath: job.contextPath }, job.cwd, job.extensionPath);
-		writeFileSync(job.outputPath, result.text);
+		output = result.text;
 	} catch (error) {
 		code = errorExitCode(error);
-		writeFileSync(job.outputPath, `${cliErrorText(error)}\n`);
-	} finally {
-		try { writeFileSync(job.sentinelPath, `${code}\n`); } catch { /* caller sees missing sentinel */ }
-		try { notifyPeer(job); } catch { /* notification is best-effort */ }
-		cleanupAsyncJob(job);
+		output = `${cliErrorText(error)}\n`;
 	}
+	finishAsyncJob(job, code, output);
 }
 
 export async function main(args = process.argv.slice(2)): Promise<number> {
@@ -288,8 +184,16 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
 	const source = await resolveContextSource();
 
 	if (flags.async) {
-		const job = createAsyncJob(flags, source, extensionPath);
-		const pid = launchAsyncWorker(job);
+		const job = createAsyncJob({
+			prompt: flags.prompt,
+			fork: flags.fork,
+			notifyPid: flags.notifyPid,
+			cwd: process.cwd(),
+			context: source.context,
+			contextPath: source.contextPath,
+			extensionPath,
+		});
+		const pid = launchAsyncWorker(job, fileURLToPath(import.meta.url));
 		process.stdout.write(`${JSON.stringify({
 			job_id: path.basename(job.outputPath, ".txt"),
 			output: job.outputPath,

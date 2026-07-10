@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import type { BeforeAgentStartEvent } from "@earendil-works/pi-coding-agent";
 import { shellHelperEnabled } from "./env.ts";
 import type { YpiRuntime } from "./runtime.ts";
@@ -23,6 +23,11 @@ function runtimeImplementationSection(runtime: YpiRuntime): string {
 
 	const rlmQuery = readFileSync(runtime.rlmQueryPath, "utf8");
 	const runtimeCore = readFileSync(runtime.runtimeCorePath, "utf8");
+	const internalRuntime = readdirSync(runtime.runtimeInternalDir)
+		.filter((name) => name.endsWith(".ts"))
+		.sort()
+		.map((name) => `// ${name}\n${readFileSync(`${runtime.runtimeInternalDir}/${name}`, "utf8")}`)
+		.join("\n\n");
 	const cliAdapter = readFileSync(runtime.cliAdapterPath, "utf8");
 	return `
 
@@ -43,6 +48,12 @@ ${rlmQuery}
 
 \`\`\`typescript
 ${runtimeCore}
+\`\`\`
+
+### Internal runtime owners
+
+\`\`\`typescript
+${internalRuntime}
 \`\`\`
 
 ### CLI adapter
