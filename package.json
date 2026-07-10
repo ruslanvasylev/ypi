@@ -58,6 +58,10 @@
     "@earendil-works/pi-coding-agent": "0.79.4",
     "typebox": "1.1.38"
   },
+  "devDependencies": {
+    "@types/node": "25.9.3",
+    "typescript": "7.0.2"
+  },
   "os": [
     "linux",
     "darwin"

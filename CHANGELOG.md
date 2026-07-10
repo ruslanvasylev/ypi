@@ -8,6 +8,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ### Added
 - A canonical TypeScript recursion runtime core now owns child planning, guardrails, routing, resources, environment projection, bounded spawning, result classification, and cleanup for both native and CLI calls. The Pi tool and Node CLI are thin adapters; the incumbent native and shell engines remain available through `YPI_LEGACY_IMPL=1` during convergence.
 - An executable native/CLI runtime contract freezes shared behavior and names any intentional divergence; the initial stabilized contract passes with no known deterministic divergences.
+- A strict TypeScript runtime typecheck and deterministic generated-CLI freshness check now run in `test-fast`.
 
 ### Changed
 - Bare `ypi` now explicitly preserves Pi-native root model selection: root provider/model/thinking come from Pi settings (`defaultProvider`, `defaultModel`, `defaultThinkingLevel`), `/model`, or CLI flags, while children inherit the active root route by default. Recursive child routing can now be lowered by depth with `RLM_CHILD_MODELS`, `RLM_CHILD_PROVIDERS`, and `RLM_CHILD_THINKING_LEVELS` without narrowing the root default, toolset, timeout, or call-limit behavior.
