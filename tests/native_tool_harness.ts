@@ -391,6 +391,30 @@ async function run(): Promise<void> {
 	assertContains("N13: hostile trace id is sanitized in the session filename", traceLog, ".._.._etc_evil_d1_c1.jsonl");
 	assertNotContains("N13: hostile trace id cannot traverse out of the session dir", traceLog, "etc/evil");
 
+	// N14: convergence keeps the incumbent native implementation available as
+	// an explicit one-release fallback; it is retained, not silently removed.
+	clearYpiEnv();
+	resetLog();
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	process.env.RLM_JSON = "0";
+	process.env.RLM_JJ = "0";
+	process.env.RLM_UNSAFE_NO_JJ_WRITE = "1";
+	process.env.YPI_LEGACY_IMPL = "1";
+	let legacyTool: Tool | undefined;
+	const legacyPi = {
+		...pi,
+		registerTool(registered: Tool) {
+			legacyTool = registered;
+		},
+	} as ExtensionAPI;
+	ensureEnvironment(runtime, context(), legacyPi);
+	registerNativeRlmQueryTool(legacyPi, runtime);
+	if (!legacyTool) throw new Error("legacy native tool was not registered");
+	const legacyResult = await legacyTool.execute("legacy-call", { prompt: "legacy fallback" }, undefined, undefined, context());
+	const legacyText = legacyResult.content.find((item) => item.type === "text")?.text || "";
+	assertContains("N14: legacy native fallback remains executable", legacyText, "FAKE_CHILD_OK");
+
 	console.log("");
 	console.log(`Results: ${pass} passed, ${fail} failed`);
 	if (fail > 0) {

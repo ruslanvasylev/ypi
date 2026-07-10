@@ -63,7 +63,9 @@ TARBALL="$(printf '%s\n' "$PACK_OUTPUT" | awk 'NF { last=$0 } END { print last }
 
 TARBALL_LIST="$(tar -tzf "$TARBALL")"
 assert_contains "tarball ships canonical extension" "package/extensions/recursive.ts" "$TARBALL_LIST"
-assert_contains "tarball ships native tool module" "package/extensions/ypi/native-tool.ts" "$TARBALL_LIST"
+assert_contains "tarball ships native adapter" "package/extensions/ypi/native-tool.ts" "$TARBALL_LIST"
+assert_contains "tarball ships canonical runtime core" "package/extensions/ypi/runtime-core.ts" "$TARBALL_LIST"
+assert_contains "tarball ships retained native fallback" "package/extensions/ypi/legacy-native-tool.ts" "$TARBALL_LIST"
 assert_contains "tarball ships system prompt" "package/SYSTEM_PROMPT.md" "$TARBALL_LIST"
 assert_not_contains "tarball excludes the wrapper launcher" "package/ypi" "$TARBALL_LIST"
 assert_not_contains "tarball excludes the shell rlm_query" "package/rlm_query" "$TARBALL_LIST"

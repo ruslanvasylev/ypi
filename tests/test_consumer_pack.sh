@@ -51,7 +51,9 @@ fi
 TARBALL_LIST="$(tar -tzf "$TGZ")"
 assert_contains "tarball contains package manifest" "package/package.json" "$TARBALL_LIST"
 assert_contains "tarball contains canonical extension" "package/extensions/recursive.ts" "$TARBALL_LIST"
-assert_contains "tarball contains native modules" "package/extensions/ypi/native-tool.ts" "$TARBALL_LIST"
+assert_contains "tarball contains native adapter" "package/extensions/ypi/native-tool.ts" "$TARBALL_LIST"
+assert_contains "tarball contains canonical runtime core" "package/extensions/ypi/runtime-core.ts" "$TARBALL_LIST"
+assert_contains "tarball contains retained native fallback" "package/extensions/ypi/legacy-native-tool.ts" "$TARBALL_LIST"
 assert_contains "tarball contains cleanup helper" "package/rlm_cleanup" "$TARBALL_LIST"
 assert_not_contains "tarball excludes private files" "package/private/" "$TARBALL_LIST"
 

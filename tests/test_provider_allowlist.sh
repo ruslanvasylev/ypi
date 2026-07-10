@@ -2,8 +2,8 @@
 # test_provider_allowlist.sh — keep the child-process provider env allowlist correct.
 #
 # Two invariants (no LLM calls):
-#   1. Parity: the native extension (extensions/ypi/native-tool.ts) and the shell
-#      rlm_query expose the SAME set of provider env vars to child Pi processes.
+#   1. Parity: the canonical runtime core and the incumbent shell rlm_query
+#      expose the SAME set of provider env vars to child Pi processes.
 #   2. Completeness: every real provider credential pi reads (pi-mono *_API_KEY /
 #      *_OAUTH_TOKEN, minus pi's custom/test placeholder names) is in the allowlist,
 #      so a child can always authenticate to the same provider as its parent.
@@ -15,7 +15,7 @@ exec </dev/null
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-NATIVE_TOOL="$PROJECT_DIR/extensions/ypi/native-tool.ts"
+RUNTIME_CORE="$PROJECT_DIR/extensions/ypi/runtime-core.ts"
 RLM_QUERY="$PROJECT_DIR/rlm_query"
 PI_MONO="$PROJECT_DIR/pi-mono"
 
@@ -35,7 +35,7 @@ echo ""
 echo "=== Provider env allowlist ==="
 
 # ── Extract the native allowlist (the PROVIDER_ENV_ALLOWLIST Set) ──────────────
-NATIVE_KEYS="$(awk '/PROVIDER_ENV_ALLOWLIST = new Set\(\[/{f=1;next} /\]\);/{f=0} f' "$NATIVE_TOOL" \
+NATIVE_KEYS="$(awk '/PROVIDER_ENV_ALLOWLIST = new Set\(\[/{f=1;next} /\]\);/{f=0} f' "$RUNTIME_CORE" \
     | grep -oE '"[A-Z][A-Z0-9_]*"' | tr -d '"' | sort -u)"
 
 # ── Extract the shell allowlist (the append_allowed_env `for key in` block), then

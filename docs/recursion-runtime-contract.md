@@ -1,9 +1,9 @@
 # Recursion Runtime Contract
 
-This contract is the canonical behavior boundary for ypi recursion. It separates
-one runtime engine from its user-facing adapters so native Pi tool calls and CLI
-composition cannot silently grow different guardrails, routes, or child
-lifecycles.
+This contract is the canonical behavior boundary for ypi recursion. The engine
+owner is `extensions/ypi/runtime-core.ts`; it separates runtime policy from its
+user-facing adapters so native Pi tool calls and CLI composition cannot silently
+grow different guardrails, routes, or child lifecycles.
 
 The executable contract is `tests/runtime_contract_harness.ts`. Prose changes do
 not alter behavior unless the harness and the owning implementation change with
