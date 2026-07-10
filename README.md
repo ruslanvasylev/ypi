@@ -8,6 +8,8 @@ Named after the [Y combinator](https://en.wikipedia.org/wiki/Fixed-point_combina
 
 Inspired by [Recursive Language Models](https://github.com/alexzhang13/rlm) (RLM), which showed that an LLM with a code REPL and a `llm_query()` function can recursively decompose problems, analyze massive contexts, and write code — all through self-delegation.
 
+ypi is an RLM-inspired recursive coding-agent runtime, not a reproduction of the paper's Algorithm 1. A normal root prompt remains a Pi user message. Bulk data becomes external symbolic context when callers use repository files, `$CONTEXT`, or piped stdin. The native tool provides direct child-agent delegation; the CLI helper additionally supports programmatic shell loops and pipelines.
+
 ## The Idea
 
 Pi already has an extension system and a bash REPL. ypi's core is a Pi extension that registers one native tool — `rlm_query` — and teaches Pi to use it recursively. The `ypi` launcher and shell-compatible `rlm_query` command are convenience layers around that extension. [jj](https://martinvonz.github.io/jj/) workspace isolation is used when available, but it is not required for the minimal path.
@@ -96,13 +98,13 @@ The npm package has a Pi manifest that exposes only
 want the wrapper defaults and shell-compatible helper commands.
 
 ### How It Works
-**Three pieces** (same architecture as Python RLM):
+**Three adapted pieces** from the RLM pattern:
 | Piece | Python RLM | ypi |
 |---|---|---|
 | System prompt | `RLM_SYSTEM_PROMPT` | `SYSTEM_PROMPT.md` |
 | Context / REPL | Python `context` variable | `$CONTEXT` file + bash |
 | Sub-call function | `llm_query("prompt")` | native Pi tool `rlm_query`; optional shell command `rlm_query "prompt"` |
-**Recursion:** the `extensions/recursive.ts` extension registers a native `rlm_query` tool that spawns a child Pi process with the same extension and tools. The child can call `rlm_query` too:
+**Recursion:** the `extensions/recursive.ts` extension registers a native `rlm_query` tool that spawns a child Pi process with the same extension and a depth/isolation-appropriate tool profile. A nonterminal child can call `rlm_query` too:
 
 ```
 Depth 0 (root)    -> full Pi with native rlm_query + bash
@@ -114,15 +116,15 @@ Depth 0 (root)    -> full Pi with native rlm_query + bash
 
 ### Why It Works
 
-The design has three properties that compound:
+The design has four properties that compound:
 
-1. **Self-similarity** — Every depth runs the same prompt, same tools, same agent. No specialized "scout" or "planner" roles. The intelligence is in *decomposition*, not specialization. The system prompt teaches one pattern — size-first → search → chunk → delegate → combine — and it works at every scale.
+1. **Recursive similarity** — Nonterminal depths run the same agent and extension with the same decomposition guidance. Tool profiles can narrow for no-jj safety, recursion disappears at the configured leaf, and provider/model/thinking routes can vary by depth. The intelligence remains in *decomposition*, not specialized role prompts.
 
 2. **Self-hosting** — The extension is the canonical recursion machinery. When the shell helper is enabled (the `ypi` wrapper, or any load with `YPI_SHELL_HELPER=1`), the prompt also includes its source for inspection and modification. A bare `pi -e` / npm extension install uses the native tool only and does not require that shell file.
 
-3. **Bounded recursion** — Five concentric guardrails (depth limit, PATH scrubbing, call count, budget, timeout) guarantee termination. The system prompt also installs *cognitive* pressure: deeper agents are told to be more conservative, preferring direct action over spawning more children.
+3. **Bounded ancestry with optional tree guards** — `RLM_MAX_DEPTH` defaults to `3` and bounds recursive ancestry. Optional call, timeout, and budget limits constrain total breadth, wall time, and measured spend. These controls reduce runaway risk; only configured hard limits can enforce their respective bounds, and they cannot guarantee provider or operating-system termination.
 
-4. **Symbolic access** — Anything the agent needs to manipulate precisely is a file, not just tokens in context. `$CONTEXT` holds the data, `$RLM_PROMPT_FILE` holds the original prompt, and hashline provides line-addressed edits. Agents `grep`/`sed`/`cat` instead of copying tokens from memory.
+4. **Symbolic access** — `$CONTEXT` holds external data and each delegated child receives its task through `$RLM_PROMPT_FILE` as well as Pi's prompt argument. The root wrapper prompt remains a normal Pi user message. Agents can use files and line-addressed edits instead of copying bulk data through model memory.
 
 ### Model Configuration
 
@@ -289,7 +291,7 @@ ypi went through five approaches before landing on the current design:
 2. **Python bridge** — HTTP server between Pi and Python RLM. Too complex.
 3. **Pi extension** — Custom provider with search tools. Not true recursion.
 4. **Bash RLM** (`rlm_query` + `SYSTEM_PROMPT.md`) — True recursion via bash.
-5. **Pi-native extension RLM** — `extensions/recursive.ts` registers native recursion; `ypi` and shell `rlm_query` are compatibility/ergonomics layers. **Current approach.**
+5. **Pi-native recursive-agent extension** — `extensions/recursive.ts` registers native recursion; `ypi` and shell `rlm_query` provide wrapper and programmatic composition surfaces. This is the current RLM-inspired approach, not an Algorithm 1 reproduction.
 
 The key insight: Pi's extension API can expose recursion as a first-class tool, while Pi's bash tool remains the REPL for command-line composition. No bridge needed.
 

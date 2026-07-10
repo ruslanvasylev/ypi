@@ -77,7 +77,7 @@ echo "I am at depth $RLM_DEPTH of $RLM_MAX_DEPTH"
 **Know your constraints:**
 - At deeper depths, prefer direct answers over spawning more sub-calls
 - Your sub-LLMs share the same system prompt and tools you have
-- At `RLM_MAX_DEPTH`, sub-calls become plain LM calls (no bash, no tools)
+- At `RLM_MAX_DEPTH`, the leaf keeps its depth/isolation-appropriate Pi tools but cannot call `rlm_query` again
 - Every `rlm_query` call costs time and tokens — be intentional
 
 **Dogfooding rule:** When implementing changes to the recursive infrastructure,
@@ -90,8 +90,8 @@ Three properties make ypi work. All are tested (E7, E8, E9 in test_e2e.sh):
 
 1. **Self-similarity** — Same prompt, same tools, same agent at every depth. No specialized roles. The intelligence is in decomposition, not specialization.
 2. **Self-hosting** — When the shell helper is enabled (`YPI_SHELL_HELPER=1`, set by the `ypi` wrapper), the system prompt's SECTION 6 is generated with the full source of `rlm_query`, so the agent can read its own recursion machinery — when it modifies `rlm_query`, it's modifying itself. A bare `pi -e` / native-tool install omits SECTION 6 and recurses through the native tool.
-3. **Bounded recursion** — 5 guardrails (depth, PATH scrubbing, call count, budget, timeout) guarantee termination. The system prompt adds *cognitive* pressure: deeper agents prefer direct action.
-4. **Symbolic access** — Anything the agent needs to manipulate precisely is a file, not just tokens in context. `$CONTEXT` for data, `$RLM_PROMPT_FILE` for the original prompt, hashline for edits. Agents grep/sed/cat instead of copying tokens from memory. (T14d)
+3. **Bounded ancestry and optional tree guards** — depth is bounded by default; optional call, budget, and timeout limits bound their respective dimensions when configured. These controls reduce runaway risk but do not guarantee provider or OS termination. The system prompt adds *cognitive* pressure: deeper agents prefer direct action.
+4. **Symbolic access** — `$CONTEXT` carries external data, delegated children receive their task in `$RLM_PROMPT_FILE`, and hashline provides line-addressed edits. The root wrapper prompt remains a normal Pi user message. Agents grep/sed/cat instead of copying bulk data through model memory. (T14d)
 
 **Don't write static architecture docs.** Encode claims as tests. If a property matters, there should be an E2E test that breaks when it stops being true.
 

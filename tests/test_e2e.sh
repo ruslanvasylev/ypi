@@ -232,7 +232,7 @@ Favorite number: 42
 EOF
     export CONTEXT="$TEST_TMP/ctx_e7.txt"
     export RLM_DEPTH=0
-    export RLM_MAX_CALLS=2  # Allow root call (1), block any sub-call (2 >= 2)
+    export RLM_MAX_CALLS=2  # Permit calls 1..2; trace inspection below still detects an unwanted sub-call
     unset RLM_CALL_COUNT 2>/dev/null || true
 
     TRACE_E7="$TEST_TMP/trace_e7.log"
