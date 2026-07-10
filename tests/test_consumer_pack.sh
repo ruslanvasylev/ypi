@@ -53,7 +53,10 @@ assert_contains "tarball contains package manifest" "package/package.json" "$TAR
 assert_contains "tarball contains canonical extension" "package/extensions/recursive.ts" "$TARBALL_LIST"
 assert_contains "tarball contains native adapter" "package/extensions/ypi/native-tool.ts" "$TARBALL_LIST"
 assert_contains "tarball contains canonical runtime core" "package/extensions/ypi/runtime-core.ts" "$TARBALL_LIST"
+assert_contains "tarball contains thin CLI adapter" "package/extensions/ypi/cli.ts" "$TARBALL_LIST"
+assert_contains "tarball contains generated Node CLI projection" "package/dist/rlm_query.mjs" "$TARBALL_LIST"
 assert_contains "tarball contains retained native fallback" "package/extensions/ypi/legacy-native-tool.ts" "$TARBALL_LIST"
+assert_contains "tarball contains retained CLI fallback" "package/rlm_query.legacy" "$TARBALL_LIST"
 assert_contains "tarball contains cleanup helper" "package/rlm_cleanup" "$TARBALL_LIST"
 assert_not_contains "tarball excludes private files" "package/private/" "$TARBALL_LIST"
 
@@ -82,6 +85,40 @@ if [ -x "$TEST_TMP/install/bin/rlm_cleanup" ]; then
 else
 	fail "isolated global install exposes rlm_cleanup" "missing executable $TEST_TMP/install/bin/rlm_cleanup"
 fi
+
+RLM_BIN="$TEST_TMP/install/bin/rlm_query"
+if [ -x "$RLM_BIN" ]; then
+	pass "isolated global install exposes rlm_query"
+else
+	fail "isolated global install exposes rlm_query" "missing executable $RLM_BIN"
+fi
+
+mkdir -p "$TEST_TMP/mock-bin"
+cat > "$TEST_TMP/mock-bin/pi" <<'MOCK_PI'
+#!/usr/bin/env bash
+if [ "${YPI_LEGACY_IMPL:-0}" != "1" ]; then
+    [ -f "${RLM_SYSTEM_PROMPT:-}" ] || { echo "missing packaged system prompt" >&2; exit 90; }
+    [ -f "${YPI_EXTENSION_ROOT:-}/extensions/ypi/runtime-core.ts" ] || { echo "missing packaged runtime root" >&2; exit 91; }
+fi
+printf '%s\n' PACKED_CHILD_OK
+MOCK_PI
+chmod +x "$TEST_TMP/mock-bin/pi"
+PACKED_RLM_OUTPUT="$(env \
+	HOME="$TEST_TMP/home" \
+	PATH="$TEST_TMP/mock-bin:$(dirname "$(command -v node)"):/usr/bin:/bin" \
+	YPI_PI_BIN="$TEST_TMP/mock-bin/pi" \
+	RLM_DEPTH=0 RLM_MAX_DEPTH=2 RLM_JSON=0 RLM_JJ=0 \
+	RLM_UNSAFE_NO_JJ_WRITE=1 RLM_SHARED_SESSIONS=0 \
+	"$RLM_BIN" "Packed runtime smoke" 2>&1 || true)"
+assert_contains "installed rlm_query executes canonical runtime" "PACKED_CHILD_OK" "$PACKED_RLM_OUTPUT"
+PACKED_LEGACY_OUTPUT="$(env \
+	HOME="$TEST_TMP/home" \
+	PATH="$TEST_TMP/mock-bin:$(dirname "$(command -v node)"):/usr/bin:/bin" \
+	YPI_PI_BIN="$TEST_TMP/mock-bin/pi" YPI_LEGACY_IMPL=1 \
+	RLM_DEPTH=0 RLM_MAX_DEPTH=2 RLM_JSON=0 RLM_JJ=0 \
+	RLM_UNSAFE_NO_JJ_WRITE=1 RLM_SHARED_SESSIONS=0 \
+	"$RLM_BIN" "Packed legacy smoke" 2>&1 || true)"
+assert_contains "installed rlm_query retains executable CLI fallback" "PACKED_CHILD_OK" "$PACKED_LEGACY_OUTPUT"
 
 RUN_LOG="$TEST_TMP/ypi-version.log"
 NODE_BIN="$(dirname "$(command -v node)")"

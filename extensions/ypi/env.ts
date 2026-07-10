@@ -50,8 +50,9 @@ export function sharedSessionsEnabled(): boolean {
 	return process.env.RLM_SHARED_SESSIONS !== "0";
 }
 
-// The shell-compatible rlm_query helper (PATH entry + full source in the prompt) is
-// convenience glue owned by the ypi wrapper. A bare `pi -e` / npm extension install
+// The shell-compatible rlm_query helper (PATH entry plus canonical runtime and
+// adapter source in the prompt) is convenience glue owned by the ypi wrapper.
+// A bare `pi -e` / npm extension install
 // defaults to the native rlm_query tool only; the wrapper opts in with YPI_SHELL_HELPER=1.
 export function shellHelperEnabled(runtime: YpiRuntime): boolean {
 	return process.env.YPI_SHELL_HELPER === "1" && existsSync(runtime.rlmQueryPath);

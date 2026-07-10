@@ -106,7 +106,14 @@ echo ""
 echo "=== Timeout ==="
 
 # G1: RLM_TIMEOUT is propagated to child
-_feature_exists() { grep -q "${1}" "$RLM_QUERY" 2>/dev/null; }
+_feature_exists() {
+    grep -q "${1}" \
+        "$RLM_QUERY" \
+        "$PROJECT_DIR/extensions/ypi/cli.ts" \
+        "$PROJECT_DIR/extensions/ypi/runtime-core.ts" \
+        "$PROJECT_DIR/extensions/ypi/guardrails.ts" \
+        "$PROJECT_DIR/extensions/ypi/env.ts" 2>/dev/null
+}
 
 if _feature_exists "RLM_TIMEOUT"; then
     OUTPUT=$(
@@ -310,55 +317,43 @@ fi
 echo ""
 echo "=== Temp File Cleanup ==="
 
-# G9: temp context file cleaned up after successful run
-# (This tests post-exec cleanup — currently broken because of `exec`)
-BEFORE=$(find "$TMPDIR" -maxdepth 1 -type f -name 'rlm_ctx_d*' 2>/dev/null | wc -l)
+# G9: canonical context-resource directories are cleaned after successful runs.
+BEFORE=$(find "$TMPDIR" -maxdepth 1 -type d -name 'ypi_ctx_*' 2>/dev/null | wc -l)
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
     RLM_PROVIDER=test RLM_MODEL=test \
     rlm_query "Cleanup test?"
 )
-AFTER=$(find "$TMPDIR" -maxdepth 1 -type f -name 'rlm_ctx_d*' 2>/dev/null | wc -l)
+AFTER=$(find "$TMPDIR" -maxdepth 1 -type d -name 'ypi_ctx_*' 2>/dev/null | wc -l)
+assert_eq "G9: temp file cleaned up" "$BEFORE" "$AFTER"
 
-if grep -q 'rm -f "$CHILD_CONTEXT"' "$RLM_QUERY" 2>/dev/null; then
-    # After implementing cleanup, AFTER should equal BEFORE
-    assert_eq "G9: temp file cleaned up" "$BEFORE" "$AFTER"
-else
-    skip "G9: temp file cleaned up" "cleanup trap not implemented yet (exec replaces process)"
-fi
-
-# G10: temp files cleaned up even on error
-if grep -q 'rm -f "$CHILD_CONTEXT"' "$RLM_QUERY" 2>/dev/null; then
-    # Make mock pi exit with error
-    cat > "$MOCK_BIN/pi" << 'ERRPI'
+# G10: canonical resources are cleaned even when child execution fails.
+cat > "$MOCK_BIN/pi" << 'ERRPI'
 #!/bin/bash
 exit 1
 ERRPI
-    chmod +x "$MOCK_BIN/pi"
+chmod +x "$MOCK_BIN/pi"
 
-    BEFORE=$(find "$TMPDIR" -maxdepth 1 -type f -name 'rlm_ctx_d*' 2>/dev/null | wc -l)
-    OUTPUT=$(
-        CONTEXT="$TEST_TMP/ctx.txt" \
-        RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
-        RLM_PROVIDER=test RLM_MODEL=test \
-        rlm_query "Error cleanup test?" 2>&1 || true
-    )
-    AFTER=$(find "$TMPDIR" -maxdepth 1 -type f -name 'rlm_ctx_d*' 2>/dev/null | wc -l)
-    assert_eq "G10: temp cleaned after error" "$BEFORE" "$AFTER"
+BEFORE=$(find "$TMPDIR" -maxdepth 1 -type d -name 'ypi_ctx_*' 2>/dev/null | wc -l)
+OUTPUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" \
+    RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
+    RLM_PROVIDER=test RLM_MODEL=test \
+    rlm_query "Error cleanup test?" 2>&1 || true
+)
+AFTER=$(find "$TMPDIR" -maxdepth 1 -type d -name 'ypi_ctx_*' 2>/dev/null | wc -l)
+assert_eq "G10: temp cleaned after error" "$BEFORE" "$AFTER"
 
-    # Restore normal mock
-    cat > "$MOCK_BIN/pi" << 'MOCK_PI'
+# Restore normal mock
+cat > "$MOCK_BIN/pi" << 'MOCK_PI'
 #!/bin/bash
 echo "MOCK_PI_CALLED"
 echo "ARGS: $*"
 echo "RLM_DEPTH=$RLM_DEPTH"
 echo "RLM_MODEL=$RLM_MODEL"
 MOCK_PI
-    chmod +x "$MOCK_BIN/pi"
-else
-    skip "G10: temp cleaned after error" "cleanup trap not implemented yet"
-fi
+chmod +x "$MOCK_BIN/pi"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -923,13 +918,19 @@ assert_not_contains "G38c: full child isolation avoids explicit ypi extension" "
 echo ""
 echo "=== Budget & Cost ==="
 
-# Restore standard mock
+# Restore standard mock; emit Pi JSON events when the canonical runtime requests
+# measurable JSON mode for budget accounting.
 cat > "$MOCK_BIN/pi" << 'MOCK_PI'
 #!/bin/bash
-echo "MOCK_PI_CALLED"
-echo "ARGS: $*"
-echo "RLM_DEPTH=$RLM_DEPTH"
-echo "RLM_MODEL=$RLM_MODEL"
+if printf '%s\n' "$*" | grep -q -- '--mode json'; then
+    printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"MOCK_PI_CALLED"}}'
+    printf '%s\n' '{"type":"turn_end","message":{"usage":{"totalTokens":1,"cost":{"total":0.01}}},"toolResults":[]}'
+else
+    echo "MOCK_PI_CALLED"
+    echo "ARGS: $*"
+    echo "RLM_DEPTH=$RLM_DEPTH"
+    echo "RLM_MODEL=$RLM_MODEL"
+fi
 MOCK_PI
 chmod +x "$MOCK_BIN/pi"
 
@@ -943,18 +944,28 @@ OUTPUT=$(
 )
 assert_contains "G39: no budget succeeds" "MOCK_PI_CALLED" "$OUTPUT"
 
-# G40: budget set but no spend yet — call proceeds
+# G40: budget accounting requires measurable JSON output through every adapter.
+OUTPUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" \
+    RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
+    RLM_PROVIDER=test RLM_MODEL=test \
+    RLM_JSON=0 RLM_BUDGET=1.00 \
+    rlm_query "Unmeasurable budget" 2>&1 || true
+)
+assert_contains "G40: budget rejects unmeasurable plain mode" "RLM_BUDGET requires RLM_JSON=1" "$OUTPUT"
+
+# G40b: budget set with JSON measurement and no prior spend proceeds.
 COST_FILE=$(mktemp "${TMPDIR:-/tmp}/rlm_cost_test.jsonl.XXXXXX")
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
     RLM_PROVIDER=test RLM_MODEL=test \
-    RLM_JSON=0 \
+    RLM_JSON=1 \
     RLM_BUDGET=1.00 \
     RLM_COST_FILE="$COST_FILE" \
     rlm_query "Budget with no spend"
 )
-assert_contains "G40: budget set, no spend, proceeds" "MOCK_PI_CALLED" "$OUTPUT"
+assert_contains "G40b: measurable budget with no spend proceeds" "MOCK_PI_CALLED" "$OUTPUT"
 rm -f "$COST_FILE"
 
 # G41: budget exceeded — cost file shows spend over budget
@@ -965,7 +976,7 @@ OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
     RLM_PROVIDER=test RLM_MODEL=test \
-    RLM_JSON=0 \
+    RLM_JSON=1 \
     RLM_BUDGET=1.00 \
     RLM_COST_FILE="$COST_FILE" \
     rlm_query "Over budget" 2>&1 || true
@@ -980,7 +991,7 @@ OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
     RLM_PROVIDER=test RLM_MODEL=test \
-    RLM_JSON=0 \
+    RLM_JSON=1 \
     RLM_BUDGET=1.00 \
     RLM_COST_FILE="$COST_FILE" \
     rlm_query "Under budget"
@@ -993,7 +1004,7 @@ OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
     RLM_PROVIDER=test RLM_MODEL=test \
-    RLM_JSON=0 \
+    RLM_JSON=1 \
     RLM_BUDGET=5.00 \
     rlm_query "Budget propagation test"
 )
@@ -1109,7 +1120,7 @@ echo ""
 echo "=== Trace ID Sanitization ==="
 
 # G52: a hostile RLM_TRACE_ID cannot traverse out of the session directory
-if _feature_exists "safe_trace_id"; then
+if _feature_exists "safeTraceId"; then
     cat > "$MOCK_BIN/pi" << 'TRACEPI'
 #!/bin/bash
 echo "ARGS: $*"
@@ -1142,7 +1153,7 @@ echo "=== Async Notify ==="
 
 # G53: --async --notify writes valid JSON to the peer inbox even when child output
 # contains quotes/backslashes/newlines, and async temp files honor TMPDIR.
-if _feature_exists "NOTIFY_PID"; then
+if _feature_exists "notifyPid"; then
     # G53a: metadata capture through command substitution must not wait for the
     # background child to close the inherited stdout pipe.
     cat > "$MOCK_BIN/pi" << 'SLOWPI'
@@ -1259,7 +1270,7 @@ echo ""
 echo "=== Depth Validation ==="
 
 # G54: a non-integer RLM_MAX_DEPTH fails closed (no pi call) instead of bypassing the limiter
-if grep -q 'Invalid RLM_MAX_DEPTH' "$RLM_QUERY" 2>/dev/null; then
+if _feature_exists "Invalid recursion depth config"; then
     OUTPUT=$(
         CONTEXT="$TEST_TMP/ctx.txt" \
         RLM_DEPTH=0 RLM_MAX_DEPTH=abc \
@@ -1267,7 +1278,7 @@ if grep -q 'Invalid RLM_MAX_DEPTH' "$RLM_QUERY" 2>/dev/null; then
         rlm_query "Malformed depth?" 2>&1 || true
     )
     assert_not_contains "G54: malformed depth → no pi call" "MOCK_PI_CALLED" "$OUTPUT"
-    assert_contains "G54: malformed depth → error message" "Invalid RLM_MAX_DEPTH" "$OUTPUT"
+    assert_contains "G54: malformed depth → error message" "Invalid recursion depth config" "$OUTPUT"
 else
     skip "G54: depth validation" "RLM_MAX_DEPTH validation not implemented yet"
 fi

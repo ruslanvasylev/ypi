@@ -12,7 +12,7 @@ ypi is an RLM-inspired recursive coding-agent runtime, not a reproduction of the
 
 ## The Idea
 
-Pi already has an extension system and a bash REPL. ypi's core is a Pi extension that registers one native tool — `rlm_query` — and teaches Pi to use it recursively. The `ypi` launcher and shell-compatible `rlm_query` command are convenience layers around that extension. [jj](https://martinvonz.github.io/jj/) workspace isolation is used when available, but it is not required for the minimal path.
+Pi already has an extension system and a bash REPL. ypi has one TypeScript recursion runtime used by two thin adapters: the Pi extension registers the native `rlm_query` tool, while the CLI adapter adds stdin, pipelines, async jobs, and notification. The `ypi` launcher configures those surfaces. [jj](https://martinvonz.github.io/jj/) workspace isolation is used when available, but it is not required for the minimal path.
 
 ```
 ┌──────────────────────────────────────────┐
@@ -120,7 +120,7 @@ The design has four properties that compound:
 
 1. **Recursive similarity** — Nonterminal depths run the same agent and extension with the same decomposition guidance. Tool profiles can narrow for no-jj safety, recursion disappears at the configured leaf, and provider/model/thinking routes can vary by depth. The intelligence remains in *decomposition*, not specialized role prompts.
 
-2. **Self-hosting** — The extension is the canonical recursion machinery. When the shell helper is enabled (the `ypi` wrapper, or any load with `YPI_SHELL_HELPER=1`), the prompt also includes its source for inspection and modification. A bare `pi -e` / npm extension install uses the native tool only and does not require that shell file.
+2. **Self-hosting** — The TypeScript runtime core is the canonical recursion machinery. When the CLI helper is enabled (the `ypi` wrapper, or any load with `YPI_SHELL_HELPER=1`), the prompt includes the thin launcher, runtime core, and CLI adapter for inspection. A bare `pi -e` / npm extension install uses the thin native adapter over the same core.
 
 3. **Bounded ancestry with optional tree guards** — `RLM_MAX_DEPTH` defaults to `3` and bounds recursive ancestry. Optional call, timeout, and budget limits constrain total breadth, wall time, and measured spend. These controls reduce runaway risk; only configured hard limits can enforce their respective bounds, and they cannot guarantee provider or operating-system termination.
 
@@ -179,9 +179,9 @@ ypi is a thin layer on top of Pi. We strive not to break or duplicate what Pi al
 |---|---|---|
 | **Session history** | Uses Pi's native session manager when a parent session exists. Child sessions go in the same dir with trace-encoded filenames. `RLM_SHARED_SESSIONS=0` uses `--no-session` and clears child session env. No separate session store. | G24–G30 |
 | **Extensions** | Child processes keep normal Pi package/extension discovery enabled by default and explicitly load the ypi extension so installed Pi packages remain available recursively. `RLM_EXTENSIONS=0` disables recursion extension loading; `RLM_CHILD_EXTENSIONS=0` disables it for child depths; `RLM_CHILD_DISCOVERY=0` disables non-extension discovery surfaces only. Use both child opt-outs for full child package/resource isolation. | G34–G38, N8 |
-| **Native recursion** | The canonical `extensions/recursive.ts` extension registers a native Pi `rlm_query` tool. Minimal mode works with only Pi plus extension files: no `ypi` launcher, no shell helper, no jj. | extension smoke, pure-extension E2E |
-| **System prompt** | The extension injects `SYSTEM_PROMPT.md` when present and falls back to a minimal built-in prompt when it is not. If the shell `rlm_query` file exists, its source is appended as optional compatibility context. Standalone shell `rlm_query` falls back to Pi's `--system-prompt`. | T8–T9, parity E2E |
-| **`-p` mode** | All child Pi calls run non-interactive (`-p`). ypi never fakes a terminal. | T3–T4 |
+| **Native recursion** | `extensions/recursive.ts` registers a thin native Pi `rlm_query` adapter over `extensions/ypi/runtime-core.ts`. Minimal mode works with only Pi plus extension files: no `ypi` launcher, CLI helper, or jj. | extension smoke, pure-extension E2E |
+| **System prompt** | The extension injects `SYSTEM_PROMPT.md` when present and falls back to a minimal built-in prompt when it is not. Wrapper mode appends the thin launcher, canonical runtime core, and CLI adapter as self-hosting context. Standalone CLI mode falls back to Pi's `--system-prompt`. | T8–T9, runtime contract |
+| **Non-interactive mode** | Child Pi calls use `--mode json` for measurable structured output or `-p` for plain mode. ypi never fakes a terminal. | T3–T4, N10 |
 | **`--session` flag** | Used when session sharing is enabled and Pi has a session dir; `--no-session` otherwise. Never both. | G24, G28 |
 | **Provider/model** | Bare `ypi` defers root provider/model/thinking to Pi (`defaultProvider`, `defaultModel`, `defaultThinkingLevel`, `/model`, or CLI flags). The extension captures Pi's active root route into `RLM_PROVIDER`/`RLM_MODEL`/`RLM_THINKING_LEVEL` so children inherit it unless `RLM_CHILD_*` or depth lists override child routing. | T14, T14c–T14g, G6b, N7b |
 
@@ -203,7 +203,7 @@ There are two published packages, built from one canonical source:
 | Package | Audience | Entry point | Includes |
 |---|---|---|---|
 | **`pi-recursive`** | Pi users who want recursion inside plain `pi` | `pi install npm:pi-recursive` or `pi -e npm:pi-recursive` | The native `rlm_query` tool, prompt injection, depth/status/env handling. No `bin`; host `pi` is a peer dependency. |
-| **`ypi`** | Users who want a preconfigured recursive CLI | `npm install -g ypi` / `bun install -g ypi` | The same extension plus launcher defaults, the shell-compatible `rlm_query` (pipes/async), cost/session helpers. Bundles `pi` so the CLI runs without a separate global install. |
+| **`ypi`** | Users who want a preconfigured recursive CLI | `npm install -g ypi` / `bun install -g ypi` | The same core and extension plus launcher defaults, the Node-backed `rlm_query` CLI (pipes/async), cost/session helpers, and retained one-release fallbacks. Bundles `pi` so the CLI runs without a separate global install. |
 
 Both ship the same `extensions/` source. `pi-recursive` is the extension-only
 publish view, staged from the repo root by `scripts/build-pi-recursive`; `ypi`
@@ -220,10 +220,11 @@ opt-in (`YPI_SHELL_HELPER=1`, set by the `ypi` wrapper), so installing
 ```
 ypi/
 ├── ypi                    # Thin launcher: sets env, loads extensions/recursive.ts
-├── rlm_query              # Optional shell-compatible recursive sub-call command
+├── rlm_query              # Thin shell launcher for the canonical CLI adapter
+├── rlm_query.legacy       # Retained fallback; candidate, not removed
 ├── extensions/
 │   ├── recursive.ts       # Canonical ypi Pi extension
-│   ├── ypi/               # Native tool, env, prompt, status modules
+│   ├── ypi/               # Runtime core plus native/CLI adapters and support
 │   └── ypi.ts             # Compatibility alias for recursive.ts
 ├── SYSTEM_PROMPT.md       # Teaches the LLM to be recursive + edit code
 ├── AGENTS.md              # Meta-instructions for the agent (read by ypi itself)

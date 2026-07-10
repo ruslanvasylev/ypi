@@ -43,7 +43,9 @@ after the full stream is resident in memory.
 
 ### CLI adapter
 
-`rlm_query` owns only command-line concerns:
+`extensions/ypi/cli.ts` owns command-line concerns; `rlm_query` only resolves the
+package root, selects the explicit legacy fallback when requested, and launches
+Node:
 
 - CLI flags
 - inherited or piped stdin

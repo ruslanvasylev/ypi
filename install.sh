@@ -2,7 +2,7 @@
 # ypi installer — one-line install:
 #   curl -fsSL https://raw.githubusercontent.com/rawwerks/ypi/master/install.sh | bash
 #
-# Installs ypi + Pi coding agent. Requires: bun (or npm), git, bash.
+# Installs ypi + Pi coding agent. Requires: Node.js >= 22.19, bun (or npm), git, bash.
 # Optional: jj (for workspace isolation), sops + age (for encrypted notes)
 
 set -euo pipefail
@@ -23,9 +23,19 @@ dim()   { echo -e "${DIM}  $1${RESET}"; }
 MISSING=""
 command -v git &>/dev/null || MISSING="$MISSING git"
 command -v bash &>/dev/null || MISSING="$MISSING bash"
+command -v node &>/dev/null || MISSING="$MISSING node"
 
 if [ -n "$MISSING" ]; then
     warn "Missing required tools:$MISSING"
+    exit 1
+fi
+
+NODE_VERSION="$(node --version | sed 's/^v//')"
+NODE_MAJOR="${NODE_VERSION%%.*}"
+NODE_REST="${NODE_VERSION#*.}"
+NODE_MINOR="${NODE_REST%%.*}"
+if [ "$NODE_MAJOR" -lt 22 ] || { [ "$NODE_MAJOR" -eq 22 ] && [ "$NODE_MINOR" -lt 19 ]; }; then
+    warn "Node.js >= 22.19 is required for the canonical recursion runtime (found $NODE_VERSION)"
     exit 1
 fi
 

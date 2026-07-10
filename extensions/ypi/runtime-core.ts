@@ -35,6 +35,9 @@ export interface RecursiveChildRequest {
 	fork?: boolean;
 	caller: "tool" | "cli";
 	parent: ParentRuntimeContext;
+	// undefined uses the canonical extension; null intentionally selects the
+	// standalone system-prompt path (CLI compatibility mode).
+	extensionPath?: string | null;
 	signal?: AbortSignal;
 }
 
@@ -110,7 +113,7 @@ function trace(message: string): void {
 
 function truncate(text: string): string {
 	if (text.length <= MAX_TOOL_OUTPUT_CHARS) return text;
-	return `${text.slice(0, MAX_TOOL_OUTPUT_CHARS)}\n\n[Output truncated by ypi native rlm_query tool]`;
+	return `${text.slice(0, MAX_TOOL_OUTPUT_CHARS)}\n\n[Output truncated by ypi recursion runtime]`;
 }
 
 function createBoundedCapture(limit = MAX_CHILD_STREAM_CHARS): BoundedCapture {
@@ -397,6 +400,7 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 	const childSession = sessionFile(request.parent, childDepth, callCount);
 	copyForkSession(request.parent, childSession, request.fork);
 	const workspace = maybeCreateJjWorkspace(request.parent.cwd, childDepth);
+	const extensionPath = request.extensionPath === null ? "" : request.extensionPath || runtime.extensionPath;
 	const env = buildChildEnvironment(process.env, {
 		RLM_DEPTH: String(childDepth),
 		RLM_MAX_DEPTH: String(limit),
@@ -409,7 +413,7 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 		RLM_SESSION_DIR: process.env.RLM_SESSION_DIR || "",
 		RLM_SESSION_FILE: childSession || "",
 		YPI_EXTENSION_ROOT: runtime.root,
-		YPI_EXTENSION_PATH: runtime.extensionPath,
+		YPI_EXTENSION_PATH: extensionPath,
 		YPI_RLM_QUERY_CALLER: request.caller,
 	}, runtime, childDepth);
 	if (contextFile) env.CONTEXT = contextFile;
@@ -425,13 +429,15 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 	else args.push("--no-session");
 	if (!childExtensionsEnabled(childDepth)) {
 		args.push("--no-extensions");
-		if (existsSync(runtime.systemPromptPath)) args.push("--system-prompt", runtime.systemPromptPath);
-	} else if (existsSync(runtime.extensionPath)) {
-		args.push("-e", runtime.extensionPath);
+	}
+	if (childExtensionsEnabled(childDepth) && extensionPath && existsSync(extensionPath)) {
+		args.push("-e", extensionPath);
+	} else if (existsSync(runtime.systemPromptPath)) {
+		args.push("--system-prompt", runtime.systemPromptPath);
 	}
 	args.push(request.prompt);
 
-	trace(`[${nowTraceTime()}] depth=${depth}→${childDepth} PID=${process.pid} call=${callCount} trace=${process.env.RLM_TRACE_ID || ""} caller=${request.caller} jj=${workspace.mode} prompt: ${request.prompt.slice(0, 120)}`);
+	trace(`[${nowTraceTime()}] depth=${depth}→${childDepth} PID=${process.pid} call=${callCount} trace=${process.env.RLM_TRACE_ID || ""} caller=${request.caller} fork=${request.fork === true} jj=${workspace.mode} prompt: ${request.prompt.slice(0, 120)}`);
 
 	try {
 		const started = Date.now();

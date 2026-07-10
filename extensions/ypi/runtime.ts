@@ -7,6 +7,9 @@ export interface YpiRuntime {
 	root: string;
 	systemPromptPath: string;
 	rlmQueryPath: string;
+	runtimeCorePath: string;
+	cliAdapterPath: string;
+	legacyRlmQueryPath: string;
 }
 
 export function resolveRuntime(importMetaUrl: string): YpiRuntime {
@@ -21,6 +24,9 @@ export function resolveRuntime(importMetaUrl: string): YpiRuntime {
 		root,
 		systemPromptPath: path.join(root, "SYSTEM_PROMPT.md"),
 		rlmQueryPath: path.join(root, "rlm_query"),
+		runtimeCorePath: path.join(root, "extensions", "ypi", "runtime-core.ts"),
+		cliAdapterPath: path.join(root, "extensions", "ypi", "cli.ts"),
+		legacyRlmQueryPath: path.join(root, "rlm_query.legacy"),
 	};
 }
 

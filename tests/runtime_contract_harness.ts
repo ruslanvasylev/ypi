@@ -4,6 +4,7 @@ import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ensureEnvironment } from "../extensions/ypi/env.ts";
 import { registerNativeRlmQueryTool } from "../extensions/ypi/native-tool.ts";
+import { buildYpiPrompt } from "../extensions/ypi/prompt.ts";
 import { resolveRuntime } from "../extensions/ypi/runtime.ts";
 
 type Tool = Parameters<ExtensionAPI["registerTool"]>[0];
@@ -69,6 +70,9 @@ echo FAKE_CHILD_OK
 `);
 chmodSync(fakePi, 0o755);
 
+// Do not let a parent ypi session's YPI_EXTENSION_ROOT redirect this harness
+// away from the worktree under test.
+process.env.YPI_EXTENSION_ROOT = projectRoot;
 const runtime = resolveRuntime(new URL("../extensions/recursive.ts", import.meta.url).href);
 let nativeTool: Tool | undefined;
 const pi = {
@@ -209,6 +213,15 @@ async function run(): Promise<void> {
 	registerNativeRlmQueryTool(pi, runtime);
 	record(Boolean(nativeTool), "native adapter registered");
 
+	clearRuntimeEnv();
+	process.env.YPI_SHELL_HELPER = "1";
+	ensureEnvironment(runtime, extensionContext(), pi);
+	const selfHostingPrompt = buildYpiPrompt(runtime);
+	contains("wrapper prompt exposes canonical runtime section", selfHostingPrompt, "SECTION 6 - Canonical rlm_query Runtime Implementation");
+	contains("wrapper prompt exposes runtime-core source", selfHostingPrompt, "export async function runRecursiveChild");
+	contains("wrapper prompt exposes CLI adapter source", selfHostingPrompt, "export async function main");
+	record(!selfHostingPrompt.includes("# rlm_query — Recursive Language Model sub-call for Pi."), "wrapper prompt does not promote retained legacy CLI as an active owner");
+
 	const prompt = "CONTRACT_PROMPT";
 	const nativeDefault = await invokeNative(baseEnv("native-default"), prompt, "CONTRACT_CONTEXT");
 	const cliDefault = await invokeCli(baseEnv("cli-default"), prompt);
@@ -278,6 +291,15 @@ async function run(): Promise<void> {
 		);
 	} else {
 		record(false, "both adapters emitted read-only observations");
+	}
+
+	const legacyCli = await invokeCli({ ...baseEnv("cli-legacy"), YPI_LEGACY_IMPL: "1" }, prompt);
+	record(legacyCli.code === 0, "retained CLI fallback remains executable", legacyCli.error);
+	if (legacyCli.observation) {
+		equal("retained CLI fallback preserves prompt content", legacyCli.observation.PROMPT_CONTENT, prompt);
+		equal("retained CLI fallback preserves context content", legacyCli.observation.CONTEXT_CONTENT, "CONTRACT_CONTEXT");
+	} else {
+		record(false, "retained CLI fallback emitted a child observation");
 	}
 
 	console.log(`\nResults: ${pass} passed, ${fail} failed, ${known} known divergences`);

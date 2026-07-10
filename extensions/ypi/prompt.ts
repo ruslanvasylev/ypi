@@ -15,23 +15,40 @@ You are Pi with a native \`rlm_query\` tool.
 - The shell command named \`rlm_query\` is optional compatibility glue. Do not require it for minimal recursion.
 `;
 
-function shellImplementationSection(runtime: YpiRuntime): string {
+function runtimeImplementationSection(runtime: YpiRuntime): string {
 	if (!shellHelperEnabled(runtime)) {
 		debug("__YPI_EXTENSION_NO_SHELL_HELPER__");
 		return "";
 	}
 
 	const rlmQuery = readFileSync(runtime.rlmQueryPath, "utf8");
+	const runtimeCore = readFileSync(runtime.runtimeCorePath, "utf8");
+	const cliAdapter = readFileSync(runtime.cliAdapterPath, "utf8");
 	return `
 
-## SECTION 6 - rlm_query Shell Compatibility Implementation
+## SECTION 6 - Canonical rlm_query Runtime Implementation
 
-Below is the full source of the optional shell-compatible \`rlm_query\` command.
-The native Pi tool is the minimal recursion path; this shell helper adds pipes,
-async jobs, and command-line ergonomics when present.
+The shell command is a thin launcher. Child planning, guardrails, resources,
+process execution, result handling, and cleanup belong to the shared TypeScript
+runtime below. The CLI adapter adds stdin, async jobs, and notification; the Pi
+adapter calls the same runtime directly.
+
+### Launcher
 
 \`\`\`bash
 ${rlmQuery}
+\`\`\`
+
+### Canonical runtime core
+
+\`\`\`typescript
+${runtimeCore}
+\`\`\`
+
+### CLI adapter
+
+\`\`\`typescript
+${cliAdapter}
 \`\`\`
 `;
 }
@@ -45,7 +62,7 @@ export function buildYpiPrompt(runtime: YpiRuntime): string {
 		systemPrompt = MINIMAL_SYSTEM_PROMPT;
 	}
 
-	return `${systemPrompt}${shellImplementationSection(runtime)}`;
+	return `${systemPrompt}${runtimeImplementationSection(runtime)}`;
 }
 
 export function patchSystemPrompt(runtime: YpiRuntime, event: BeforeAgentStartEvent): string {

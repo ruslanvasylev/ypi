@@ -41,6 +41,7 @@
   "files": [
     "ypi",
     "rlm_query",
+    "rlm_query.legacy",
     "rlm_cost",
     "rlm_parse_json",
     "rlm_sessions",
@@ -50,7 +51,8 @@
     "README.md",
     "LICENSE",
     "CHANGELOG.md",
-    "extensions/**/*.ts"
+    "extensions/**/*.ts",
+    "dist/*.mjs"
   ],
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.79.4",

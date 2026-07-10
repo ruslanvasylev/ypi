@@ -6,7 +6,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
-- A canonical TypeScript recursion runtime core now owns native child planning, guardrails, routing, resources, environment projection, bounded spawning, result classification, and cleanup. The Pi-native tool is a thin adapter, while the incumbent native engine remains available through `YPI_LEGACY_IMPL=1` during convergence.
+- A canonical TypeScript recursion runtime core now owns child planning, guardrails, routing, resources, environment projection, bounded spawning, result classification, and cleanup for both native and CLI calls. The Pi tool and Node CLI are thin adapters; the incumbent native and shell engines remain available through `YPI_LEGACY_IMPL=1` during convergence.
 - An executable native/CLI runtime contract freezes shared behavior and names any intentional divergence; the initial stabilized contract passes with no known deterministic divergences.
 
 ### Changed
@@ -18,6 +18,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - CLI `rlm_query --async` closes the background worker's inherited stdio so documented `JOB=$(rlm_query --async ...)` capture returns immediately; sentinels now record the eventual child exit code and cleanup runs even when the child fails.
 - Native recursion depth parsing now rejects integer prefixes such as `0junk` and values outside the safe-integer range instead of silently accepting the numeric prefix.
 - Native and CLI no-jj children now share the same built-in mutator exclusion policy without a global tool allowlist, and extension-isolated children keep the standalone ypi system prompt through both adapters.
+- Budget enforcement now fails closed through both adapters when `RLM_JSON=0`, because unmeasured plain output cannot update the shared cost ledger.
 
 ## [0.6.1] - 2026-06-22
 

@@ -83,6 +83,9 @@ fi
 `);
 chmodSync(fakePi, 0o755);
 
+// Do not let a parent ypi session's YPI_EXTENSION_ROOT redirect this harness
+// away from the worktree under test.
+process.env.YPI_EXTENSION_ROOT = projectRoot;
 const runtime = resolveRuntime(new URL("../extensions/recursive.ts", import.meta.url).href);
 let tool: Tool | undefined;
 const pi = {
