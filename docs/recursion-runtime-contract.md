@@ -73,8 +73,6 @@ surface. Every intentional difference must be named by the executable contract.
 The initial contract harness records these as known gaps rather than desired
 behavior:
 
-- native numeric parsing accepts integer prefixes such as `0junk`, while the
-  CLI fails closed
 - disabling extensions adds a standalone system prompt in the CLI path but not
   in the native path
 - no-jj read-only capability selection uses a native allowlist and a CLI
@@ -82,6 +80,8 @@ behavior:
 
 Resolved stabilization gaps remain part of the evidence history:
 
+- native depth parsing now rejects integer prefixes and unsafe integers rather
+  than accepting the `Number.parseInt` prefix
 - native stdout and stderr are now bounded while the child stream is drained;
   the final result reports when raw capture was truncated
 - command substitution around CLI `--async` now returns job metadata without

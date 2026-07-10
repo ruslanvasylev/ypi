@@ -6,12 +6,19 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { YpiRuntime } from "./runtime.ts";
 import { debug } from "./runtime.ts";
 
+function exactNonNegativeInteger(value: string | undefined, fallback: string): number {
+	const raw = value ?? fallback;
+	if (!/^\d+$/.test(raw)) return Number.NaN;
+	const parsed = Number(raw);
+	return Number.isSafeInteger(parsed) ? parsed : Number.NaN;
+}
+
 export function currentDepth(): number {
-	return Number.parseInt(process.env.RLM_DEPTH || "0", 10);
+	return exactNonNegativeInteger(process.env.RLM_DEPTH, "0");
 }
 
 export function maxDepth(): number {
-	return Number.parseInt(process.env.RLM_MAX_DEPTH || "3", 10);
+	return exactNonNegativeInteger(process.env.RLM_MAX_DEPTH, "3");
 }
 
 export function nextDepth(): number {
@@ -23,7 +30,12 @@ export function currentCallCount(): number {
 }
 
 export function shouldExposeRecursion(): boolean {
-	return currentDepth() < maxDepth();
+	const depth = currentDepth();
+	const limit = maxDepth();
+	// Keep the tool visible for malformed configuration so invoking it produces
+	// the explicit fail-closed error instead of silently hiding recursion.
+	if (!Number.isInteger(depth) || !Number.isInteger(limit)) return true;
+	return depth < limit;
 }
 
 function prependPath(dir: string): void {

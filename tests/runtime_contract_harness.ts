@@ -251,10 +251,10 @@ async function run(): Promise<void> {
 
 	const malformedNative = await invokeNative({ ...baseEnv("native-malformed"), RLM_DEPTH: "0junk" }, prompt);
 	const malformedCli = await invokeCli({ ...baseEnv("cli-malformed"), RLM_DEPTH: "0junk" }, prompt);
-	recordKnown(
-		!malformedNative.error && malformedCli.code !== 0,
-		"numeric-prefix validation",
-		"native accepts 0junk while CLI fails closed",
+	record(
+		Boolean(malformedNative.error?.includes("Invalid recursion depth config")) && malformedCli.code !== 0,
+		"both adapters reject integer-prefix depth values",
+		`native=${JSON.stringify(malformedNative.error)} CLI code=${malformedCli.code}`,
 	);
 
 	const extensionsOffNative = await invokeNative({ ...baseEnv("native-ext-off"), RLM_CHILD_EXTENSIONS: "0" }, prompt);

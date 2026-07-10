@@ -157,6 +157,14 @@ async function run(): Promise<void> {
 	await expectThrow("N1b: non-integer RLM_MAX_DEPTH fails closed", "Invalid recursion depth config", () => invoke());
 	assertNotContains("N1b: malformed depth did not spawn child", readLog(), "ARGS:");
 
+	clearYpiEnv();
+	resetLog();
+	process.env.RLM_DEPTH = "0junk";
+	process.env.RLM_MAX_DEPTH = "2";
+	ensureEnvironment(runtime, context());
+	await expectThrow("N1c: integer-prefix RLM_DEPTH fails closed", "Invalid recursion depth config", () => invoke());
+	assertNotContains("N1c: integer-prefix depth did not spawn child", readLog(), "ARGS:");
+
 	// N2: RLM_MAX_CALLS=N permits exactly N calls; the (N+1)th is blocked before spawning.
 	clearYpiEnv();
 	resetLog();
