@@ -1,4 +1,4 @@
-.PHONY: test test-unit test-guardrails test-native test-provider-allowlist test-extensions test-consumer-pack test-pi-recursive-pack build-pi-recursive test-e2e test-recursion-e2e test-extension-recursion-e2e test-parity-e2e test-fast doctor test-doctor check-release-consistency test-release-consistency test-install-from-registry publish publish-dry pre-push-checks check-upstream install-hooks release-preflight land ci-status ci-last-failure clean
+.PHONY: test test-unit test-guardrails test-native test-runtime-contract test-provider-allowlist test-extensions test-consumer-pack test-pi-recursive-pack build-pi-recursive test-e2e test-recursion-e2e test-extension-recursion-e2e test-parity-e2e test-fast doctor test-doctor check-release-consistency test-release-consistency test-install-from-registry publish publish-dry pre-push-checks check-upstream install-hooks release-preflight land ci-status ci-last-failure clean
 
 # Fast tests — no LLM calls, uses mock pi
 test-unit:
@@ -13,6 +13,12 @@ test-guardrails:
 test-native:
 	@echo "Running native extension tool tests..."
 	@bash tests/test_native_tool.sh
+
+# Shared native/CLI runtime contract — no LLM calls, freezes parity and known divergences
+# before duplicated policy is converged behind one engine.
+test-runtime-contract:
+	@echo "Running recursion runtime contract tests..."
+	@bash tests/test_runtime_contract.sh
 
 # Provider env allowlist — no LLM calls, enforces native/shell parity + pi-mono coverage
 test-provider-allowlist:
@@ -36,7 +42,7 @@ test-release-consistency:
 	@bash tests/test_release_consistency.sh
 
 # All fast tests (no LLM calls)
-test-fast: test-unit test-guardrails test-native test-provider-allowlist test-doctor test-release-consistency
+test-fast: test-unit test-guardrails test-native test-runtime-contract test-provider-allowlist test-doctor test-release-consistency
 
 # Extension compatibility — requires real pi installed
 test-extensions:

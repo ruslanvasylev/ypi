@@ -1,0 +1,293 @@
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { ensureEnvironment } from "../extensions/ypi/env.ts";
+import { registerNativeRlmQueryTool } from "../extensions/ypi/native-tool.ts";
+import { resolveRuntime } from "../extensions/ypi/runtime.ts";
+
+type Tool = Parameters<ExtensionAPI["registerTool"]>[0];
+type Observation = Record<string, string>;
+
+const projectRoot = path.resolve(import.meta.dir, "..");
+const scratch = mkdtempSync(path.join(tmpdir(), "ypi_runtime_contract."));
+const fakePi = path.join(scratch, "pi");
+const logFile = path.join(scratch, "fake-pi.log");
+const contextFile = path.join(scratch, "context.txt");
+const sessionDir = path.join(scratch, "sessions");
+mkdirSync(sessionDir, { recursive: true });
+writeFileSync(contextFile, "CONTRACT_CONTEXT");
+
+let pass = 0;
+let fail = 0;
+let known = 0;
+
+function record(ok: boolean, label: string, detail = ""): void {
+	if (ok) {
+		pass++;
+		console.log(`  ✓ ${label}`);
+	} else {
+		fail++;
+		console.error(`  ✗ ${label}${detail ? `: ${detail}` : ""}`);
+	}
+}
+
+function recordKnown(ok: boolean, label: string, detail: string): void {
+	if (ok) {
+		known++;
+		console.log(`  ! KNOWN ${label}: ${detail}`);
+	} else {
+		fail++;
+		console.error(`  ✗ known divergence changed: ${label}; update the contract classification`);
+	}
+}
+
+function equal(label: string, left: unknown, right: unknown): void {
+	record(left === right, label, `${JSON.stringify(left)} !== ${JSON.stringify(right)}`);
+}
+
+function contains(label: string, value: string, expected: string): void {
+	record(value.includes(expected), label, `expected ${JSON.stringify(expected)} in ${JSON.stringify(value)}`);
+}
+
+writeFileSync(fakePi, `#!/usr/bin/env bash
+set -euo pipefail
+{
+  printf 'ARGS='; printf '<%s>' "$@"; printf '\n'
+  printf 'RLM_DEPTH=%s\n' "\${RLM_DEPTH:-unset}"
+  printf 'RLM_MAX_DEPTH=%s\n' "\${RLM_MAX_DEPTH:-unset}"
+  printf 'RLM_CALL_COUNT=%s\n' "\${RLM_CALL_COUNT:-unset}"
+  printf 'RLM_PROVIDER=%s\n' "\${RLM_PROVIDER:-unset}"
+  printf 'RLM_MODEL=%s\n' "\${RLM_MODEL:-unset}"
+  printf 'RLM_THINKING_LEVEL=%s\n' "\${RLM_THINKING_LEVEL:-unset}"
+  printf 'RLM_SESSION_FILE=%s\n' "\${RLM_SESSION_FILE:-unset}"
+  printf 'RLM_SESSION_DIR=%s\n' "\${RLM_SESSION_DIR:-unset}"
+  printf 'PROMPT_CONTENT=%s\n' "$(cat "\${RLM_PROMPT_FILE:-/dev/null}" 2>/dev/null || true)"
+  printf 'CONTEXT_CONTENT=%s\n' "$(cat "\${CONTEXT:-/dev/null}" 2>/dev/null || true)"
+} > "$YPI_FAKE_PI_LOG"
+echo FAKE_CHILD_OK
+`);
+chmodSync(fakePi, 0o755);
+
+const runtime = resolveRuntime(new URL("../extensions/recursive.ts", import.meta.url).href);
+let nativeTool: Tool | undefined;
+const pi = {
+	registerTool(tool: Tool) {
+		nativeTool = tool;
+	},
+	getThinkingLevel() {
+		return "contract-thinking";
+	},
+	getAllTools() {
+		return [
+			{ name: "read" },
+			{ name: "grep" },
+			{ name: "find" },
+			{ name: "ls" },
+			{ name: "bash" },
+			{ name: "edit" },
+			{ name: "write" },
+			{ name: "rlm_query" },
+		];
+	},
+} as Pick<ExtensionAPI, "registerTool" | "getThinkingLevel" | "getAllTools"> as ExtensionAPI;
+
+function extensionContext(): ExtensionContext {
+	return {
+		cwd: projectRoot,
+		model: { provider: "contract-provider", id: "contract-model" },
+		sessionManager: {
+			getSessionFile: () => path.join(sessionDir, "parent.jsonl"),
+			getSessionDir: () => sessionDir,
+		},
+	} as ExtensionContext;
+}
+
+function clearRuntimeEnv(): void {
+	for (const key of Object.keys(process.env)) {
+		if (key.startsWith("RLM_") || key.startsWith("YPI_") || key === "CONTEXT" || key === "PI_TRACE_FILE") {
+			delete process.env[key];
+		}
+	}
+}
+
+function baseEnv(label: string): Record<string, string> {
+	return {
+		HOME: process.env.HOME || "",
+		PATH: process.env.PATH || "",
+		TMPDIR: scratch,
+		YPI_PI_BIN: fakePi,
+		YPI_FAKE_PI_LOG: logFile,
+		YPI_EXTENSION_ROOT: projectRoot,
+		YPI_EXTENSION_PATH: runtime.extensionPath,
+		RLM_DEPTH: "0",
+		RLM_MAX_DEPTH: "2",
+		RLM_JSON: "0",
+		RLM_JJ: "0",
+		RLM_UNSAFE_NO_JJ_WRITE: "1",
+		RLM_SHARED_SESSIONS: "0",
+		RLM_PROVIDER: "contract-provider",
+		RLM_MODEL: "contract-model",
+		RLM_THINKING_LEVEL: "contract-thinking",
+		RLM_SYSTEM_PROMPT: runtime.systemPromptPath,
+		RLM_TRACE_ID: `contract-${label}`,
+		RLM_CALL_COUNTER_FILE: path.join(scratch, `${label}.counter`),
+		CONTEXT: contextFile,
+	};
+}
+
+function applyNativeEnv(env: Record<string, string>): void {
+	clearRuntimeEnv();
+	for (const [key, value] of Object.entries(env)) {
+		process.env[key] = value;
+	}
+	writeFileSync(logFile, "");
+	ensureEnvironment(runtime, extensionContext(), pi);
+}
+
+function parseObservation(): Observation {
+	const result: Observation = {};
+	for (const line of readFileSync(logFile, "utf8").split(/\r?\n/)) {
+		if (!line) continue;
+		const separator = line.indexOf("=");
+		if (separator >= 0) result[line.slice(0, separator)] = line.slice(separator + 1);
+	}
+	return result;
+}
+
+async function invokeNative(env: Record<string, string>, prompt: string, explicitContext?: string): Promise<{ observation?: Observation; error?: string }> {
+	applyNativeEnv(env);
+	try {
+		if (!nativeTool) throw new Error("native rlm_query tool not registered");
+		await nativeTool.execute("contract-call", { prompt, context: explicitContext }, undefined, undefined, extensionContext());
+		return { observation: parseObservation() };
+	} catch (error) {
+		return { error: error instanceof Error ? error.message : String(error) };
+	}
+}
+
+async function invokeCli(env: Record<string, string>, prompt: string): Promise<{ observation?: Observation; error?: string; code: number }> {
+	writeFileSync(logFile, "");
+	const child = Bun.spawn([path.join(projectRoot, "rlm_query"), prompt], {
+		cwd: projectRoot,
+		env,
+		stdin: "ignore",
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+	return {
+		observation: existsSync(logFile) && readFileSync(logFile, "utf8").trim() ? parseObservation() : undefined,
+		error: stderr.trim() || undefined,
+		code,
+	};
+}
+
+function assertCommonObservation(native: Observation, cli: Observation): void {
+	for (const key of [
+		"RLM_DEPTH",
+		"RLM_MAX_DEPTH",
+		"RLM_CALL_COUNT",
+		"RLM_PROVIDER",
+		"RLM_MODEL",
+		"RLM_THINKING_LEVEL",
+		"PROMPT_CONTENT",
+		"CONTEXT_CONTENT",
+	]) {
+		equal(`shared ${key}`, native[key], cli[key]);
+	}
+	contains("native disables shared sessions", native.ARGS, "<--no-session>");
+	contains("CLI disables shared sessions", cli.ARGS, "<--no-session>");
+	contains("native loads canonical extension", native.ARGS, `<${runtime.extensionPath}>`);
+	contains("CLI loads canonical extension", cli.ARGS, `<${runtime.extensionPath}>`);
+}
+
+async function run(): Promise<void> {
+	console.log("\n=== Recursion Runtime Contract Harness ===");
+	clearRuntimeEnv();
+	ensureEnvironment(runtime, extensionContext(), pi);
+	registerNativeRlmQueryTool(pi, runtime);
+	record(Boolean(nativeTool), "native adapter registered");
+
+	const prompt = "CONTRACT_PROMPT";
+	const nativeDefault = await invokeNative(baseEnv("native-default"), prompt, "CONTRACT_CONTEXT");
+	const cliDefault = await invokeCli(baseEnv("cli-default"), prompt);
+	record(!nativeDefault.error, "native default request succeeds", nativeDefault.error);
+	record(cliDefault.code === 0, "CLI default request succeeds", cliDefault.error);
+	if (nativeDefault.observation && cliDefault.observation) {
+		assertCommonObservation(nativeDefault.observation, cliDefault.observation);
+	} else {
+		record(false, "both adapters emitted child observations");
+	}
+
+	const routedNativeEnv = {
+		...baseEnv("native-route"),
+		RLM_DEPTH: "1",
+		RLM_MAX_DEPTH: "3",
+		RLM_CHILD_MODELS: "first-model,second-model",
+		RLM_CHILD_PROVIDERS: "first-provider,second-provider",
+		RLM_CHILD_THINKING_LEVELS: "low,high",
+	};
+	const routedCliEnv = {
+		...baseEnv("cli-route"),
+		RLM_DEPTH: "1",
+		RLM_MAX_DEPTH: "3",
+		RLM_CHILD_MODELS: "first-model,second-model",
+		RLM_CHILD_PROVIDERS: "first-provider,second-provider",
+		RLM_CHILD_THINKING_LEVELS: "low,high",
+	};
+	const routedNative = await invokeNative(routedNativeEnv, prompt, "CONTRACT_CONTEXT");
+	const routedCli = await invokeCli(routedCliEnv, prompt);
+	if (routedNative.observation && routedCli.observation) {
+		for (const key of ["RLM_DEPTH", "RLM_PROVIDER", "RLM_MODEL", "RLM_THINKING_LEVEL"]) {
+			equal(`depth-routed ${key}`, routedNative.observation[key], routedCli.observation[key]);
+		}
+		equal("second-depth model selected", routedNative.observation.RLM_MODEL, "second-model");
+		equal("second-depth provider selected", routedNative.observation.RLM_PROVIDER, "second-provider");
+		equal("second-depth thinking selected", routedNative.observation.RLM_THINKING_LEVEL, "high");
+	} else {
+		record(false, "both adapters emitted routed observations");
+	}
+
+	const malformedNative = await invokeNative({ ...baseEnv("native-malformed"), RLM_DEPTH: "0junk" }, prompt);
+	const malformedCli = await invokeCli({ ...baseEnv("cli-malformed"), RLM_DEPTH: "0junk" }, prompt);
+	recordKnown(
+		!malformedNative.error && malformedCli.code !== 0,
+		"numeric-prefix validation",
+		"native accepts 0junk while CLI fails closed",
+	);
+
+	const extensionsOffNative = await invokeNative({ ...baseEnv("native-ext-off"), RLM_CHILD_EXTENSIONS: "0" }, prompt);
+	const extensionsOffCli = await invokeCli({ ...baseEnv("cli-ext-off"), RLM_CHILD_EXTENSIONS: "0" }, prompt);
+	if (extensionsOffNative.observation && extensionsOffCli.observation) {
+		recordKnown(
+			!extensionsOffNative.observation.ARGS.includes("<--system-prompt>") && extensionsOffCli.observation.ARGS.includes("<--system-prompt>"),
+			"extensions-off prompt policy",
+			"CLI injects a standalone system prompt while native does not",
+		);
+	} else {
+		record(false, "both adapters emitted extensions-off observations");
+	}
+
+	const readOnlyNative = await invokeNative({ ...baseEnv("native-readonly"), RLM_UNSAFE_NO_JJ_WRITE: "0" }, prompt);
+	const readOnlyCli = await invokeCli({ ...baseEnv("cli-readonly"), RLM_UNSAFE_NO_JJ_WRITE: "0" }, prompt);
+	if (readOnlyNative.observation && readOnlyCli.observation) {
+		recordKnown(
+			readOnlyNative.observation.ARGS.includes("<--tools>") && readOnlyCli.observation.ARGS.includes("<--exclude-tools>"),
+			"no-jj read-only capability syntax",
+			"native allowlists safe tools while CLI excludes mutating built-ins",
+		);
+	} else {
+		record(false, "both adapters emitted read-only observations");
+	}
+
+	console.log(`\nResults: ${pass} passed, ${fail} failed, ${known} known divergences`);
+	if (fail > 0) process.exitCode = 1;
+}
+
+try {
+	await run();
+} finally {
+	clearRuntimeEnv();
+	rmSync(scratch, { recursive: true, force: true });
+}
