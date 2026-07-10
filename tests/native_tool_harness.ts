@@ -72,6 +72,8 @@ writeFileSync(fakePi, `#!/usr/bin/env bash
 if [ "\${YPI_FAKE_PI_MODE:-ok}" = "fail" ]; then
   echo "fake child failure" >&2
   exit 42
+elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "huge" ]; then
+  head -c $((17 * 1024 * 1024)) /dev/zero | tr '\\0' X
 elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "json" ]; then
   printf '%s\\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"JSON_CHILD_OK"}}'
   printf '%s\\n' '{"type":"turn_end","message":{"usage":{"totalTokens":7,"cost":{"total":0.123}}},"toolResults":[]}'
@@ -216,6 +218,21 @@ async function run(): Promise<void> {
 	assertNotContains("N5: no-jj child excludes bash", readLog(), "--tools read,grep,find,ls,bash");
 	assertNotContains("N5: no-jj child excludes edit", readLog(), "edit");
 	assertNotContains("N5: no-jj child excludes write", readLog(), "write");
+
+	// N5b: an oversized child stream is drained but retained only to the bounded
+	// capture limit. This protects the parent from V8's maximum string length.
+	clearYpiEnv();
+	resetLog();
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	process.env.RLM_JJ = "0";
+	process.env.RLM_UNSAFE_NO_JJ_WRITE = "1";
+	process.env.RLM_JSON = "0";
+	process.env.YPI_FAKE_PI_MODE = "huge";
+	ensureEnvironment(runtime, context());
+	const oversizedText = await invoke();
+	assertContains("N5b: oversized stdout reports streaming capture bound", oversizedText, "Child stdout capture exceeded 16777216 characters");
+	record(oversizedText.length < 70 * 1024, "N5b: oversized stdout result stays near final tool-output cap", `length=${oversizedText.length}`);
 
 	clearYpiEnv();
 	resetLog();

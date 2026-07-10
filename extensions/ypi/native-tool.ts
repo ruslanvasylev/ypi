@@ -18,6 +18,9 @@ import type { YpiRuntime } from "./runtime.ts";
 import { debug } from "./runtime.ts";
 
 const MAX_TOOL_OUTPUT_CHARS = 60 * 1024;
+// Pi's JSON stream includes tool traffic as well as final text. Keep draining the
+// child so it cannot deadlock, but never retain an unbounded stream in memory.
+const MAX_CHILD_STREAM_CHARS = 16 * 1024 * 1024;
 const READ_ONLY_BUILTIN_TOOLS = ["read", "grep", "find", "ls"];
 const READ_ONLY_EXCLUDED_BUILTINS = new Set(["bash", "edit", "write"]);
 
@@ -38,6 +41,8 @@ interface NativeRunResult {
 	signal: NodeJS.Signals | null;
 	stdout: string;
 	stderr: string;
+	stdoutTruncated: boolean;
+	stderrTruncated: boolean;
 	timedOut: boolean;
 }
 
@@ -69,6 +74,42 @@ function truncate(text: string): string {
 		return text;
 	}
 	return `${text.slice(0, MAX_TOOL_OUTPUT_CHARS)}\n\n[Output truncated by ypi native rlm_query tool]`;
+}
+
+interface BoundedCapture {
+	append(chunk: string): void;
+	text(): string;
+	readonly truncated: boolean;
+}
+
+function createBoundedCapture(limit = MAX_CHILD_STREAM_CHARS): BoundedCapture {
+	const chunks: string[] = [];
+	let retained = 0;
+	let wasTruncated = false;
+
+	return {
+		append(chunk: string) {
+			const remaining = limit - retained;
+			if (remaining <= 0) {
+				wasTruncated = true;
+				return;
+			}
+			if (chunk.length > remaining) {
+				chunks.push(chunk.slice(0, remaining));
+				retained += remaining;
+				wasTruncated = true;
+				return;
+			}
+			chunks.push(chunk);
+			retained += chunk.length;
+		},
+		text() {
+			return chunks.join("");
+		},
+		get truncated() {
+			return wasTruncated;
+		},
+	};
 }
 
 function createContextFile(params: { context?: string }): string | undefined {
@@ -334,16 +375,16 @@ function spawnChildPi(args: string[], env: NodeJS.ProcessEnv, cwd: string, timeo
 			detached: process.platform !== "win32",
 		});
 
-		let stdout = "";
-		let stderr = "";
+		const stdout = createBoundedCapture();
+		const stderr = createBoundedCapture();
 		let timedOut = false;
 		let killTimer: NodeJS.Timeout | undefined;
 		let timeoutTimer: NodeJS.Timeout | undefined;
 
 		child.stdout.setEncoding("utf8");
 		child.stderr.setEncoding("utf8");
-		child.stdout.on("data", (chunk) => { stdout += chunk; });
-		child.stderr.on("data", (chunk) => { stderr += chunk; });
+		child.stdout.on("data", (chunk) => { stdout.append(chunk); });
+		child.stderr.on("data", (chunk) => { stderr.append(chunk); });
 		const killChild = (reason: "abort" | "timeout") => {
 			if (reason === "timeout") {
 				timedOut = true;
@@ -381,7 +422,15 @@ function spawnChildPi(args: string[], env: NodeJS.ProcessEnv, cwd: string, timeo
 		});
 		child.on("close", (code, childSignal) => {
 			cleanupAbortHandler();
-			resolve({ code: timedOut ? 124 : code ?? (childSignal ? 128 : 1), signal: childSignal, stdout, stderr, timedOut });
+			resolve({
+				code: timedOut ? 124 : code ?? (childSignal ? 128 : 1),
+				signal: childSignal,
+				stdout: stdout.text(),
+				stderr: stderr.text(),
+				stdoutTruncated: stdout.truncated,
+				stderrTruncated: stderr.truncated,
+				timedOut,
+			});
 		});
 
 		if (timeoutSeconds !== undefined) {
@@ -497,10 +546,15 @@ export function registerNativeRlmQueryTool(pi: ExtensionAPI, runtime: YpiRuntime
 					appendCostSummary(parsed.cost);
 				}
 				const stdout = parsed ? parsed.text : result.stdout;
-
-				const text = truncate(result.stderr.trim()
+				const streamWarnings = [
+					result.stdoutTruncated ? `Child stdout capture exceeded ${MAX_CHILD_STREAM_CHARS} characters; remainder discarded` : "",
+					result.stderrTruncated ? `Child stderr capture exceeded ${MAX_CHILD_STREAM_CHARS} characters; remainder discarded` : "",
+				].filter(Boolean);
+				const warningPrefix = streamWarnings.length > 0 ? `[${streamWarnings.join("; ")}]\n\n` : "";
+				const combinedOutput = result.stderr.trim()
 					? `${stdout.trim()}\n\n[stderr]\n${result.stderr.trim()}`
-					: stdout.trim());
+					: stdout.trim();
+				const text = truncate(`${warningPrefix}${combinedOutput}`);
 
 				if (result.code !== 0) {
 					const reason = result.timedOut ? `Child Pi timed out after ${timeoutSeconds}s` : `Child Pi exited with ${result.code}`;
@@ -519,6 +573,8 @@ export function registerNativeRlmQueryTool(pi: ExtensionAPI, runtime: YpiRuntime
 						signal: result.signal,
 						jj: workspace.mode,
 						readOnly: workspace.readOnly,
+						stdoutTruncated: result.stdoutTruncated,
+						stderrTruncated: result.stderrTruncated,
 					},
 				};
 			} finally {

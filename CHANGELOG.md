@@ -8,6 +8,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ### Changed
 - Bare `ypi` now explicitly preserves Pi-native root model selection: root provider/model/thinking come from Pi settings (`defaultProvider`, `defaultModel`, `defaultThinkingLevel`), `/model`, or CLI flags, while children inherit the active root route by default. Recursive child routing can now be lowered by depth with `RLM_CHILD_MODELS`, `RLM_CHILD_PROVIDERS`, and `RLM_CHILD_THINKING_LEVELS` without narrowing the root default, toolset, timeout, or call-limit behavior.
 
+### Fixed
+- Native child stdout and stderr are retained through bounded streaming capture instead of unbounded string concatenation, preventing large Pi JSON streams from reaching V8's maximum string length before final tool-output truncation.
+
 ## [0.6.1] - 2026-06-22
 
 ### Changed

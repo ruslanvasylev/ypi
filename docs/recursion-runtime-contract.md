@@ -79,9 +79,12 @@ behavior:
   in the native path
 - no-jj read-only capability selection uses a native allowlist and a CLI
   mutator-exclusion list
-- native output is accumulated without a streaming bound before final
-  truncation
 - command substitution around CLI `--async` waits for the background job
+
+Resolved stabilization gaps remain part of the evidence history:
+
+- native stdout and stderr are now bounded while the child stream is drained;
+  the final result reports when raw capture was truncated
 
 A convergence change must either resolve a gap or explicitly reclassify it with
 contract evidence. It may not silently normalize the difference.
