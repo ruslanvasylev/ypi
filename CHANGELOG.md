@@ -10,6 +10,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 - Native child stdout and stderr are retained through bounded streaming capture instead of unbounded string concatenation, preventing large Pi JSON streams from reaching V8's maximum string length before final tool-output truncation.
+- CLI `rlm_query --async` closes the background worker's inherited stdio so documented `JOB=$(rlm_query --async ...)` capture returns immediately; sentinels now record the eventual child exit code and cleanup runs even when the child fails.
 
 ## [0.6.1] - 2026-06-22
 

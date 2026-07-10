@@ -79,12 +79,14 @@ behavior:
   in the native path
 - no-jj read-only capability selection uses a native allowlist and a CLI
   mutator-exclusion list
-- command substitution around CLI `--async` waits for the background job
 
 Resolved stabilization gaps remain part of the evidence history:
 
 - native stdout and stderr are now bounded while the child stream is drained;
   the final result reports when raw capture was truncated
+- command substitution around CLI `--async` now returns job metadata without
+  waiting for the child; the sentinel records the eventual child exit code and
+  cleanup runs for success and failure
 
 A convergence change must either resolve a gap or explicitly reclassify it with
 contract evidence. It may not silently normalize the difference.

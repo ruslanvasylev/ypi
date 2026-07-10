@@ -1143,6 +1143,60 @@ echo "=== Async Notify ==="
 # G53: --async --notify writes valid JSON to the peer inbox even when child output
 # contains quotes/backslashes/newlines, and async temp files honor TMPDIR.
 if _feature_exists "NOTIFY_PID"; then
+    # G53a: metadata capture through command substitution must not wait for the
+    # background child to close the inherited stdout pipe.
+    cat > "$MOCK_BIN/pi" << 'SLOWPI'
+#!/bin/bash
+sleep 2
+printf '%s\n' 'slow child complete'
+SLOWPI
+    chmod +x "$MOCK_BIN/pi"
+
+    START_NS=$(python3 -c 'import time; print(time.monotonic_ns())')
+    JOB=$(
+        CONTEXT="$TEST_TMP/ctx.txt" \
+        RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=0 \
+        RLM_PROVIDER=test RLM_MODEL=test \
+        RLM_TRACE_ID="async_success_$$" \
+        RLM_CALL_COUNTER_FILE="$TEST_TMP/async_success.counter" \
+        rlm_query --async "Async immediate metadata?" 2>/dev/null
+    )
+    END_NS=$(python3 -c 'import time; print(time.monotonic_ns())')
+    ELAPSED_MS=$(( (END_NS - START_NS) / 1000000 ))
+    if [ "$ELAPSED_MS" -lt 1000 ]; then
+        pass "G53a: command-substitution async returns immediately"
+    else
+        fail "G53a: command-substitution async returns immediately" "elapsed=${ELAPSED_MS}ms"
+    fi
+    ASYNC_SENTINEL=$(printf '%s' "$JOB" | python3 -c "import json,sys; print(json.load(sys.stdin).get('sentinel',''))")
+    if [ ! -e "$ASYNC_SENTINEL" ]; then
+        pass "G53a: slow child is still pending when metadata returns"
+    else
+        fail "G53a: slow child is still pending when metadata returns" "sentinel already exists"
+    fi
+    for _ in $(seq 1 50); do [ -e "$ASYNC_SENTINEL" ] && break; sleep 0.1; done
+    assert_eq "G53a: successful async sentinel records exit code" "0" "$(cat "$ASYNC_SENTINEL" 2>/dev/null || echo missing)"
+
+    # G53b: set -e in the parent script must not skip sentinel creation or
+    # cleanup when the background child itself exits nonzero.
+    cat > "$MOCK_BIN/pi" << 'FAILPI'
+#!/bin/bash
+printf '%s\n' 'async child failed' >&2
+exit 42
+FAILPI
+    chmod +x "$MOCK_BIN/pi"
+    JOB=$(
+        CONTEXT="$TEST_TMP/ctx.txt" \
+        RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=0 \
+        RLM_PROVIDER=test RLM_MODEL=test \
+        RLM_TRACE_ID="async_failure_$$" \
+        RLM_CALL_COUNTER_FILE="$TEST_TMP/async_failure.counter" \
+        rlm_query --async "Async failure sentinel?" 2>/dev/null
+    )
+    FAILURE_SENTINEL=$(printf '%s' "$JOB" | python3 -c "import json,sys; print(json.load(sys.stdin).get('sentinel',''))")
+    for _ in $(seq 1 50); do [ -e "$FAILURE_SENTINEL" ] && break; sleep 0.1; done
+    assert_eq "G53b: failed async sentinel records child exit code" "42" "$(cat "$FAILURE_SENTINEL" 2>/dev/null || echo missing)"
+
     cat > "$MOCK_BIN/pi" << 'NASTYPI'
 #!/bin/bash
 printf '%s\n' 'He said "hello" and used C:\path\to\file'

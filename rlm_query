@@ -529,10 +529,29 @@ if [ "$ASYNC" = true ]; then
     # Build the full command
     CHILD_CMD=(env -i "${CHILD_ENV[@]}" "${TIMEOUT_PREFIX[@]}" "$PI_BIN" "${CMD_ARGS[@]}" "$PROMPT")
 
-    # Spawn in background: run child, capture output, touch sentinel, optionally notify
+    # Spawn in background: run child, capture output, touch sentinel, optionally notify.
+    # The whole worker closes inherited stdio so command substitution such as
+    # JOB=$(rlm_query --async ...) receives EOF as soon as job metadata is printed.
+    # An EXIT trap keeps cleanup deterministic even when the child exits nonzero.
     (
+        cleanup_async_resources() {
+            rm -f "$CHILD_CONTEXT" "$PROMPT_FILE" "${COMBINED_PROMPT:-}"
+            if [ -n "$JJ_WS_NAME" ]; then
+                jj workspace forget "$JJ_WS_NAME" 2>/dev/null || true
+            fi
+            if [ -n "$JJ_WORKSPACE" ]; then
+                rm -rf "$JJ_WORKSPACE"
+            fi
+        }
+        trap cleanup_async_resources EXIT
+
+        set +e
         "${CHILD_CMD[@]}" > "$ASYNC_OUTPUT" 2>&1
-        touch "$ASYNC_SENTINEL"
+        CHILD_RC=$?
+        set -e
+        # Existence remains backward compatible; the child exit code gives new
+        # consumers a deterministic completion status without another file.
+        printf '%s\n' "$CHILD_RC" > "$ASYNC_SENTINEL"
 
         # If --notify PID was given, write to that peer's inbox
         if [ -n "$NOTIFY_PID" ]; then
@@ -569,15 +588,7 @@ PYJSON
             fi
         fi
 
-        # Clean up temp files the parent skipped
-        rm -f "$CHILD_CONTEXT" "$PROMPT_FILE" "${COMBINED_PROMPT:-}"
-        if [ -n "$JJ_WS_NAME" ]; then
-            jj workspace forget "$JJ_WS_NAME" 2>/dev/null || true
-        fi
-        if [ -n "$JJ_WORKSPACE" ]; then
-            rm -rf "$JJ_WORKSPACE"
-        fi
-    ) &
+    ) </dev/null >/dev/null 2>&1 &
     ASYNC_PID=$!
     disown $ASYNC_PID 2>/dev/null || true
 
