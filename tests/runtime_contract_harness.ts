@@ -260,10 +260,9 @@ async function run(): Promise<void> {
 	const extensionsOffNative = await invokeNative({ ...baseEnv("native-ext-off"), RLM_CHILD_EXTENSIONS: "0" }, prompt);
 	const extensionsOffCli = await invokeCli({ ...baseEnv("cli-ext-off"), RLM_CHILD_EXTENSIONS: "0" }, prompt);
 	if (extensionsOffNative.observation && extensionsOffCli.observation) {
-		recordKnown(
-			!extensionsOffNative.observation.ARGS.includes("<--system-prompt>") && extensionsOffCli.observation.ARGS.includes("<--system-prompt>"),
-			"extensions-off prompt policy",
-			"CLI injects a standalone system prompt while native does not",
+		record(
+			extensionsOffNative.observation.ARGS.includes("<--system-prompt>") && extensionsOffCli.observation.ARGS.includes("<--system-prompt>"),
+			"both adapters retain a system prompt when extensions are disabled",
 		);
 	} else {
 		record(false, "both adapters emitted extensions-off observations");
@@ -272,10 +271,10 @@ async function run(): Promise<void> {
 	const readOnlyNative = await invokeNative({ ...baseEnv("native-readonly"), RLM_UNSAFE_NO_JJ_WRITE: "0" }, prompt);
 	const readOnlyCli = await invokeCli({ ...baseEnv("cli-readonly"), RLM_UNSAFE_NO_JJ_WRITE: "0" }, prompt);
 	if (readOnlyNative.observation && readOnlyCli.observation) {
-		recordKnown(
-			readOnlyNative.observation.ARGS.includes("<--tools>") && readOnlyCli.observation.ARGS.includes("<--exclude-tools>"),
-			"no-jj read-only capability syntax",
-			"native allowlists safe tools while CLI excludes mutating built-ins",
+		record(
+			readOnlyNative.observation.ARGS.includes("<--exclude-tools><bash,edit,write>")
+				&& readOnlyCli.observation.ARGS.includes("<--exclude-tools><bash,edit,write>"),
+			"both adapters exclude built-in mutators without a global tool allowlist",
 		);
 	} else {
 		record(false, "both adapters emitted read-only observations");

@@ -70,18 +70,18 @@ surface. Every intentional difference must be named by the executable contract.
 
 ## Incumbent divergences frozen before convergence
 
-The initial contract harness records these as known gaps rather than desired
-behavior:
-
-- disabling extensions adds a standalone system prompt in the CLI path but not
-  in the native path
-- no-jj read-only capability selection uses a native allowlist and a CLI
-  mutator-exclusion list
+The initial contract harness recorded incumbent gaps rather than treating them
+as desired behavior. All initially identified deterministic divergences were
+resolved before shared ownership moved.
 
 Resolved stabilization gaps remain part of the evidence history:
 
 - native depth parsing now rejects integer prefixes and unsafe integers rather
   than accepting the `Number.parseInt` prefix
+- extension-isolated children retain the standalone ypi system prompt through
+  both adapters
+- no-jj children exclude built-in mutators through both adapters without a
+  global allowlist that could hide installed package tools
 - native stdout and stderr are now bounded while the child stream is drained;
   the final result reports when raw capture was truncated
 - command substitution around CLI `--async` now returns job metadata without

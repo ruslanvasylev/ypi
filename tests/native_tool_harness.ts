@@ -220,12 +220,8 @@ async function run(): Promise<void> {
 	ensureEnvironment(runtime, context());
 	const readOnlyText = await invoke();
 	assertContains("N5: child stdout returned", readOnlyText, "FAKE_CHILD_OK");
-	assertContains("N5: no-jj child keeps safe built-ins", readLog(), "--tools read,grep,find,ls");
-	assertContains("N5: no-jj child keeps recursive tool", readLog(), "rlm_query");
-	assertContains("N5: no-jj child keeps installed extension tools", readLog(), "installed_status,installed_context_pack");
-	assertNotContains("N5: no-jj child excludes bash", readLog(), "--tools read,grep,find,ls,bash");
-	assertNotContains("N5: no-jj child excludes edit", readLog(), "edit");
-	assertNotContains("N5: no-jj child excludes write", readLog(), "write");
+	assertContains("N5: no-jj child excludes built-in mutators", readLog(), "--exclude-tools bash,edit,write");
+	assertNotContains("N5: no-jj child avoids a global tool allowlist", readLog(), "--tools ");
 
 	// N5b: an oversized child stream is drained but retained only to the bounded
 	// capture limit. This protects the parent from V8's maximum string length.
@@ -315,6 +311,7 @@ async function run(): Promise<void> {
 	ensureEnvironment(runtime, context());
 	await invoke();
 	assertContains("N8b: child extension override disables extensions", readLog(), "--no-extensions");
+	assertContains("N8b: extension-isolated child keeps system prompt", readLog(), `--system-prompt ${runtime.systemPromptPath}`);
 	assertNotContains("N8b: child extension override avoids explicit extension", readLog(), "-e ");
 
 	clearYpiEnv();
@@ -340,6 +337,7 @@ async function run(): Promise<void> {
 	await invoke();
 	assertContains("N8d: full child isolation disables extensions", readLog(), "--no-extensions");
 	assertContains("N8d: full child isolation disables non-extension skills", readLog(), "--no-skills");
+	assertContains("N8d: full child isolation keeps system prompt", readLog(), `--system-prompt ${runtime.systemPromptPath}`);
 	assertNotContains("N8d: full child isolation avoids explicit ypi extension", readLog(), "-e ");
 
 	clearYpiEnv();

@@ -12,6 +12,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - Native child stdout and stderr are retained through bounded streaming capture instead of unbounded string concatenation, preventing large Pi JSON streams from reaching V8's maximum string length before final tool-output truncation.
 - CLI `rlm_query --async` closes the background worker's inherited stdio so documented `JOB=$(rlm_query --async ...)` capture returns immediately; sentinels now record the eventual child exit code and cleanup runs even when the child fails.
 - Native recursion depth parsing now rejects integer prefixes such as `0junk` and values outside the safe-integer range instead of silently accepting the numeric prefix.
+- Native and CLI no-jj children now share the same built-in mutator exclusion policy without a global tool allowlist, and extension-isolated children keep the standalone ypi system prompt through both adapters.
 
 ## [0.6.1] - 2026-06-22
 
