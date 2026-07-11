@@ -115,7 +115,6 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 	assertWithinMaxCalls(callCount);
 	assertBudgetAvailable();
 	timeoutOrThrow();
-	request.onAdmitted?.(callCount);
 	const resources = acquireChildResources({
 		prompt: request.prompt,
 		context: request.context,
@@ -165,6 +164,7 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 		args.push(request.prompt);
 
 		const timeoutSeconds = timeoutOrThrow();
+		request.onAdmitted?.(callCount);
 		trace(`[${nowTraceTime()}] depth=${depth}→${childDepth} PID=${process.pid} call=${callCount} trace=${process.env.RLM_TRACE_ID || ""} caller=${request.caller} fork=${request.fork === true} jj=${resources.workspace.mode} prompt: ${request.prompt.slice(0, 120)}`);
 		const started = Date.now();
 		const processResult = await runChildProcess({

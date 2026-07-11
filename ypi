@@ -92,7 +92,7 @@ export RLM_DEPTH="${RLM_DEPTH:-0}"
 export RLM_MAX_DEPTH="${RLM_MAX_DEPTH:-4}"
 export RLM_SYSTEM_PROMPT="$SCRIPT_DIR/SYSTEM_PROMPT.md"
 
-# Guardrails — pass through if set, don't override
+# Guardrails — preserve explicit values and seed bounded depth/call defaults.
 [ -n "${RLM_TIMEOUT:-}" ]        && export RLM_TIMEOUT
 export RLM_MAX_CALLS="${RLM_MAX_CALLS:-128}"
 [ -n "${RLM_CHILD_MODEL:-}" ]    && export RLM_CHILD_MODEL

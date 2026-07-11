@@ -1395,6 +1395,20 @@ FAILPI
         pass "G53c: rejected async job directory is removed"
     fi
 
+    NO_JJ_PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "$MOCK_BIN" | paste -sd ':' -)
+    NO_JJ_PATH="$PROJECT_DIR:$NO_JJ_PATH"
+    set +e
+    NO_JJ_REJECTED=$(
+        CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=1 \
+        RLM_TRACE_ID="async_no_jj_$$" RLM_CALL_COUNTER_FILE="$TEST_TMP/async_no_jj.counter" \
+        PATH="$NO_JJ_PATH" rlm_query --async "Reject unavailable jj before acknowledgement" 2>&1
+    )
+    NO_JJ_RC=$?
+    set -e
+    if [ "$NO_JJ_RC" -ne 0 ]; then pass "G53c: async unavailable-jj rejection returns nonzero"; else fail "G53c: async unavailable-jj rejection returns nonzero" "$NO_JJ_REJECTED"; fi
+    assert_contains "G53c: async unavailable-jj rejection explains choice" "jj workspace isolation unavailable" "$NO_JJ_REJECTED"
+    assert_not_contains "G53c: async unavailable-jj emits no metadata" '"job_id"' "$NO_JJ_REJECTED"
+
     # G53d: inherited context is snapshotted at invocation time, not read from a
     # mutable caller path after metadata returns.
     cat > "$MOCK_BIN/pi" << 'SNAPSHOTPI'
