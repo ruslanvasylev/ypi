@@ -225,7 +225,7 @@ function discardAsyncJob(job, workerPid = 0) {
   }
   rmSync(path3.dirname(job.jobPath), { recursive: true, force: true });
 }
-async function waitForAsyncAdmission(job, timeoutMilliseconds = 5000) {
+async function waitForAsyncAdmission(job, timeoutMilliseconds = 30000) {
   const deadline = Date.now() + timeoutMilliseconds;
   while (Date.now() < deadline) {
     if (existsSync2(job.admissionPath))

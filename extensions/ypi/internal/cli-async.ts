@@ -131,7 +131,7 @@ export function discardAsyncJob(job: AsyncJob, workerPid = 0): void {
 	rmSync(path.dirname(job.jobPath), { recursive: true, force: true });
 }
 
-export async function waitForAsyncAdmission(job: AsyncJob, timeoutMilliseconds = 5_000): Promise<void> {
+export async function waitForAsyncAdmission(job: AsyncJob, timeoutMilliseconds = 30_000): Promise<void> {
 	const deadline = Date.now() + timeoutMilliseconds;
 	while (Date.now() < deadline) {
 		if (existsSync(job.admissionPath)) return;
