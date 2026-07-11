@@ -43,4 +43,7 @@ const context = {
 const result = await registeredTool.execute("installed-smoke", { prompt: "Execute installed native recursion" }, undefined, undefined, context);
 const text = result.content?.find((item: any) => item.type === "text")?.text || "";
 if (!text.includes("PACKED_NATIVE_EXEC_OK")) throw new Error(`unexpected installed native result: ${text.slice(0, 500)}`);
-console.log(`INSTALLED_EXTENSION_EXECUTION=PASS implementation=${implementation}`);
+if (result.details?.implementation !== implementation) {
+	throw new Error(`installed implementation mismatch: requested=${implementation} observed=${result.details?.implementation}`);
+}
+console.log(`INSTALLED_EXTENSION_EXECUTION=PASS implementation=${result.details.implementation}`);

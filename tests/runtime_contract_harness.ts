@@ -57,6 +57,7 @@ function contains(label: string, value: string, expected: string): void {
 writeFileSync(fakePi, `#!/usr/bin/env bash
 set -euo pipefail
 SYSTEM_PROMPT_FILE=""
+STDIN_CONTENT="$(cat)"
 for ((i=1; i<=$#; i++)); do
   if [ "\${!i}" = "--system-prompt" ]; then
     j=$((i + 1))
@@ -74,9 +75,11 @@ done
   printf 'RLM_SESSION_FILE=%s\n' "\${RLM_SESSION_FILE:-unset}"
   printf 'RLM_SESSION_DIR=%s\n' "\${RLM_SESSION_DIR:-unset}"
   printf 'PROMPT_CONTENT=%s\n' "$(cat "\${RLM_PROMPT_FILE:-/dev/null}" 2>/dev/null || true)"
+  printf 'STDIN_CONTENT=%s\n' "$STDIN_CONTENT"
   printf 'ROOT_PROMPT_CONTENT=%s\n' "$(cat "\${RLM_ROOT_PROMPT_FILE:-/dev/null}" 2>/dev/null || true)"
   printf 'CONTEXT_CONTENT=%s\n' "$(cat "\${CONTEXT:-/dev/null}" 2>/dev/null || true)"
   printf 'SYSTEM_PROMPT_CONTEXT=%s\n' "$(grep -F 'External task context:' "$SYSTEM_PROMPT_FILE" 2>/dev/null | head -1 || true)"
+  printf 'SYSTEM_PROMPT_ROOT=%s\n' "$(grep -F 'Root task charter:' "$SYSTEM_PROMPT_FILE" 2>/dev/null | head -1 || true)"
 } > "$YPI_FAKE_PI_LOG"
 echo FAKE_CHILD_OK
 `);
@@ -92,6 +95,9 @@ process.env.YPI_EXTENSION_ROOT = path.join(scratch, "stale-package");
 process.env.YPI_EXTENSION_PATH = path.join(scratch, "stale-package", "extensions", "recursive.ts");
 const explicitExtensionRuntime = resolveRuntime(new URL("../extensions/recursive.ts", import.meta.url).href);
 equal("explicit extension ignores mismatched ambient package root", explicitExtensionRuntime.root, projectRoot);
+delete process.env.YPI_EXTENSION_PATH;
+const rootOnlyRuntime = resolveRuntime(new URL("../extensions/recursive.ts", import.meta.url).href);
+equal("explicit extension ignores unbound ambient root hint", rootOnlyRuntime.root, projectRoot);
 if (configuredRoot === undefined) delete process.env.YPI_EXTENSION_ROOT;
 else process.env.YPI_EXTENSION_ROOT = configuredRoot;
 if (configuredPath === undefined) delete process.env.YPI_EXTENSION_PATH;
@@ -218,6 +224,7 @@ function assertCommonObservation(native: Observation, cli: Observation): void {
 		"RLM_MODEL",
 		"RLM_THINKING_LEVEL",
 		"PROMPT_CONTENT",
+		"STDIN_CONTENT",
 		"ROOT_PROMPT_CONTENT",
 		"CONTEXT_CONTENT",
 	]) {
@@ -326,8 +333,8 @@ async function run(): Promise<void> {
 		`native=${JSON.stringify(noJjNative.error)} CLI=${JSON.stringify(noJjCli.error)}`,
 	);
 
-	const extensionsOffNative = await invokeNative({ ...baseEnv("native-ext-off"), RLM_CHILD_EXTENSIONS: "0" }, prompt);
-	const extensionsOffCli = await invokeCli({ ...baseEnv("cli-ext-off"), RLM_CHILD_EXTENSIONS: "0" }, prompt);
+	const extensionsOffNative = await invokeNative({ ...baseEnv("native-ext-off"), RLM_CHILD_EXTENSIONS: "0", RLM_ROOT_PROMPT_FILE: staleRootPromptFile }, prompt);
+	const extensionsOffCli = await invokeCli({ ...baseEnv("cli-ext-off"), RLM_CHILD_EXTENSIONS: "0", RLM_ROOT_PROMPT_FILE: staleRootPromptFile }, prompt);
 	if (extensionsOffNative.observation && extensionsOffCli.observation) {
 		record(
 			extensionsOffNative.observation.ARGS.includes("<--system-prompt>") && extensionsOffCli.observation.ARGS.includes("<--system-prompt>"),
@@ -337,6 +344,11 @@ async function run(): Promise<void> {
 			extensionsOffNative.observation.SYSTEM_PROMPT_CONTEXT?.includes("External task context: `") === true
 				&& extensionsOffCli.observation.SYSTEM_PROMPT_CONTEXT?.includes("External task context: `") === true,
 			"extension-disabled adapters project exact context paths into standalone prompts",
+		);
+		record(
+			extensionsOffNative.observation.SYSTEM_PROMPT_ROOT?.includes(staleRootPromptFile) === true
+				&& extensionsOffCli.observation.SYSTEM_PROMPT_ROOT?.includes(staleRootPromptFile) === true,
+			"extension-disabled adapters preserve captured human root paths in standalone prompts",
 		);
 	} else {
 		record(false, "both adapters emitted extensions-off observations");
@@ -360,9 +372,11 @@ async function run(): Promise<void> {
 		record(!syntaxNative.error && syntaxCli.code === 0, `file-backed transport admits Pi-like prompt ${syntaxPrompt}`, syntaxNative.error || syntaxCli.error);
 		equal(`native preserves Pi-like prompt ${syntaxPrompt}`, syntaxNative.observation?.PROMPT_CONTENT, syntaxPrompt);
 		equal(`CLI preserves Pi-like prompt ${syntaxPrompt}`, syntaxCli.observation?.PROMPT_CONTENT, syntaxPrompt);
+		equal(`native sends Pi-like prompt ${syntaxPrompt} through stdin`, syntaxNative.observation?.STDIN_CONTENT, syntaxPrompt);
+		equal(`CLI sends Pi-like prompt ${syntaxPrompt} through stdin`, syntaxCli.observation?.STDIN_CONTENT, syntaxPrompt);
 		record(
-			syntaxNative.observation?.ARGS.includes(`<@`) === true && syntaxCli.observation?.ARGS.includes(`<@`) === true,
-			`both adapters transport Pi-like prompt ${syntaxPrompt} through @file`,
+			syntaxNative.observation?.ARGS.includes(syntaxPrompt) !== true && syntaxCli.observation?.ARGS.includes(syntaxPrompt) !== true,
+			`both adapters keep Pi-like prompt ${syntaxPrompt} out of argv`,
 		);
 	}
 

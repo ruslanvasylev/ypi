@@ -236,6 +236,7 @@ if [ "$STDIN_TIMEOUT_MS" -lt 1800 ]; then pass "G4b: active deadline interrupts 
 # G4c: synchronous jj discovery/setup is bounded by the same invocation deadline.
 cat > "$MOCK_BIN/jj" <<'SLOWJJ'
 #!/bin/bash
+if [ "${1:-}" = "root" ]; then exit 0; fi
 sleep 30
 SLOWJJ
 chmod +x "$MOCK_BIN/jj"
@@ -253,8 +254,24 @@ JJ_TIMEOUT_MS=$(( (END_NS - START_NS) / 1000000 ))
 rm -f "$MOCK_BIN/jj"
 assert_eq "G4c: jj setup timeout exits 124" "124" "$JJ_TIMEOUT_RC"
 assert_not_contains "G4c: expired jj setup spawns no child" "MOCK_PI_CALLED" "$OUTPUT"
-assert_contains "G4c: jj setup timeout is explicit" "RLM_TIMEOUT expired during jj root" "$OUTPUT"
+assert_contains "G4c: jj setup timeout is explicit" "RLM_TIMEOUT expired during jj workspace add" "$OUTPUT"
+if find "$TEST_TMP" -maxdepth 1 -type d -name 'ypi_ws_d1_*' -print -quit | grep -q .; then fail "G4c: timed-out jj add cleans provisional workspace" "stale workspace"; else pass "G4c: timed-out jj add cleans provisional workspace"; fi
 if [ "$JJ_TIMEOUT_MS" -lt 3000 ]; then pass "G4c: jj setup obeys the invocation deadline"; else fail "G4c: jj setup obeys the invocation deadline" "elapsed=${JJ_TIMEOUT_MS}ms"; fi
+
+# G4d: the shared call-counter lock cannot outlive the tree deadline.
+COUNTER_FILE="$TEST_TMP/deadline-lock.counter"
+mkdir "${COUNTER_FILE}.lock"
+START_NS=$(python3 -c 'import time; print(time.monotonic_ns())')
+set +e
+OUTPUT=$(CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_TIMEOUT=1 RLM_JJ=0 RLM_CALL_COUNTER_FILE="$COUNTER_FILE" rlm_query "Bound counter lock" 2>&1)
+COUNTER_TIMEOUT_RC=$?
+set -e
+END_NS=$(python3 -c 'import time; print(time.monotonic_ns())')
+COUNTER_TIMEOUT_MS=$(( (END_NS - START_NS) / 1000000 ))
+rm -rf "${COUNTER_FILE}.lock"
+assert_eq "G4d: counter lock timeout exits 124" "124" "$COUNTER_TIMEOUT_RC"
+assert_contains "G4d: counter lock timeout is explicit" "Timeout exceeded while waiting for call counter lock" "$OUTPUT"
+if [ "$COUNTER_TIMEOUT_MS" -lt 2500 ]; then pass "G4d: counter allocation obeys the tree deadline"; else fail "G4d: counter allocation obeys the tree deadline" "elapsed=${COUNTER_TIMEOUT_MS}ms"; fi
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -549,6 +566,46 @@ else
     fail "G11d: CLI cancellation terminates child and exits 130" "cancellation probe failed"
 fi
 
+# G11d2: a descendant that closes inherited stdio and ignores SIGTERM must
+# still receive the scheduled process-group SIGKILL after the leader exits.
+cat > "$MOCK_BIN/pi" << 'DESCENDANTPI'
+#!/bin/bash
+(
+  trap '' TERM
+  exec </dev/null >/dev/null 2>&1
+  while :; do sleep 30; done
+) &
+printf '%s\n' "$!" > "$YPI_DESCENDANT_PID_FILE"
+printf '%s\n' "$$" > "$YPI_FAKE_PID_FILE"
+sleep 30
+DESCENDANTPI
+chmod +x "$MOCK_BIN/pi"
+if RLM_QUERY_PATH="$RLM_QUERY" TEST_CONTEXT="$TEST_TMP/ctx.txt" TEST_COUNTER="$TEST_TMP/descendant-cancel.counter" TEST_PID_FILE="$TEST_TMP/descendant-parent.pid" TEST_DESC_FILE="$TEST_TMP/descendant.pid" python3 <<'PY'
+import os, signal, subprocess, time
+env=os.environ.copy()
+env.update({"CONTEXT":os.environ["TEST_CONTEXT"],"RLM_DEPTH":"0","RLM_MAX_DEPTH":"3","RLM_JSON":"0","RLM_JJ":"0","RLM_SHARED_SESSIONS":"0","RLM_CALL_COUNTER_FILE":os.environ["TEST_COUNTER"],"RLM_TRACE_ID":"descendant-cancel","YPI_FAKE_PID_FILE":os.environ["TEST_PID_FILE"],"YPI_DESCENDANT_PID_FILE":os.environ["TEST_DESC_FILE"]})
+p=subprocess.Popen([os.environ["RLM_QUERY_PATH"],"Cancel descendant group?"],env=env,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+for _ in range(100):
+    if os.path.exists(os.environ["TEST_DESC_FILE"]): break
+    time.sleep(.02)
+assert os.path.exists(os.environ["TEST_DESC_FILE"]),"descendant pid not recorded"
+descendant=int(open(os.environ["TEST_DESC_FILE"]).read())
+p.send_signal(signal.SIGINT)
+p.communicate(timeout=6)
+assert p.returncode==130,p.returncode
+try:
+    os.kill(descendant,0)
+except ProcessLookupError:
+    pass
+else:
+    raise AssertionError(f"SIGTERM-ignoring descendant still alive: {descendant}")
+PY
+then
+    pass "G11d2: cancellation escalates against surviving process-group descendants"
+else
+    fail "G11d2: cancellation escalates against surviving process-group descendants" "descendant cancellation probe failed"
+fi
+
 # G11e: the thin CLI does not invent a trailing newline that the child did not
 # emit; byte presentation remains pipe-compatible with the retained CLI.
 cat > "$MOCK_BIN/pi" << 'BYTESPI'
@@ -568,6 +625,25 @@ then
     pass "G11e: CLI preserves exact child stdout bytes"
 else
     fail "G11e: CLI preserves exact child stdout bytes" "byte probe failed"
+fi
+
+cat > "$MOCK_BIN/pi" << 'FULLSTREAMPI'
+#!/bin/bash
+python3 -c 'import sys; sys.stdout.write("A" * 100000)'
+FULLSTREAMPI
+chmod +x "$MOCK_BIN/pi"
+if RLM_QUERY_PATH="$RLM_QUERY" TEST_CONTEXT="$TEST_TMP/ctx.txt" TEST_COUNTER="$TEST_TMP/full-stream.counter" python3 <<'PY'
+import os, subprocess
+env=os.environ.copy()
+env.update({"CONTEXT":os.environ["TEST_CONTEXT"],"RLM_DEPTH":"0","RLM_MAX_DEPTH":"3","RLM_JSON":"0","RLM_JJ":"0","RLM_SHARED_SESSIONS":"0","RLM_CALL_COUNTER_FILE":os.environ["TEST_COUNTER"],"RLM_TRACE_ID":"full-stream"})
+r=subprocess.run([os.environ["RLM_QUERY_PATH"],"Full stream?"],env=env,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+assert r.returncode==0,(r.returncode,r.stderr[-500:])
+assert len(r.stdout)==100000,len(r.stdout)
+PY
+then
+    pass "G11e2: CLI streams bytes beyond the retained answer cap"
+else
+    fail "G11e2: CLI streams bytes beyond the retained answer cap" "full stream probe failed"
 fi
 
 # G11f: downstream pipe closure is handled as normal pipeline termination; it
@@ -1060,7 +1136,7 @@ echo "PI_OFFLINE=${PI_OFFLINE:-unset}"
 MOCK_PI
 chmod +x "$MOCK_BIN/pi"
 
-# G34: children keep normal Pi package discovery by default and still load ypi explicitly
+# G34: children isolate ambient extension copies by default and load only exact ypi; non-extension discovery remains enabled
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
@@ -1068,9 +1144,15 @@ OUTPUT=$(
     RLM_PROVIDER=test RLM_MODEL=test \
     rlm_query "Extensions default test"
 )
-assert_not_contains "G34: ambient extension discovery enabled by default" "--no-extensions" "$OUTPUT"
+assert_contains "G34: ambient extension copies disabled by default" "--no-extensions" "$OUTPUT"
 assert_not_contains "G34: skill discovery enabled by default" "--no-skills" "$OUTPUT"
 assert_contains "G34: ypi extension explicitly loaded" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
+OUTPUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
+    YPI_EXTENSION_PATH="$PROJECT_DIR/extensions/recursive.ts" RLM_AMBIENT_EXTENSIONS=1 \
+    RLM_PROVIDER=test RLM_MODEL=test rlm_query "Ambient extension compatibility"
+)
+assert_not_contains "G34b: ambient extension compatibility is explicit" "--no-extensions" "$OUTPUT"
 
 # G35: RLM_EXTENSIONS=0 disables even ypi's explicit extension
 OUTPUT=$(
@@ -1084,7 +1166,7 @@ OUTPUT=$(
 assert_contains "G35: RLM_EXTENSIONS=0 disables" "--no-extensions" "$OUTPUT"
 assert_not_contains "G35: no explicit extension when disabled" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
 
-# G36: max depth nodes still keep Pi package discovery and get ypi's explicit extension by default
+# G36: max depth nodes keep the exact ypi extension while ambient copies stay disabled
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=2 RLM_MAX_DEPTH=3 \
@@ -1092,7 +1174,7 @@ OUTPUT=$(
     RLM_PROVIDER=test RLM_MODEL=test \
     rlm_query "Max depth extensions test"
 )
-assert_not_contains "G36: max depth keeps ambient extension discovery" "--no-extensions" "$OUTPUT"
+assert_contains "G36: max depth disables ambient extension copies" "--no-extensions" "$OUTPUT"
 assert_contains "G36: max depth has ypi extension" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
 
 # G37: RLM_CHILD_EXTENSIONS=0 disables root-to-child extension loading
@@ -1128,7 +1210,8 @@ OUTPUT=$(
 )
 assert_contains "G38b: child discovery off disables non-extension skills" "--no-skills" "$OUTPUT"
 assert_contains "G38b: child discovery off disables context files" "--no-context-files" "$OUTPUT"
-assert_not_contains "G38b: child discovery off does not disable extensions" "--no-extensions" "$OUTPUT"
+assert_contains "G38b: child discovery off retains canonical-only extension mode" "--no-extensions" "$OUTPUT"
+assert_contains "G38b: child discovery off still loads exact ypi" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
 
 # G38c: combine child discovery and extension opt-outs for full package/resource isolation
 OUTPUT=$(
@@ -1144,7 +1227,6 @@ assert_contains "G38c: full child isolation disables extensions" "--no-extension
 assert_contains "G38c: full child isolation disables non-extension skills" "--no-skills" "$OUTPUT"
 assert_not_contains "G38c: full child isolation avoids explicit ypi extension" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
 assert_not_contains "G38c: full isolation replaces the ambient Pi agent root" "PI_CODING_AGENT_DIR=unset" "$OUTPUT"
-assert_not_contains "G38c: full isolation replaces the ambient package root" "PI_PACKAGE_DIR=unset" "$OUTPUT"
 assert_contains "G38c: full isolation prevents package installation" "PI_OFFLINE=1" "$OUTPUT"
 
 
@@ -1573,13 +1655,14 @@ ROOTSNAPPI
 #!/bin/bash
 printf '%s\n' "$$" > "$RLM_ASYNC_TEST_PID_FILE"
 sleep 30 &
-printf '%s\n' "$!" > "${RLM_ASYNC_TEST_PID_FILE}.descendant"
+printf '%s\n' "$!" > "$RLM_ASYNC_TEST_DESC_PID_FILE"
 wait
 ASYNCANCELPI
     chmod +x "$MOCK_BIN/pi"
     JOB=$(
         CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=0 RLM_JSON=0 \
         RLM_ASYNC_TEST_PID_FILE="$TEST_TMP/async-child.pid" \
+        RLM_ASYNC_TEST_DESC_PID_FILE="$TEST_TMP/async-child.pid.descendant" \
         RLM_TRACE_ID="async_cancel_$$" RLM_CALL_COUNTER_FILE="$TEST_TMP/async_cancel.counter" \
         rlm_query --async "Cancel worker and child" 2>/dev/null
     )
@@ -1599,6 +1682,28 @@ ASYNCANCELPI
         fail "G53f: async cancellation leaves no child process group" "child=$ASYNC_CHILD_PID descendant=$ASYNC_DESC_PID"
     else
         pass "G53f: async cancellation leaves no child process group"
+    fi
+
+    if RLM_QUERY_PATH="$RLM_QUERY" TEST_CONTEXT="$TEST_TMP/ctx.txt" TEST_COUNTER="$TEST_TMP/async-epipe.counter" python3 <<'PY'
+import os, subprocess, time
+counter=os.environ['TEST_COUNTER']
+os.mkdir(counter+'.lock')
+env=os.environ.copy()
+env.update({'CONTEXT':os.environ['TEST_CONTEXT'],'RLM_DEPTH':'0','RLM_MAX_DEPTH':'3','RLM_JSON':'0','RLM_JJ':'0','RLM_SHARED_SESSIONS':'0','RLM_TRACE_ID':'async-epipe','RLM_CALL_COUNTER_FILE':counter})
+p=subprocess.Popen([os.environ['RLM_QUERY_PATH'],'--async','Closed metadata reader'],env=env,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+assert p.stdout is not None
+p.stdout.close()
+time.sleep(.2)
+os.rmdir(counter+'.lock')
+stderr=p.stderr.read() if p.stderr else b''
+rc=p.wait(timeout=8)
+assert rc==0,(rc,stderr[-500:])
+assert b'EPIPE' not in stderr,stderr[-500:]
+PY
+    then
+        pass "G53g: async acknowledgement EPIPE cancels cleanly"
+    else
+        fail "G53g: async acknowledgement EPIPE cancels cleanly" "metadata pipe probe failed"
     fi
 
     cat > "$MOCK_BIN/pi" << 'NASTYPI'

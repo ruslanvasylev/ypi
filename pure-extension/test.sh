@@ -80,7 +80,7 @@ env -u RLM_PROVIDER -u RLM_MODEL -u RLM_CALL_COUNT -u RLM_START_TIME -u RLM_ROOT
 	RLM_JJ=0 \
 	RLM_JSON=1 \
 	PI_TRACE_FILE="$TRACE" \
-	timeout 120 pi -p --no-session \
+	timeout 120 pi -p --no-session --no-extensions \
 		--provider "$PI_E2E_PROVIDER" \
 		${PI_E2E_MODEL:+--model "$PI_E2E_MODEL"} \
 		-e "$EXTENSION" \

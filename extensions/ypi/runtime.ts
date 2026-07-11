@@ -25,8 +25,8 @@ export function resolveRuntime(importMetaUrl: string): YpiRuntime {
 	const defaultRoot = path.resolve(extensionDir, "..");
 	const configuredRoot = process.env.YPI_EXTENSION_ROOT;
 	const configuredExtension = process.env.YPI_EXTENSION_PATH;
-	const configuredExtensionMatches = !configuredExtension
-		|| normalizedPath(configuredExtension) === normalizedPath(extensionPath);
+	const configuredExtensionMatches = Boolean(configuredExtension)
+		&& normalizedPath(configuredExtension!) === normalizedPath(extensionPath);
 	// A long-lived parent ypi can leave root/path hints in the ambient environment.
 	// Honor them only when they describe this exact loaded extension; an explicit
 	// `pi -e /other/package/extensions/recursive.ts` must own its package root.

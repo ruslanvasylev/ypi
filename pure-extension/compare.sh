@@ -93,7 +93,7 @@ run_case "pure-extension" "PURE_COMPARE_OK" \
 		YPI_EXTENSION_PATH="$EXTENSION" \
 		YPI_EXTENSION_DEBUG=0 \
 		YPI_SHELL_HELPER=1 \
-		timeout 120 pi -p --no-session \
+		timeout 120 pi -p --no-session --no-extensions \
 		--provider "$PI_E2E_PROVIDER" --model "$PI_E2E_MODEL" \
 		-e "$EXTENSION"
 

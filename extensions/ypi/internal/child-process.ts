@@ -16,6 +16,7 @@ export interface ChildProcessOptions {
 	timeoutSeconds?: number;
 	signal?: AbortSignal;
 	jsonMode: boolean;
+	stdinText?: string;
 	onText?: (text: string) => boolean | void;
 	onTextDrain?: () => Promise<void>;
 	onSpawn?: (pid: number) => void;
@@ -39,10 +40,16 @@ export function runChildProcess(options: ChildProcessOptions): Promise<ChildProc
 		const child = spawn(process.env.YPI_PI_BIN || "pi", options.args, {
 			cwd: options.cwd,
 			env: options.env,
-			stdio: ["ignore", "pipe", "pipe"],
+			stdio: ["pipe", "pipe", "pipe"],
 			detached: process.platform !== "win32",
 		});
 		if (child.pid) options.onSpawn?.(child.pid);
+		// Pi's non-interactive stdin path preserves the exact task without CLI
+		// option parsing, @file wrappers, or ARG_MAX exposure.
+		child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+			if (error.code !== "EPIPE") reject(error);
+		});
+		child.stdin.end(options.stdinText ?? "");
 		let stdoutCharacters = 0;
 		const rawStderr = createBoundedCapture(MAX_TOOL_OUTPUT_CHARS);
 		const plainText = createBoundedCapture(MAX_TOOL_OUTPUT_CHARS);
@@ -69,8 +76,8 @@ export function runChildProcess(options: ChildProcessOptions): Promise<ChildProc
 			stdoutCharacters += chunk.length;
 			if (options.jsonMode) applyBackpressure(jsonDecoder.append(chunk));
 			else {
-				const accepted = plainText.append(chunk);
-				if (accepted) applyBackpressure(options.onText?.(accepted));
+				plainText.append(chunk);
+				if (chunk) applyBackpressure(options.onText?.(chunk));
 			}
 		});
 		child.stderr.on("data", (chunk: string) => rawStderr.append(chunk));
@@ -91,15 +98,18 @@ export function runChildProcess(options: ChildProcessOptions): Promise<ChildProc
 			}, 1500);
 		};
 		const abortHandler = () => killChild("abort");
-		const cleanup = () => {
+		const cleanup = (preserveKillEscalation = false) => {
 			options.signal?.removeEventListener("abort", abortHandler);
-			if (killTimer) clearTimeout(killTimer);
+			if (killTimer && !preserveKillEscalation) clearTimeout(killTimer);
 			if (timeoutTimer) clearTimeout(timeoutTimer);
 		};
 
 		child.on("error", (error) => { cleanup(); reject(error); });
 		child.on("close", (code, childSignal) => {
-			cleanup();
+			// The direct child can close its inherited stdio while a descendant in
+			// the detached group ignores SIGTERM. Keep the scheduled group SIGKILL
+			// alive through the grace window instead of clearing it on leader exit.
+			cleanup(terminating);
 			jsonDecoder.finish();
 			const json = jsonDecoder.result();
 			resolve({

@@ -114,7 +114,12 @@ function createWorkspace(input: ChildResourceInput): WorkspaceLease {
 	const workspaceSuffix = path.basename(workspacePath).replace(/^ypi_ws_/, "");
 	const name = `ypi-d${depth}-${process.pid}-${workspaceSuffix}`;
 	const add = spawnSync("jj", ["workspace", "add", "--name", name, workspacePath], { cwd, stdio: "ignore", timeout: remainingSetupMilliseconds(input) });
-	assertSpawnWithinDeadline(add, "jj workspace add");
+	try {
+		assertSpawnWithinDeadline(add, "jj workspace add");
+	} catch (error) {
+		rmSync(workspacePath, { recursive: true, force: true });
+		throw error;
+	}
 	if (add.status !== 0) {
 		rmSync(workspacePath, { recursive: true, force: true });
 		return unavailableWorkspace(cwd, "jj workspace add failed");
@@ -163,7 +168,6 @@ export function acquireChildResources(input: ChildResourceInput): ChildResourceL
 		if (input.fullResourceIsolation) {
 			isolatedPiRoot = mkdtempSync(path.join(tmpdir(), "ypi_isolated_pi_"));
 			mkdirSync(path.join(isolatedPiRoot, "agent"), { recursive: true, mode: 0o700 });
-			mkdirSync(path.join(isolatedPiRoot, "packages"), { recursive: true, mode: 0o700 });
 		}
 		const childSession = childSessionFile(input);
 		copyForkSession(input, childSession);

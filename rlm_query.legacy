@@ -85,6 +85,11 @@ with_counter_lock() {
     mkdir -p "$(dirname "$counter_file")"
     until mkdir "$lock_dir" 2>/dev/null; do
         attempts=$((attempts + 1))
+        if [ -n "${RLM_TIMEOUT:-}" ] && [ -n "${RLM_START_TIME:-}" ] \
+           && [ $(( $(date +%s) - RLM_START_TIME )) -ge "$RLM_TIMEOUT" ]; then
+            rlm_error "Timeout exceeded" "RLM_TIMEOUT expired while waiting for $lock_dir" "Use a fresh counter ledger or increase RLM_TIMEOUT"
+            exit 124
+        fi
         if [ "$attempts" -gt 500 ]; then
             rlm_error "Call counter lock timed out" "$lock_dir stayed locked" "Remove stale *.lock directories in ${TMPDIR:-/tmp}"
             exit 1
@@ -534,7 +539,7 @@ if [ "$ASYNC" = true ]; then
     (umask 077; : > "$ASYNC_OUTPUT")
 
     # Build the full command
-    CHILD_CMD=(env -i "${CHILD_ENV[@]}" "${TIMEOUT_PREFIX[@]}" "$PI_BIN" "${CMD_ARGS[@]}" "@$PROMPT_FILE")
+    CHILD_CMD=(env -i "${CHILD_ENV[@]}" "${TIMEOUT_PREFIX[@]}" "$PI_BIN" "${CMD_ARGS[@]}")
 
     # Spawn in background: run child, capture output, touch sentinel, optionally notify.
     # The whole worker closes inherited stdio so command substitution such as
@@ -553,7 +558,7 @@ if [ "$ASYNC" = true ]; then
         trap cleanup_async_resources EXIT
 
         set +e
-        "${CHILD_CMD[@]}" > "$ASYNC_OUTPUT" 2>&1
+        "${CHILD_CMD[@]}" < "$PROMPT_FILE" > "$ASYNC_OUTPUT" 2>&1
         CHILD_RC=$?
         set -e
         # Existence remains backward compatible; the child exit code gives new
@@ -637,7 +642,7 @@ if [ "${RLM_JSON:-1}" != "0" ]; then
     PARSER="$SCRIPT_DIR/rlm_parse_json"
 
     set +e
-    env -i "${CHILD_ENV[@]}" "${TIMEOUT_PREFIX[@]}" "$PI_BIN" "${JSON_CMD_ARGS[@]}" "@$PROMPT_FILE" 2>"$ERR_OUT" | python3 "$PARSER" 3>"$COST_OUT"
+    env -i "${CHILD_ENV[@]}" "${TIMEOUT_PREFIX[@]}" "$PI_BIN" "${JSON_CMD_ARGS[@]}" < "$PROMPT_FILE" 2>"$ERR_OUT" | python3 "$PARSER" 3>"$COST_OUT"
     PIPE_STATUS=("${PIPESTATUS[@]}")
     set -e
     RC="${PIPE_STATUS[0]}"
@@ -666,7 +671,7 @@ if [ "${RLM_JSON:-1}" != "0" ]; then
 else
     # Plain text mode (RLM_JSON=0): no cost tracking
     set +e
-    env -i "${CHILD_ENV[@]}" "${TIMEOUT_PREFIX[@]}" "$PI_BIN" "${CMD_ARGS[@]}" "@$PROMPT_FILE"
+    env -i "${CHILD_ENV[@]}" "${TIMEOUT_PREFIX[@]}" "$PI_BIN" "${CMD_ARGS[@]}" < "$PROMPT_FILE"
     RC=$?
     set -e
 

@@ -69,7 +69,7 @@ STDERR_FILE="$TEST_TMP/ext1_stderr.txt"
 STDOUT_FILE="$TEST_TMP/ext1_stdout.txt"
 
 # Run a minimal prompt with the canonical ypi extension
-timeout 30 pi -p --no-session "${PI_E2E_ARGS[@]}" \
+timeout 30 pi -p --no-session --no-extensions "${PI_E2E_ARGS[@]}" \
     -e "$PROJECT_DIR/extensions/recursive.ts" \
     "Reply with exactly: EXTENSION_TEST_OK" \
     >"$STDOUT_FILE" 2>"$STDERR_FILE" || true

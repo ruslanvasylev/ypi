@@ -82,8 +82,9 @@ export function createJsonDecoder(onText?: (text: string) => boolean | void): Js
 		try {
 			const event = JSON.parse(line);
 			if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") {
-				const accepted = text.append(String(event.assistantMessageEvent.delta || ""));
-				if (accepted && onText?.(accepted) === false) keepFlowing = false;
+				const delta = String(event.assistantMessageEvent.delta || "");
+				text.append(delta);
+				if (delta && onText?.(delta) === false) keepFlowing = false;
 			}
 			if (event.type === "turn_end") {
 				sawTurnEnd = true;

@@ -102,6 +102,25 @@ function cliErrorText(error: unknown): string {
 	return `✗ ${firstLine}\n  Why: the canonical recursion runtime rejected the request or the child failed\n  Fix: inspect the remaining error text, configuration, and child output\n${message}`;
 }
 
+function writeStdout(text: string): Promise<void> {
+	return new Promise((resolve, reject) => {
+		let settled = false;
+		const onError = (error: Error) => {
+			if (settled) return;
+			settled = true;
+			process.stdout.removeListener("error", onError);
+			reject(error);
+		};
+		process.stdout.once("error", onError);
+		process.stdout.write(text, () => {
+			if (settled) return;
+			settled = true;
+			process.stdout.removeListener("error", onError);
+			resolve();
+		});
+	});
+}
+
 function errorExitCode(error: unknown): number {
 	if (error instanceof RecursiveChildError) return error.exitCode;
 	if (typeof error === "object" && error !== null && "exitCode" in error && typeof error.exitCode === "number") return error.exitCode;
@@ -211,7 +230,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
 				pid = launchAsyncWorker(job, fileURLToPath(import.meta.url));
 				await waitForAsyncAdmission(job, 30_000, controller.signal);
 				if (controller.signal.aborted) throw new Error("Async recursion acknowledgement cancelled");
-				process.stdout.write(`${JSON.stringify({
+				await writeStdout(`${JSON.stringify({
 					job_id: path.basename(path.dirname(job.jobPath)),
 					output: job.outputPath,
 					sentinel: job.sentinelPath,
@@ -226,7 +245,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
 						await waitForAsyncTerminal(job, 1_000);
 					}
 					discardAsyncJob(job);
-					return signalExitCode;
+					return brokenPipe ? 0 : signalExitCode;
 				}
 				if (job) discardAsyncJob(job, pid);
 				console.error(cliErrorText(error));

@@ -355,14 +355,18 @@ function parsePiJsonOutput(stdout: string): ParsedJsonOutput {
 	return { text, cost: { cost, tokens } };
 }
 
-function spawnChildPi(args: string[], env: NodeJS.ProcessEnv, cwd: string, timeoutSeconds: number | undefined, signal?: AbortSignal): Promise<NativeRunResult> {
+function spawnChildPi(args: string[], env: NodeJS.ProcessEnv, cwd: string, prompt: string, timeoutSeconds: number | undefined, signal?: AbortSignal): Promise<NativeRunResult> {
 	return new Promise((resolve, reject) => {
 		const child = spawn(process.env.YPI_PI_BIN || "pi", args, {
 			cwd,
 			env,
-			stdio: ["ignore", "pipe", "pipe"],
+			stdio: ["pipe", "pipe", "pipe"],
 			detached: process.platform !== "win32",
 		});
+		child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+			if (error.code !== "EPIPE") reject(error);
+		});
+		child.stdin.end(prompt);
 
 		const stdout = createBoundedCapture();
 		const stderr = createBoundedCapture();
@@ -474,10 +478,11 @@ export function registerLegacyNativeRlmQueryTool(pi: ExtensionAPI, runtime: YpiR
 				process.env.RLM_START_TIME = String(Math.floor(Date.now() / 1000));
 			}
 
-			const callCount = await allocateCallCount();
+			const timeoutSeconds = assertTimeoutAvailable();
+			const counterDeadlineMilliseconds = timeoutSeconds === undefined ? undefined : Date.now() + timeoutSeconds * 1000;
+			const callCount = await allocateCallCount(counterDeadlineMilliseconds);
 			assertWithinMaxCalls(callCount);
 			assertBudgetAvailable();
-			const timeoutSeconds = assertTimeoutAvailable();
 			const promptFile = createPromptFile(params.prompt);
 			const contextFile = createContextFile(params);
 			const { provider, model, thinkingLevel } = providerModel(ctx, childDepth, pi.getThinkingLevel());
@@ -525,13 +530,12 @@ export function registerLegacyNativeRlmQueryTool(pi: ExtensionAPI, runtime: YpiR
 			} else if (existsSync(runtime.extensionPath)) {
 				args.push("-e", runtime.extensionPath);
 			}
-			args.push(`@${promptFile}`);
 
 			trace(`[${nowTraceTime()}] depth=${depth}→${childDepth} PID=${process.pid} call=${callCount} trace=${process.env.RLM_TRACE_ID || ""} caller=tool jj=${workspace.mode} prompt: ${params.prompt.slice(0, 120)}`);
 
 			try {
 				const started = Date.now();
-				const result = await spawnChildPi(args, env, workspace.cwd, timeoutSeconds, signal);
+				const result = await spawnChildPi(args, env, workspace.cwd, params.prompt, timeoutSeconds, signal);
 				const elapsed = Math.max(0, Math.round((Date.now() - started) / 1000));
 				trace(`[${new Date().toISOString()}] depth=${depth} COMPLETED exit=${result.code} elapsed=${elapsed}s caller=tool`);
 				const parsed = jsonMode ? parsePiJsonOutput(result.stdout) : undefined;
@@ -557,6 +561,7 @@ export function registerLegacyNativeRlmQueryTool(pi: ExtensionAPI, runtime: YpiR
 				return {
 					content: [{ type: "text" as const, text }],
 					details: {
+						implementation: "legacy",
 						depth,
 						childDepth,
 						maxDepth: limit,

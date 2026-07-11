@@ -199,8 +199,9 @@ if [ -n "$SESSION_DIR_OVERRIDE" ] && [ -z "${RLM_SESSION_DIR:-}" ]; then
     export RLM_SESSION_DIR="$SESSION_DIR_OVERRIDE"
 fi
 
-# Launch Pi with the canonical recursive extension. User's own extensions are
-# still discovered by Pi; this one is explicit so ypi is always active.
+# Launch Pi with exactly the canonical recursive extension by default. Pi has
+# no API for unregistering an older ambient ypi copy, so ambient extension
+# discovery is an explicit compatibility opt-in rather than a silent conflict.
 PI_ARGV=("$PI_BIN")
 if [ "$HAS_PROVIDER" = false ] && [ -n "${RLM_PROVIDER:-}" ]; then
     PI_ARGV+=(--provider "$RLM_PROVIDER")
@@ -215,6 +216,9 @@ elif [ "$HAS_MODEL" = true ]; then
     # Explicit CLI model should win for both root and recursive children.
     # The extension will seed RLM_MODEL from Pi's active root model.
     unset RLM_MODEL
+fi
+if [ "${RLM_AMBIENT_EXTENSIONS:-0}" != "1" ]; then
+    PI_ARGV+=(--no-extensions)
 fi
 PI_ARGV+=(-e "$YPI_EXTENSION")
 [ ${#PASS_ARGS[@]} -gt 0 ] && PI_ARGV+=("${PASS_ARGS[@]}")

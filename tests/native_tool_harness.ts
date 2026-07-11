@@ -93,6 +93,18 @@ elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "huge" ]; then
 elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "json" ]; then
   printf '%s\\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"JSON_CHILD_OK"}}'
   printf '%s\\n' '{"type":"turn_end","message":{"usage":{"totalTokens":7,"cost":{"total":0.123}}},"toolResults":[]}'
+elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "json-cost-then-sleep" ]; then
+  printf '%s\\n' '{"type":"turn_end","message":{"usage":{"totalTokens":5,"cost":{"total":0.25}}},"toolResults":[]}'
+  printf '%s\\n' "$$" > "$YPI_FAKE_PID_FILE"
+  sleep 30
+elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "json-long-text" ]; then
+  python3 - <<'PY'
+import json
+for _ in range(100):
+    print(json.dumps({"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"X"*1000}}))
+print(json.dumps({"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"END_PROGRESS"}}))
+print(json.dumps({"type":"turn_end","message":{"usage":{"totalTokens":9,"cost":{"total":0.2}}},"toolResults":[]}))
+PY
 elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "json-no-turn-end" ]; then
   printf '%s\\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"PARTIAL_ONLY"}}'
   exit 42
@@ -340,7 +352,7 @@ async function run(): Promise<void> {
 	process.env.RLM_JSON = "0";
 	ensureEnvironment(runtime, context());
 	await invoke();
-	assertNotContains("N8: ambient extension discovery is enabled by default", readLog(), "--no-extensions");
+	assertContains("N8: ambient extension copies are disabled by default", readLog(), "--no-extensions");
 	assertNotContains("N8: skill discovery is enabled by default", readLog(), "--no-skills");
 	assertContains("N8: ypi extension remains explicit", readLog(), `-e ${runtime.extensionPath}`);
 
@@ -367,7 +379,8 @@ async function run(): Promise<void> {
 	await invoke();
 	assertContains("N8c: child discovery override disables non-extension skill discovery", readLog(), "--no-skills");
 	assertContains("N8c: child discovery override disables context files", readLog(), "--no-context-files");
-	assertNotContains("N8c: child discovery override keeps extensions enabled", readLog(), "--no-extensions");
+	assertContains("N8c: child discovery override keeps canonical-only extension mode", readLog(), "--no-extensions");
+	assertContains("N8c: child discovery override still loads exact ypi", readLog(), `-e ${runtime.extensionPath}`);
 
 	clearYpiEnv();
 	resetLog();
@@ -412,6 +425,20 @@ async function run(): Promise<void> {
 	assertContains("N10: native onUpdate receives bounded child progress", progressUpdates.join("\n"), "JSON_CHILD_OK");
 	const costFile = process.env.RLM_COST_FILE || "";
 	assertContains("N10: JSON child cost recorded", existsSync(costFile) ? readFileSync(costFile, "utf8") : "", '"cost":0.123');
+
+	clearYpiEnv();
+	resetLog();
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	process.env.RLM_BUDGET = "1";
+	process.env.YPI_FAKE_PI_MODE = "json-long-text";
+	ensureEnvironment(runtime, context());
+	const longProgressUpdates: string[] = [];
+	const longText = await invoke("long progress", undefined, (update) => {
+		longProgressUpdates.push(update.content?.find((item: any) => item.type === "text")?.text || "");
+	});
+	assertContains("N10a: native progress continues beyond final answer cap", longProgressUpdates.at(-1) || "", "END_PROGRESS");
+	record(longText.length < 70_000, "N10a: final native result remains bounded");
 
 	// N10b: diagnostic capture may be bounded, but the incremental JSON decoder
 	// must still see late answer and cost events after an oversized tool event.
@@ -507,6 +534,25 @@ async function run(): Promise<void> {
 		try { process.kill(childPid, 0); childAlive = true; } catch { /* expected */ }
 	}
 	record(!childAlive, "N13b: cancelled child process is gone", `pid=${childPid}`);
+
+	clearYpiEnv();
+	resetLog();
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	process.env.RLM_BUDGET = "20";
+	process.env.YPI_FAKE_PI_MODE = "json-cost-then-sleep";
+	process.env.YPI_FAKE_PID_FILE = path.join(scratch, "cost-cancel.pid");
+	ensureEnvironment(runtime, context());
+	const costCancelController = new AbortController();
+	const costCancelled = invoke("cancel after partial cost", costCancelController.signal);
+	for (let attempt = 0; attempt < 100 && !existsSync(process.env.YPI_FAKE_PID_FILE); attempt++) {
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	costCancelController.abort();
+	await expectThrow("N13c: cancellation after turn_end is explicit", "Child Pi cancelled", () => costCancelled);
+	const cancelledCostLedger = readFileSync(process.env.RLM_COST_FILE || "", "utf8");
+	assertContains("N13c: known pre-cancel cost remains recorded", cancelledCostLedger, '"cost":0.25');
+	assertContains("N13c: cancellation marks final cost boundary incomplete", cancelledCostLedger, '"incomplete":true');
 
 	// N14: convergence keeps the incumbent native implementation available as
 	// an explicit one-release fallback; it is retained, not silently removed.

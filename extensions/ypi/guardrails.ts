@@ -31,13 +31,20 @@ function readCounter(filePath: string): number {
 	return exactNonNegativeInteger("RLM_CALL_COUNT/counter", raw);
 }
 
-export async function allocateCallCount(): Promise<number> {
+export async function allocateCallCount(deadlineMilliseconds?: number): Promise<number> {
+	const remaining = deadlineMilliseconds === undefined ? remainingTimeoutSeconds() : undefined;
+	const deadline = deadlineMilliseconds ?? (remaining === undefined ? undefined : Date.now() + Math.max(0, remaining * 1000));
 	const counterFile = process.env.RLM_CALL_COUNTER_FILE || path.join(tmpdir(), "rlm_calls_default.counter");
 	process.env.RLM_CALL_COUNTER_FILE = counterFile;
 	const lockDir = `${counterFile}.lock`;
 	mkdirSync(path.dirname(counterFile), { recursive: true });
 
 	for (let attempt = 0; attempt < LOCK_RETRIES; attempt++) {
+		if (deadline !== undefined && Date.now() >= deadline) {
+			const error = new Error(`Timeout exceeded while waiting for call counter lock: ${lockDir}`) as Error & { exitCode: number };
+			error.exitCode = 124;
+			throw error;
+		}
 		try {
 			mkdirSync(lockDir);
 			try {

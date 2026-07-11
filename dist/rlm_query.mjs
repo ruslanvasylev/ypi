@@ -24,7 +24,7 @@ function resolveRuntime(importMetaUrl) {
   const defaultRoot = path.resolve(extensionDir, "..");
   const configuredRoot = process.env.YPI_EXTENSION_ROOT;
   const configuredExtension = process.env.YPI_EXTENSION_PATH;
-  const configuredExtensionMatches = !configuredExtension || normalizedPath(configuredExtension) === normalizedPath(extensionPath);
+  const configuredExtensionMatches = Boolean(configuredExtension) && normalizedPath(configuredExtension) === normalizedPath(extensionPath);
   const root = path.resolve(configuredRoot && configuredExtensionMatches ? configuredRoot : defaultRoot);
   return {
     extensionPath,
@@ -167,12 +167,19 @@ function readCounter(filePath) {
   const raw = existsSync3(filePath) ? readFileSync(filePath, "utf8").trim() || "0" : process.env.RLM_CALL_COUNT || "0";
   return exactNonNegativeInteger2("RLM_CALL_COUNT/counter", raw);
 }
-async function allocateCallCount() {
+async function allocateCallCount(deadlineMilliseconds) {
+  const remaining = deadlineMilliseconds === undefined ? remainingTimeoutSeconds() : undefined;
+  const deadline = deadlineMilliseconds ?? (remaining === undefined ? undefined : Date.now() + Math.max(0, remaining * 1000));
   const counterFile = process.env.RLM_CALL_COUNTER_FILE || path3.join(tmpdir2(), "rlm_calls_default.counter");
   process.env.RLM_CALL_COUNTER_FILE = counterFile;
   const lockDir = `${counterFile}.lock`;
   mkdirSync2(path3.dirname(counterFile), { recursive: true });
   for (let attempt = 0;attempt < LOCK_RETRIES; attempt++) {
+    if (deadline !== undefined && Date.now() >= deadline) {
+      const error = new Error(`Timeout exceeded while waiting for call counter lock: ${lockDir}`);
+      error.exitCode = 124;
+      throw error;
+    }
     try {
       mkdirSync2(lockDir);
       try {
@@ -745,8 +752,9 @@ function createJsonDecoder(onText) {
     try {
       const event = JSON.parse(line);
       if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") {
-        const accepted = text.append(String(event.assistantMessageEvent.delta || ""));
-        if (accepted && onText?.(accepted) === false)
+        const delta = String(event.assistantMessageEvent.delta || "");
+        text.append(delta);
+        if (delta && onText?.(delta) === false)
           keepFlowing = false;
       }
       if (event.type === "turn_end") {
@@ -851,11 +859,16 @@ function runChildProcess(options) {
     const child = spawn2(process.env.YPI_PI_BIN || "pi", options.args, {
       cwd: options.cwd,
       env: options.env,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       detached: process.platform !== "win32"
     });
     if (child.pid)
       options.onSpawn?.(child.pid);
+    child.stdin.on("error", (error) => {
+      if (error.code !== "EPIPE")
+        reject(error);
+    });
+    child.stdin.end(options.stdinText ?? "");
     let stdoutCharacters = 0;
     const rawStderr = createBoundedCapture(MAX_TOOL_OUTPUT_CHARS);
     const plainText = createBoundedCapture(MAX_TOOL_OUTPUT_CHARS);
@@ -884,9 +897,9 @@ function runChildProcess(options) {
       if (options.jsonMode)
         applyBackpressure(jsonDecoder.append(chunk));
       else {
-        const accepted = plainText.append(chunk);
-        if (accepted)
-          applyBackpressure(options.onText?.(accepted));
+        plainText.append(chunk);
+        if (chunk)
+          applyBackpressure(options.onText?.(chunk));
       }
     });
     child.stderr.on("data", (chunk) => rawStderr.append(chunk));
@@ -917,9 +930,9 @@ function runChildProcess(options) {
       }, 1500);
     };
     const abortHandler = () => killChild("abort");
-    const cleanup = () => {
+    const cleanup = (preserveKillEscalation = false) => {
       options.signal?.removeEventListener("abort", abortHandler);
-      if (killTimer)
+      if (killTimer && !preserveKillEscalation)
         clearTimeout(killTimer);
       if (timeoutTimer)
         clearTimeout(timeoutTimer);
@@ -929,7 +942,7 @@ function runChildProcess(options) {
       reject(error);
     });
     child.on("close", (code, childSignal) => {
-      cleanup();
+      cleanup(terminating);
       jsonDecoder.finish();
       const json = jsonDecoder.result();
       resolve({
@@ -973,7 +986,7 @@ function renderActiveTaskFilesSection(files) {
   const rows = [
     files.contextPath ? `- External task context: \`${markdownPath(files.contextPath)}\`` : "",
     files.promptPath ? `- Current delegated charter: \`${markdownPath(files.promptPath)}\`` : "",
-    files.rootPromptPath ? `- Root delegation charter: \`${markdownPath(files.rootPromptPath)}\`` : ""
+    files.rootPromptPath ? `- Root task charter: \`${markdownPath(files.rootPromptPath)}\`` : ""
   ].filter(Boolean).join(`
 `);
   return `
@@ -1060,7 +1073,12 @@ function createWorkspace(input) {
   const workspaceSuffix = path7.basename(workspacePath).replace(/^ypi_ws_/, "");
   const name = `ypi-d${depth}-${process.pid}-${workspaceSuffix}`;
   const add = spawnSync("jj", ["workspace", "add", "--name", name, workspacePath], { cwd, stdio: "ignore", timeout: remainingSetupMilliseconds(input) });
-  assertSpawnWithinDeadline(add, "jj workspace add");
+  try {
+    assertSpawnWithinDeadline(add, "jj workspace add");
+  } catch (error) {
+    rmSync4(workspacePath, { recursive: true, force: true });
+    throw error;
+  }
   if (add.status !== 0) {
     rmSync4(workspacePath, { recursive: true, force: true });
     return unavailableWorkspace(cwd, "jj workspace add failed");
@@ -1107,7 +1125,6 @@ function acquireChildResources(input) {
     if (input.fullResourceIsolation) {
       isolatedPiRoot = mkdtempSync3(path7.join(tmpdir5(), "ypi_isolated_pi_"));
       mkdirSync3(path7.join(isolatedPiRoot, "agent"), { recursive: true, mode: 448 });
-      mkdirSync3(path7.join(isolatedPiRoot, "packages"), { recursive: true, mode: 448 });
     }
     const childSession = childSessionFile(input);
     copyForkSession(input, childSession);
@@ -1181,8 +1198,10 @@ async function runRecursiveChild(runtime, request) {
     throw new RecursiveChildError(`Max depth exceeded at ${depth}/${limit}`, 1);
   if (depth === 0)
     process.env.RLM_START_TIME = String(request.treeStartTimeSeconds ?? Math.floor(Date.now() / 1000));
+  const counterRemainingSeconds = timeoutOrThrow();
+  const counterDeadlineMilliseconds = counterRemainingSeconds === undefined ? undefined : Date.now() + counterRemainingSeconds * 1000;
   assertWithinMaxCalls(0);
-  const callCount = await allocateCallCount();
+  const callCount = await allocateCallCount(counterDeadlineMilliseconds);
   assertWithinMaxCalls(callCount);
   assertBudgetAvailable();
   const setupRemainingSeconds = timeoutOrThrow();
@@ -1199,7 +1218,7 @@ async function runRecursiveChild(runtime, request) {
     childDepth,
     callCount,
     systemPromptPath: runtime.systemPromptPath,
-    rootPromptPath: depth === 0 ? undefined : process.env.RLM_ROOT_PROMPT_FILE,
+    rootPromptPath: process.env.RLM_ROOT_PROMPT_FILE,
     setupDeadlineMilliseconds: setupRemainingSeconds === undefined ? undefined : Date.now() + setupRemainingSeconds * 1000,
     fullResourceIsolation
   });
@@ -1226,7 +1245,6 @@ async function runRecursiveChild(runtime, request) {
       env.CONTEXT = resources.contextFile;
     if (resources.isolatedPiRoot) {
       env.PI_CODING_AGENT_DIR = path8.join(resources.isolatedPiRoot, "agent");
-      env.PI_PACKAGE_DIR = path8.join(resources.isolatedPiRoot, "packages");
       env.PI_OFFLINE = "1";
     }
     const jsonMode = process.env.RLM_JSON !== "0";
@@ -1245,13 +1263,12 @@ async function runRecursiveChild(runtime, request) {
       args.push("--session", resources.childSession);
     else
       args.push("--no-session");
-    if (!extensionsEnabled)
+    if (!extensionsEnabled || process.env.RLM_AMBIENT_EXTENSIONS !== "1")
       args.push("--no-extensions");
     if (extensionsEnabled && extensionPath && existsSync7(extensionPath))
       args.push("-e", extensionPath);
     else if (resources.standaloneSystemPromptFile)
       args.push("--system-prompt", resources.standaloneSystemPromptFile);
-    args.push(`@${resources.promptFile}`);
     const timeoutSeconds = timeoutOrThrow();
     request.onAdmitted?.(callCount);
     trace(`[${nowTraceTime()}] depth=${depth}→${childDepth} PID=${process.pid} call=${callCount} trace=${process.env.RLM_TRACE_ID || ""} caller=${request.caller} fork=${request.fork === true} jj=${resources.workspace.mode} prompt: ${request.prompt.slice(0, 120)}`);
@@ -1263,20 +1280,24 @@ async function runRecursiveChild(runtime, request) {
       timeoutSeconds,
       signal: request.signal,
       jsonMode,
+      stdinText: request.prompt,
       onText: request.onText,
       onTextDrain: request.onTextDrain,
       onSpawn: request.onChildSpawn
     });
     const elapsed = Math.max(0, Math.round((Date.now() - started) / 1000));
     const output = normalizeChildOutput(processResult);
-    if (jsonMode && !output.cost)
+    if (jsonMode && (!output.cost || processResult.cancelled || processResult.timedOut)) {
       processResult.jsonCostIncomplete = true;
-    if (processResult.jsonCostIncomplete)
-      appendIncompleteCostMarker("child exited without complete measurable turn_end cost");
-    else if (output.cost)
+    }
+    if (output.cost)
       appendCostSummary(output.cost);
+    if (processResult.jsonCostIncomplete) {
+      appendIncompleteCostMarker("child ended without a complete final cost boundary");
+    }
     trace(`[${new Date().toISOString()}] depth=${depth} child_depth=${childDepth} COMPLETED exit=${processResult.code} elapsed=${elapsed}s caller=${request.caller} call=${callCount} cost=${processResult.jsonCostIncomplete ? "incomplete" : output.cost?.cost ?? "untracked"} tokens=${processResult.jsonCostIncomplete ? "incomplete" : output.cost?.tokens ?? "untracked"} cancelled=${processResult.cancelled} timeout=${processResult.timedOut} truncated=${processResult.textTruncated || processResult.jsonEventTruncated}`);
     const details = {
+      implementation: "canonical",
       depth,
       childDepth,
       maxDepth: limit,
@@ -1384,6 +1405,26 @@ function cliErrorText(error) {
   Why: the canonical recursion runtime rejected the request or the child failed
   Fix: inspect the remaining error text, configuration, and child output
 ${message}`;
+}
+function writeStdout(text) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const onError = (error) => {
+      if (settled)
+        return;
+      settled = true;
+      process.stdout.removeListener("error", onError);
+      reject(error);
+    };
+    process.stdout.once("error", onError);
+    process.stdout.write(text, () => {
+      if (settled)
+        return;
+      settled = true;
+      process.stdout.removeListener("error", onError);
+      resolve();
+    });
+  });
 }
 function errorExitCode(error) {
   if (error instanceof RecursiveChildError)
@@ -1511,7 +1552,7 @@ async function main(args = process.argv.slice(2)) {
         await waitForAsyncAdmission(job, 30000, controller.signal);
         if (controller.signal.aborted)
           throw new Error("Async recursion acknowledgement cancelled");
-        process.stdout.write(`${JSON.stringify({
+        await writeStdout(`${JSON.stringify({
           job_id: path9.basename(path9.dirname(job.jobPath)),
           output: job.outputPath,
           sentinel: job.sentinelPath,
@@ -1527,7 +1568,7 @@ async function main(args = process.argv.slice(2)) {
             await waitForAsyncTerminal(job, 1000);
           }
           discardAsyncJob(job);
-          return signalExitCode;
+          return brokenPipe ? 0 : signalExitCode;
         }
         if (job)
           discardAsyncJob(job, pid);

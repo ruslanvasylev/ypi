@@ -111,7 +111,7 @@ cat > "$TEST_TMP/mock-bin/pi" <<'MOCK_PI'
 [ -f "${RLM_SYSTEM_PROMPT:-}" ] || { echo "missing packaged system prompt" >&2; exit 90; }
 [ -f "${YPI_EXTENSION_ROOT:-}/extensions/ypi/runtime-core.ts" ] || { echo "missing packaged runtime root" >&2; exit 91; }
 [ -f "${YPI_EXTENSION_PATH:-}" ] || { echo "missing packaged extension path" >&2; exit 92; }
-printf '%s\n' PACKED_CHILD_OK
+printf 'PACKED_CHILD_OK implementation=%s\n' "${YPI_RLM_IMPLEMENTATION:-unset}"
 MOCK_PI
 chmod +x "$TEST_TMP/mock-bin/pi"
 set +e
@@ -125,7 +125,7 @@ PACKED_RLM_OUTPUT="$(env \
 PACKED_RLM_RC=$?
 set -e
 if [ "$PACKED_RLM_RC" -eq 0 ]; then pass "installed canonical CLI exits cleanly"; else fail "installed canonical CLI exits cleanly" "rc=$PACKED_RLM_RC $PACKED_RLM_OUTPUT"; fi
-assert_contains "installed rlm_query executes canonical runtime" "PACKED_CHILD_OK" "$PACKED_RLM_OUTPUT"
+assert_contains "installed rlm_query executes canonical runtime" "PACKED_CHILD_OK implementation=canonical" "$PACKED_RLM_OUTPUT"
 set +e
 PACKED_LEGACY_OUTPUT="$(env \
 	HOME="$TEST_TMP/home" \
@@ -137,7 +137,7 @@ PACKED_LEGACY_OUTPUT="$(env \
 PACKED_LEGACY_RC=$?
 set -e
 if [ "$PACKED_LEGACY_RC" -eq 0 ]; then pass "installed retained CLI exits cleanly"; else fail "installed retained CLI exits cleanly" "rc=$PACKED_LEGACY_RC $PACKED_LEGACY_OUTPUT"; fi
-assert_contains "installed rlm_query retains executable CLI fallback" "PACKED_CHILD_OK" "$PACKED_LEGACY_OUTPUT"
+assert_contains "installed rlm_query retains executable CLI fallback" "PACKED_CHILD_OK implementation=legacy" "$PACKED_LEGACY_OUTPUT"
 
 RUN_LOG="$TEST_TMP/ypi-version.log"
 NODE_BIN="$(dirname "$(command -v node)")"
