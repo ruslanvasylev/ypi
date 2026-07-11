@@ -25,8 +25,9 @@ contexts absorb bounded exploration, review, or implementation work.
 4. Parent adjudication is root work. Deduplicate findings by mechanism and
    reproduce accepted blockers; do not spawn an adjudicator child.
 5. Only the root may use `mode=implement`, for at most one implementation head.
-   Never run parallel implementers. The implementer keeps `edit`/`write` but not
-   process-spawning `bash`; the parent runs gates. Existing jj repositories and
+   Never run parallel implementers. The implementer keeps checkout-confined
+   `edit`/`write` but not process-spawning `bash`; external/symlink escapes and
+   repository-metadata writes are blocked, and the parent runs gates. Existing jj repositories and
    clean Git checkouts both use one repository-wide writer lease. If the checkout
    is dirty or another writer owns it, continue implementation in the root
    instead of changing VCS state or asking the user to understand workspace tooling.

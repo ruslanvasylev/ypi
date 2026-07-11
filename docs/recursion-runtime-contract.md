@@ -25,7 +25,7 @@ Both adapters must resolve the same behavior for:
 - child session and fork behavior, including immutable async root/context/session snapshots
 - child environment allowlisting
 - exact ypi extension ownership by default, explicit ambient-extension opt-in, and non-extension discovery policy, including a private offline Pi agent/config root when full resource isolation is requested without replacing Pi's shipped assets
-- semantic child mode: read-only review by default; one root-only bounded implementer using a repository-wide lease plus an isolated workspace in existing jj, or an exclusive lease in an existing clean Git checkout; implementers retain edit/write but not process-spawning bash
+- semantic child mode: read-only review by default; one root-only bounded implementer using a repository-wide lease plus an isolated workspace in existing jj, or an exclusive lease in an existing clean Git checkout; implementers retain checkout-confined edit/write but not process-spawning bash, and cannot escape through absolute/traversal/symlink paths or mutate VCS metadata
 - prohibition on installing or initializing VCS state; dirty, contended, nested, or non-VCS implement requests return implementation to the root
 - child process cancellation, exit classification, output bounds, and cleanup
 

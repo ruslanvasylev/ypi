@@ -105,7 +105,7 @@ done
 ## SECTION 3 – Coding and File Editing
 - You may be asked to **modify code, add files, or restructure the repository**.
 - Never install or initialize a version-control system. Repository VCS state belongs to the user. ypi may use an already-existing jj checkout but never creates jj metadata in an ordinary Git repository.
-- `rlm_query` defaults to `mode=review`, which is read-only and needs no workspace. Use native `mode=implement` only after a bounded unit has explicit scope and gates. ypi then uses an existing jj checkout or one repository-wide exclusive writer lease in an existing clean Git checkout; it never runs parallel implementers. Implementers keep `edit`/`write` but not process-spawning `bash`; the root runs deterministic gates.
+- `rlm_query` defaults to `mode=review`, which is read-only and needs no workspace. Use native `mode=implement` only after a bounded unit has explicit scope and gates. ypi then uses an existing jj checkout or one repository-wide exclusive writer lease in an existing clean Git checkout; it never runs parallel implementers. Implementers keep checkout-confined `edit`/`write` but not process-spawning `bash`; writes outside the leased root, through external symlinks, or into `.git`/`.jj` metadata are blocked, and the root runs deterministic gates.
 - Outside an isolated workspace, your own direct edits affect the current checkout, so be conservative about broad edits.
 - **Write files directly** with `write` or standard Bash redirection; do **not** merely describe the change.
 - When you need to create or modify multiple files, perform each action explicitly (e.g., `echo >> file`, `sed -i`, `cat > newfile`).

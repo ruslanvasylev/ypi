@@ -80,6 +80,7 @@ done
   echo "RLM_BUDGET=\${RLM_BUDGET:-unset}"
   echo "YPI_EXPLICIT_RELEASE_REQUEST=\${YPI_EXPLICIT_RELEASE_REQUEST:-unset}"
   echo "YPI_EXPLICIT_NON_OWNED_REMOTE=\${YPI_EXPLICIT_NON_OWNED_REMOTE:-unset}"
+  echo "YPI_IMPLEMENT_ROOT=\${YPI_IMPLEMENT_ROOT:-unset}"
   echo "SECRET_TOKEN=\${SECRET_TOKEN:-unset}"
   echo "PI_CODING_AGENT_DIR=\${PI_CODING_AGENT_DIR:-unset}"
   echo "PI_PACKAGE_DIR=\${PI_PACKAGE_DIR:-unset}"
@@ -326,6 +327,7 @@ async function run(): Promise<void> {
 	const readOnlyText = await invoke();
 	assertContains("N5: child stdout returned", readOnlyText, "FAKE_CHILD_OK");
 	assertContains("N5: no-jj child excludes built-in mutators", readLog(), "--exclude-tools bash,edit,write");
+	assertContains("N5: review child receives no write-scope authority", readLog(), "YPI_IMPLEMENT_ROOT=unset");
 	assertNotContains("N5: no-jj child avoids a global tool allowlist", readLog(), "--tools ");
 
 	const implementRoot = mkdtempSync(path.join(scratch, "implement-git."));
@@ -347,6 +349,7 @@ async function run(): Promise<void> {
 	assertContains("N5a: implementer result reports changed path", implementText, "implemented.txt");
 	record(implementResult.details?.workspace?.workspaceMode === "git-shared" && implementResult.details?.workspace?.reportComplete === true, "N5a: implementer returns complete structured workspace report", JSON.stringify(implementResult.details));
 	assertContains("N5a: implementer excludes process-spawning bash", readLog(), "--exclude-tools bash");
+	assertContains("N5a: implementer receives its exact write-scope root", readLog(), `YPI_IMPLEMENT_ROOT=${implementRoot}`);
 	assertNotContains("N5a: implementer retains edit/write built-ins", readLog(), "--exclude-tools bash,edit,write");
 	const implementLock = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-path", "ypi-shared-writer.lock"], { cwd: implementRoot, encoding: "utf8" }).stdout.trim();
 	record(!existsSync(implementLock), "N5a: implementer releases writer lease after reporting");

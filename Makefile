@@ -1,4 +1,4 @@
-.PHONY: test test-unit test-guardrails test-native test-runtime-contract test-eval-contracts test-workspace-policy test-publication-policy typecheck-runtime build-runtime-cli check-runtime-cli test-provider-allowlist test-extensions test-consumer-pack test-pi-recursive-pack build-pi-recursive test-e2e test-recursion-e2e test-extension-recursion-e2e test-parity-e2e eval-depth-ablation eval-runtime-parity test-fast doctor test-doctor check-release-consistency test-release-consistency test-install-from-registry publish publish-dry pre-push-checks check-upstream install-hooks release-preflight land ci-status ci-last-failure clean
+.PHONY: test test-unit test-guardrails test-native test-runtime-contract test-eval-contracts test-workspace-policy test-write-scope test-publication-policy typecheck-runtime build-runtime-cli check-runtime-cli test-provider-allowlist test-extensions test-consumer-pack test-pi-recursive-pack build-pi-recursive test-e2e test-recursion-e2e test-extension-recursion-e2e test-parity-e2e eval-depth-ablation eval-runtime-parity test-fast doctor test-doctor check-release-consistency test-release-consistency test-install-from-registry publish publish-dry pre-push-checks check-upstream install-hooks release-preflight land ci-status ci-last-failure clean
 
 # Fast tests — no LLM calls, uses mock pi
 test-unit:
@@ -27,6 +27,10 @@ test-eval-contracts:
 test-workspace-policy:
 	@echo "Running recursive workspace policy tests..."
 	@bun tests/workspace_policy_harness.ts
+
+test-write-scope:
+	@echo "Running implementer write-scope tests..."
+	@bun tests/write_scope_harness.ts
 
 test-publication-policy:
 	@echo "Running publication authority tests..."
@@ -63,7 +67,7 @@ test-release-consistency:
 	@bash tests/test_release_consistency.sh
 
 # All fast tests (no LLM calls)
-test-fast: typecheck-runtime check-runtime-cli test-unit test-guardrails test-native test-runtime-contract test-eval-contracts test-workspace-policy test-publication-policy test-provider-allowlist test-doctor test-release-consistency
+test-fast: typecheck-runtime check-runtime-cli test-unit test-guardrails test-native test-runtime-contract test-eval-contracts test-workspace-policy test-write-scope test-publication-policy test-provider-allowlist test-doctor test-release-consistency
 
 # Extension compatibility — requires real pi installed
 test-extensions:

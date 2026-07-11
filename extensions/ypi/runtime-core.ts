@@ -176,6 +176,7 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 			YPI_EXTENSION_ROOT: runtime.root,
 			YPI_EXTENSION_PATH: extensionPath,
 			YPI_RLM_QUERY_CALLER: request.caller,
+			YPI_IMPLEMENT_ROOT: requestedMode === "implement" ? resources.workspace.cwd : "",
 			RLM_WRITE_MODE_CEILING: "review",
 			...(requestedMode === "implement" ? { RLM_AMBIENT_EXTENSIONS: "0" } : {}),
 		}, runtime, childDepth);

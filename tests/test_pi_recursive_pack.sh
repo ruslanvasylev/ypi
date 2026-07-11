@@ -69,6 +69,7 @@ assert_contains "tarball ships native adapter" "package/extensions/ypi/native-to
 assert_contains "tarball ships canonical runtime core" "package/extensions/ypi/runtime-core.ts" "$TARBALL_LIST"
 assert_contains "tarball ships internal child-process owner" "package/extensions/ypi/internal/child-process.ts" "$TARBALL_LIST"
 assert_contains "tarball ships internal child-output owner" "package/extensions/ypi/internal/child-output.ts" "$TARBALL_LIST"
+assert_contains "tarball ships implementer write-scope owner" "package/extensions/ypi/internal/write-scope.ts" "$TARBALL_LIST"
 assert_contains "tarball ships retained native fallback" "package/extensions/ypi/legacy-native-tool.ts" "$TARBALL_LIST"
 assert_contains "tarball ships system prompt" "package/SYSTEM_PROMPT.md" "$TARBALL_LIST"
 assert_contains "tarball ships bounded delegation skill" "package/skills/bounded-recursive-delegation/SKILL.md" "$TARBALL_LIST"

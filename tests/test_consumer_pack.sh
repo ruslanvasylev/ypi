@@ -56,6 +56,7 @@ assert_contains "tarball contains canonical runtime core" "package/extensions/yp
 assert_contains "tarball contains internal child-process owner" "package/extensions/ypi/internal/child-process.ts" "$TARBALL_LIST"
 assert_contains "tarball contains internal child-output owner" "package/extensions/ypi/internal/child-output.ts" "$TARBALL_LIST"
 assert_contains "tarball contains workspace-policy owner" "package/extensions/ypi/internal/workspace-policy.ts" "$TARBALL_LIST"
+assert_contains "tarball contains implementer write-scope owner" "package/extensions/ypi/internal/write-scope.ts" "$TARBALL_LIST"
 assert_contains "tarball contains bounded delegation skill" "package/skills/bounded-recursive-delegation/SKILL.md" "$TARBALL_LIST"
 assert_contains "tarball contains internal CLI-input owner" "package/extensions/ypi/internal/cli-input.ts" "$TARBALL_LIST"
 assert_contains "tarball contains thin CLI adapter" "package/extensions/ypi/cli.ts" "$TARBALL_LIST"
