@@ -40,9 +40,10 @@ budget admission fails closed rather than treating unknown spend as zero.
 
 - `RLM_MAX_DEPTH=3` remains the default instead of being promoted to 4. In the
   bounded contract-audit ablation, depth 3 returned all 12 expected findings
-  with no false positives; depth 4 used 1.82× the tokens and 1.34× the cost,
-  then timed out without a final answer. Depth 2 was not evaluated, so this is
-  not a claim that 3 is globally optimal. The reproducible contract is under
+  with no false positives; depth 4 then timed out without a final answer.
+  Complete ledger events show lower-bound ratios of 1.818× tokens and 1.342×
+  cost, while session-observed usage gives 1.914× tokens and 1.433× cost. Depth
+  2 was not evaluated, so this is not a claim that 3 is globally optimal. The reproducible contract is under
   `tests/eval/depth-ablation/`.
 - `RLM_MAX_CALLS=128` bounds total fan-out with headroom above the approximately
   52-call evaluation trace that motivated this change.
@@ -52,8 +53,10 @@ budget admission fails closed rather than treating unknown spend as zero.
   budget limits when those dimensions are measurable.
 - `$RLM_ROOT_PROMPT_FILE` captures the active root human request before the root
   agent starts; standalone shell calls fall back to their first delegation.
-  Child prompts are passed through Pi's exact non-interactive stdin input while remaining file-backed for symbolic access, and must echo applicable
-  goal/scope/acceptance; parents validate results before absorption.
+  Child prompts use Pi's non-interactive stdin input while remaining file-backed
+  for symbolic access. Pi normalizes outer stdin whitespace, so the prompt file
+  is byte-authoritative. Child prompts must echo applicable goal/scope/acceptance;
+  parents validate results before absorption.
 
 ## Adapter-owned responsibilities
 

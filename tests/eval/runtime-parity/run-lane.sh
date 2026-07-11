@@ -73,11 +73,17 @@ if (out/'time.txt').exists():
   m=re.search(r'Maximum resident set size \(kbytes\):\s*(\d+)',(out/'time.txt').read_text())
   if m: rss=int(m.group(1))
 text=(out/'output.txt').read_text(errors='replace') if (out/'output.txt').exists() else ''
+trace=(out/'trace.log').read_text(errors='replace') if (out/'trace.log').exists() else ''
+spawned_transitions=len(re.findall(r'depth=\d+→\d+.*caller=',trace))
 expected='RESULT=803 EVIDENCE=KEY_ALPHA,KEY_BETA,KEY_GAMMA' if lane.endswith('-cli') else 'E9: full ypi recursive child call'
 expected_present=expected in text
-recursive_transition_present=('depth=0→1' in text and 'caller=tool' in text) if lane.endswith('-native') else calls == 2
+recursive_transition_present=(
+  ('depth=0→1' in text and 'caller=tool' in text)
+  if lane.endswith('-native')
+  else ('depth=0→1' in trace and 'depth=1→2' in trace and spawned_transitions >= 2)
+)
 contract_pass=rc == 0 and expected_present and recursive_transition_present
-meta={'lane':lane,'exit_code':rc,'expected_output_present':expected_present,'recursive_transition_present':recursive_transition_present,'contract_pass':contract_pass,'elapsed_seconds':round(elapsed,3),'calls':calls,'cost':round(cost,6),'tokens':tokens,'max_rss_kib':rss}
+meta={'lane':lane,'exit_code':rc,'expected_output_present':expected_present,'recursive_transition_present':recursive_transition_present,'contract_pass':contract_pass,'elapsed_seconds':round(elapsed,3),'allocated_call_attempts':calls,'spawned_trace_transitions':spawned_transitions,'cost':round(cost,6),'tokens':tokens,'max_rss_kib':rss}
 (out/'meta.json').write_text(json.dumps(meta,indent=2)+'\n')
 print(json.dumps(meta))
 PY

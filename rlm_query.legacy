@@ -448,7 +448,7 @@ CMD_ARGS=(-p)
 if [ -z "$JJ_WORKSPACE" ] && [ "${RLM_UNSAFE_NO_JJ_WRITE:-0}" != "1" ]; then
     # Avoid --tools here: Pi treats it as a global allowlist across built-in,
     # extension, and custom tools, which would hide installed package tools.
-    # Exclude built-in mutators instead so installed extension tools remain
+    # Exclude built-in mutators instead so explicitly loaded canonical extension tools remain
     # available while no-jj children cannot use bash/edit/write.
     CMD_ARGS+=(--exclude-tools bash,edit,write)
 fi

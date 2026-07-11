@@ -29,7 +29,8 @@ remove files, exclude package contents, or stop compatibility tests.
   max RSS while returning explicit stream/answer-bound warnings.
 - Controlled depth audit: depth 3 found 12/12 planted defects with zero false
   positives in 732 s, using 1.529M tokens and $3.269840. Depth 4 timed out at
-  900 s without an answer after 2.781M tokens and $4.387705. The evidence
+  900 s without an answer. Its complete ledger events (2.781M tokens / $4.387705)
+  are lower bounds; session-observed usage was 2.928M / $4.684875. The evidence
   supports retaining depth 3 as the default while allowing explicit overrides.
 - Final live E1–E9 gate: 10/10 checks passed, including task-context grounding,
   depth-3 leaf execution, timeout exit 124, max-call admission, self-similarity,

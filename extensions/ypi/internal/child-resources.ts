@@ -79,15 +79,17 @@ function unavailableWorkspace(cwd: string, reason: string): WorkspaceLease {
 	throw new Error(`jj workspace isolation unavailable (${reason}). Choose explicitly: set RLM_JJ=0 for read-only children, initialize colocated jj with 'jj git init --colocate', or set RLM_UNSAFE_NO_JJ_WRITE=1 to permit writes in the current checkout.`);
 }
 
-function remainingSetupMilliseconds(input: ChildResourceInput, cleanup = false): number | undefined {
-	if (input.setupDeadlineMilliseconds === undefined) return cleanup ? 1_000 : undefined;
+const WORKSPACE_CLEANUP_TIMEOUT_MS = 2_000;
+
+function remainingSetupMilliseconds(input: ChildResourceInput): number | undefined {
+	if (input.setupDeadlineMilliseconds === undefined) return undefined;
 	const remaining = input.setupDeadlineMilliseconds - Date.now();
-	if (remaining <= 0 && !cleanup) {
+	if (remaining <= 0) {
 		const error = new Error("RLM_TIMEOUT expired during recursive workspace setup") as Error & { exitCode: number };
 		error.exitCode = 124;
 		throw error;
 	}
-	return Math.max(1, cleanup ? Math.min(1_000, remaining) : remaining);
+	return Math.max(1, remaining);
 }
 
 function assertSpawnWithinDeadline(result: ReturnType<typeof spawnSync>, operation: string): void {
@@ -117,6 +119,10 @@ function createWorkspace(input: ChildResourceInput): WorkspaceLease {
 	try {
 		assertSpawnWithinDeadline(add, "jj workspace add");
 	} catch (error) {
+		// `jj workspace add` may register metadata before a timeout interrupts its
+		// final response. Give forget an independent bounded cleanup allowance;
+		// reusing an already-expired task deadline would leak the registration.
+		spawnSync("jj", ["workspace", "forget", name], { cwd, stdio: "ignore", timeout: WORKSPACE_CLEANUP_TIMEOUT_MS });
 		rmSync(workspacePath, { recursive: true, force: true });
 		throw error;
 	}
@@ -130,7 +136,7 @@ function createWorkspace(input: ChildResourceInput): WorkspaceLease {
 		mode: "jj",
 		readOnly: false,
 		cleanup() {
-			spawnSync("jj", ["workspace", "forget", name], { cwd: workspacePath, stdio: "ignore", timeout: remainingSetupMilliseconds(input, true) });
+			spawnSync("jj", ["workspace", "forget", name], { cwd: workspacePath, stdio: "ignore", timeout: WORKSPACE_CLEANUP_TIMEOUT_MS });
 			rmSync(workspacePath, { recursive: true, force: true });
 		},
 	};

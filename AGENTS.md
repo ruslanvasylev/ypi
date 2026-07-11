@@ -88,7 +88,7 @@ delegation fails, that's a bug you just found.
 
 Three properties make ypi work. All are tested (E7, E8, E9 in test_e2e.sh):
 
-1. **Self-similarity** — Same prompt, same tools, same agent at every depth. No specialized roles. The intelligence is in decomposition, not specialization.
+1. **Self-similarity** — Same canonical ypi prompt, native tool, and agent runtime at every depth. Ambient third-party extensions are isolated by default to prevent version-skew conflicts; opt into them with `RLM_AMBIENT_EXTENSIONS=1` only when that trust boundary is intentional. No specialized roles. The intelligence is in decomposition, not specialization.
 2. **Self-hosting** — When the shell helper is enabled (`YPI_SHELL_HELPER=1`, set by the `ypi` wrapper), SECTION 6 includes the thin launcher, canonical runtime core, and CLI adapter. The agent can inspect the machinery it is using without treating the retained legacy fallback as a second owner. A bare `pi -e` / native-tool install omits SECTION 6 and recurses through the native adapter.
 3. **Bounded ancestry and optional tree guards** — depth is bounded by default; optional call, budget, and timeout limits bound their respective dimensions when configured. These controls reduce runaway risk but do not guarantee provider or OS termination. The system prompt adds *cognitive* pressure: deeper agents prefer direct action.
 4. **Symbolic access** — `$CONTEXT` carries external data, delegated children receive their task in `$RLM_PROMPT_FILE`, and hashline provides line-addressed edits. The root wrapper prompt remains a normal Pi user message. Agents grep/sed/cat instead of copying bulk data through model memory. (T14d)

@@ -1041,16 +1041,17 @@ function unavailableWorkspace(cwd, reason) {
   }
   throw new Error(`jj workspace isolation unavailable (${reason}). Choose explicitly: set RLM_JJ=0 for read-only children, initialize colocated jj with 'jj git init --colocate', or set RLM_UNSAFE_NO_JJ_WRITE=1 to permit writes in the current checkout.`);
 }
-function remainingSetupMilliseconds(input, cleanup = false) {
+var WORKSPACE_CLEANUP_TIMEOUT_MS = 2000;
+function remainingSetupMilliseconds(input) {
   if (input.setupDeadlineMilliseconds === undefined)
-    return cleanup ? 1000 : undefined;
+    return;
   const remaining = input.setupDeadlineMilliseconds - Date.now();
-  if (remaining <= 0 && !cleanup) {
+  if (remaining <= 0) {
     const error = new Error("RLM_TIMEOUT expired during recursive workspace setup");
     error.exitCode = 124;
     throw error;
   }
-  return Math.max(1, cleanup ? Math.min(1000, remaining) : remaining);
+  return Math.max(1, remaining);
 }
 function assertSpawnWithinDeadline(result, operation) {
   if (result.error?.code === "ETIMEDOUT") {
@@ -1076,6 +1077,7 @@ function createWorkspace(input) {
   try {
     assertSpawnWithinDeadline(add, "jj workspace add");
   } catch (error) {
+    spawnSync("jj", ["workspace", "forget", name], { cwd, stdio: "ignore", timeout: WORKSPACE_CLEANUP_TIMEOUT_MS });
     rmSync4(workspacePath, { recursive: true, force: true });
     throw error;
   }
@@ -1088,7 +1090,7 @@ function createWorkspace(input) {
     mode: "jj",
     readOnly: false,
     cleanup() {
-      spawnSync("jj", ["workspace", "forget", name], { cwd: workspacePath, stdio: "ignore", timeout: remainingSetupMilliseconds(input, true) });
+      spawnSync("jj", ["workspace", "forget", name], { cwd: workspacePath, stdio: "ignore", timeout: WORKSPACE_CLEANUP_TIMEOUT_MS });
       rmSync4(workspacePath, { recursive: true, force: true });
     }
   };

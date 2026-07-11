@@ -237,14 +237,16 @@ if [ "$STDIN_TIMEOUT_MS" -lt 1800 ]; then pass "G4b: active deadline interrupts 
 cat > "$MOCK_BIN/jj" <<'SLOWJJ'
 #!/bin/bash
 if [ "${1:-}" = "root" ]; then exit 0; fi
-sleep 30
+if [ "${1:-}" = "workspace" ] && [ "${2:-}" = "forget" ]; then rm -f "$YPI_JJ_REGISTRY_FILE"; exit 0; fi
+if [ "${1:-}" = "workspace" ] && [ "${2:-}" = "add" ]; then printf 'registered\n' > "$YPI_JJ_REGISTRY_FILE"; sleep 30; fi
+exit 0
 SLOWJJ
 chmod +x "$MOCK_BIN/jj"
 START_NS=$(python3 -c 'import time; print(time.monotonic_ns())')
 set +e
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_TIMEOUT=1 \
-    RLM_JJ=1 RLM_CALL_COUNTER_FILE="$TEST_TMP/jj-timeout.counter" \
+    RLM_JJ=1 RLM_CALL_COUNTER_FILE="$TEST_TMP/jj-timeout.counter" YPI_JJ_REGISTRY_FILE="$TEST_TMP/jj-registry" \
     rlm_query "Bound jj setup" 2>&1
 )
 JJ_TIMEOUT_RC=$?
@@ -256,6 +258,7 @@ assert_eq "G4c: jj setup timeout exits 124" "124" "$JJ_TIMEOUT_RC"
 assert_not_contains "G4c: expired jj setup spawns no child" "MOCK_PI_CALLED" "$OUTPUT"
 assert_contains "G4c: jj setup timeout is explicit" "RLM_TIMEOUT expired during jj workspace add" "$OUTPUT"
 if find "$TEST_TMP" -maxdepth 1 -type d -name 'ypi_ws_d1_*' -print -quit | grep -q .; then fail "G4c: timed-out jj add cleans provisional workspace" "stale workspace"; else pass "G4c: timed-out jj add cleans provisional workspace"; fi
+if [ -e "$TEST_TMP/jj-registry" ]; then fail "G4c: timed-out jj add forgets provisional registration" "stale registry"; else pass "G4c: timed-out jj add forgets provisional registration"; fi
 if [ "$JJ_TIMEOUT_MS" -lt 3000 ]; then pass "G4c: jj setup obeys the invocation deadline"; else fail "G4c: jj setup obeys the invocation deadline" "elapsed=${JJ_TIMEOUT_MS}ms"; fi
 
 # G4d: the shared call-counter lock cannot outlive the tree deadline.
