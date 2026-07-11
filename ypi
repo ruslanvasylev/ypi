@@ -24,6 +24,11 @@
 #   RLM_CHILD_THINKING_LEVELS — comma-separated child-depth thinking list (depth 1,2,...)
 #   RLM_JJ             — existing-jj detection policy (default: auto; never initializes a VCS)
 #   RLM_EXTENSIONS     — set to "0" to disable Pi extensions (default: 1)
+#   RLM_AMBIENT_EXTENSIONS — ambient extension policy for the root session:
+#                        "1" always allow, "0" always isolate, unset/"auto"
+#                        allow unless a conflicting recursion-extension copy is
+#                        detected (fail closed). Children remain canonical-only
+#                        unless explicitly set to "1".
 #   RLM_CHILD_EXTENSIONS — override extensions for depth > 0 (default: same as parent)
 #   RLM_CHILD_DISCOVERY — set to 0 to disable child non-extension skills/templates/themes/context discovery (default: enabled)
 #   RLM_COST_FILE      — append-only cost telemetry ledger (default: automatic private temp path)
@@ -199,9 +204,35 @@ if [ -n "$SESSION_DIR_OVERRIDE" ] && [ -z "${RLM_SESSION_DIR:-}" ]; then
     export RLM_SESSION_DIR="$SESSION_DIR_OVERRIDE"
 fi
 
-# Launch Pi with exactly the canonical recursive extension by default. Pi has
-# no API for unregistering an older ambient ypi copy, so ambient extension
-# discovery is an explicit compatibility opt-in rather than a silent conflict.
+# Ambient extension policy for the root session. Pi has no API for
+# unregistering an older ambient ypi copy, so a second recursion-extension
+# copy must never load ambiently. Unrelated ambient packages (memory, browser,
+# protocol adapters, ...) are the user's normal toolbelt and stay available
+# unless a real conflict is detected:
+#   RLM_AMBIENT_EXTENSIONS=1     always allow ambient extensions
+#   RLM_AMBIENT_EXTENSIONS=0     always isolate to the canonical extension
+#   unset / "auto"               allow unless scripts/detect-ambient-recursion-conflict
+#                                finds a conflicting copy; detection failure
+#                                isolates (fail closed)
+# Children are unaffected: they stay canonical-only unless the variable is
+# explicitly "1" (see runtime-core), and implementers are always isolated.
+YPI_ALLOW_AMBIENT=false
+case "${RLM_AMBIENT_EXTENSIONS:-auto}" in
+    1)
+        YPI_ALLOW_AMBIENT=true
+        ;;
+    0)
+        YPI_ALLOW_AMBIENT=false
+        ;;
+    *)
+        if "$SCRIPT_DIR/scripts/detect-ambient-recursion-conflict" >/dev/null 2>&1; then
+            YPI_ALLOW_AMBIENT=true
+        else
+            echo "ypi: ambient Pi extensions isolated (conflicting recursion extension detected or detection unavailable). Run ypi-doctor for details, or set RLM_AMBIENT_EXTENSIONS=1 to force." >&2
+        fi
+        ;;
+esac
+
 PI_ARGV=("$PI_BIN")
 if [ "$HAS_PROVIDER" = false ] && [ -n "${RLM_PROVIDER:-}" ]; then
     PI_ARGV+=(--provider "$RLM_PROVIDER")
@@ -217,7 +248,7 @@ elif [ "$HAS_MODEL" = true ]; then
     # The extension will seed RLM_MODEL from Pi's active root model.
     unset RLM_MODEL
 fi
-if [ "${RLM_AMBIENT_EXTENSIONS:-0}" != "1" ]; then
+if [ "$YPI_ALLOW_AMBIENT" != true ]; then
     PI_ARGV+=(--no-extensions)
 fi
 PI_ARGV+=(-e "$YPI_EXTENSION")

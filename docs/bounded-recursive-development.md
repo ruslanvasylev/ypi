@@ -28,6 +28,10 @@ checkpoints surface elapsed work but never terminate a child.
 set -euo pipefail
 umask 077
 
+# Git hooks export GIT_DIR/GIT_WORK_TREE; inherited values would point the
+# repository checks below at the wrong checkout.
+for v in $(env | grep -o '^GIT_[A-Z_]*'); do unset "$v"; done
+
 YPI_RUN_STARTED_EPOCH="$(date +%s)"
 YPI_RUN_CHECKPOINT_SECONDS=3600
 unset RLM_BUDGET RLM_TIMEOUT
@@ -96,6 +100,10 @@ run ID or truncates a file.
 ```bash
 set -euo pipefail
 umask 077
+
+# Git hooks export GIT_DIR/GIT_WORK_TREE; inherited values would point the
+# repository identity checks below at the wrong checkout.
+for v in $(env | grep -o '^GIT_[A-Z_]*'); do unset "$v"; done
 
 RUN_DIR="<exact run directory from the continuation brief>"
 test -f "$RUN_DIR/envelope.sh"

@@ -11,11 +11,19 @@ function record(ok: boolean, label: string, detail = "") {
 	else { fail++; console.error(`  ✗ ${label}${detail ? `: ${detail}` : ""}`); }
 }
 function git(cwd: string, ...args: string[]) {
-	const result = spawnSync("git", args, { cwd, encoding: "utf8", env: {
-		...process.env,
-		GIT_AUTHOR_NAME: "ypi-test", GIT_AUTHOR_EMAIL: "ypi@example.invalid",
-		GIT_COMMITTER_NAME: "ypi-test", GIT_COMMITTER_EMAIL: "ypi@example.invalid",
-	} });
+	// Drop inherited GIT_* (a git hook exports GIT_DIR/GIT_WORK_TREE, which
+	// would point fixture commands at the parent repository), then set the
+	// deterministic identity this harness needs.
+	const env: NodeJS.ProcessEnv = {};
+	for (const [key, value] of Object.entries(process.env)) {
+		if (key.startsWith("GIT_")) continue;
+		env[key] = value;
+	}
+	env.GIT_AUTHOR_NAME = "ypi-test";
+	env.GIT_AUTHOR_EMAIL = "ypi@example.invalid";
+	env.GIT_COMMITTER_NAME = "ypi-test";
+	env.GIT_COMMITTER_EMAIL = "ypi@example.invalid";
+	const result = spawnSync("git", args, { cwd, encoding: "utf8", env });
 	if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
 	return String(result.stdout || "").trim();
 }

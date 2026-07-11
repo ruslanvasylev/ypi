@@ -1230,6 +1230,41 @@ assert_not_contains "G38c: full child isolation avoids explicit ypi extension" "
 assert_not_contains "G38c: full isolation replaces the ambient Pi agent root" "PI_CODING_AGENT_DIR=unset" "$OUTPUT"
 assert_contains "G38c: full isolation prevents package installation" "PI_OFFLINE=1" "$OUTPUT"
 
+# G39: root launcher ambient-extension auto-detection.
+# The `ypi` wrapper allows the user's ambient toolbelt unless a conflicting
+# recursion-extension copy is actually present; detection failure isolates.
+echo ""
+echo "=== Root launcher ambient auto-detection ==="
+
+G39_CLEAN="$TEST_TMP/g39_clean"
+G39_CONFLICT="$TEST_TMP/g39_conflict"
+G39_SAFE_PKGS="$TEST_TMP/g39_safe_pkgs"
+G39_RECURSIVE_PKG="$TEST_TMP/g39_recursive_pkg"
+mkdir -p "$G39_CLEAN" "$G39_CONFLICT/extensions" "$G39_SAFE_PKGS" "$G39_RECURSIVE_PKG"
+printf 'const a = "rlm_query";\nconst b = "RLM_MAX_DEPTH";\n' > "$G39_CONFLICT/extensions/renamed-copy.ts"
+printf '{"packages":["npm:@agney/pi-honcho-memory","npm:@narumitw/pi-chrome-devtools","../../code/example/agent-protocol/adapters/pi"]}' > "$G39_SAFE_PKGS/settings.json"
+printf '{"packages":["npm:pi-recursive"]}' > "$G39_RECURSIVE_PKG/settings.json"
+
+OUTPUT=$(PI_CODING_AGENT_DIR="$G39_CLEAN" "$PROJECT_DIR/ypi" -p "ambient auto test" 2>&1)
+assert_not_contains "G39: auto mode allows ambient extensions when no conflict exists" "--no-extensions" "$OUTPUT"
+assert_contains "G39: canonical ypi extension still loaded explicitly" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
+
+OUTPUT=$(PI_CODING_AGENT_DIR="$G39_CONFLICT" "$PROJECT_DIR/ypi" -p "ambient conflict test" 2>&1)
+assert_contains "G39b: renamed recursion-extension copy isolates ambient extensions" "--no-extensions" "$OUTPUT"
+assert_contains "G39b: isolation is explained with a doctor pointer" "ypi-doctor" "$OUTPUT"
+
+OUTPUT=$(PI_CODING_AGENT_DIR="$G39_RECURSIVE_PKG" "$PROJECT_DIR/ypi" -p "ambient package conflict test" 2>&1)
+assert_contains "G39c: installed pi-recursive package isolates ambient extensions" "--no-extensions" "$OUTPUT"
+
+OUTPUT=$(PI_CODING_AGENT_DIR="$G39_SAFE_PKGS" "$PROJECT_DIR/ypi" -p "ambient safe packages test" 2>&1)
+assert_not_contains "G39d: unrelated packages (memory/browser/protocol adapter) are not false positives" "--no-extensions" "$OUTPUT"
+
+OUTPUT=$(PI_CODING_AGENT_DIR="$G39_CLEAN" RLM_AMBIENT_EXTENSIONS=0 "$PROJECT_DIR/ypi" -p "ambient forced off test" 2>&1)
+assert_contains "G39e: RLM_AMBIENT_EXTENSIONS=0 always isolates" "--no-extensions" "$OUTPUT"
+
+OUTPUT=$(PI_CODING_AGENT_DIR="$G39_CONFLICT" RLM_AMBIENT_EXTENSIONS=1 "$PROJECT_DIR/ypi" -p "ambient forced on test" 2>&1)
+assert_not_contains "G39f: RLM_AMBIENT_EXTENSIONS=1 overrides detection" "--no-extensions" "$OUTPUT"
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # COST TELEMETRY / DOLLAR-CAP NON-ENFORCEMENT TESTS

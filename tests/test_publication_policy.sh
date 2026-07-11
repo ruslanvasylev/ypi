@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# This suite runs inside the pre-push hook, where git exports GIT_DIR (and
+# friends). Inherited values override `git -C` discovery and would point the
+# fixture repositories at the real parent checkout.
+for _v in $(env | grep -o '^GIT_[A-Z_]*' || true); do unset "$_v"; done
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VALIDATE="$ROOT/scripts/validate-push-owner"
 RELEASE="$ROOT/scripts/assert-release-authorized"
