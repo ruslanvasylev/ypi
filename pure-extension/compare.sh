@@ -36,7 +36,7 @@ EOF
 	PI_TRACE_FILE="$trace" YPI_CHILD_PROMPT_FILE="$child_prompt_file" \
 	RLM_TRACE_ID="compare-$label" RLM_CALL_COUNTER_FILE="$counter" RLM_COST_FILE="$cost" \
 	RLM_CALL_COUNT=0 RLM_MAX_CALLS=4 RLM_MAX_DEPTH=2 RLM_JSON=1 \
-	RLM_JJ=0 RLM_SHARED_SESSIONS=0 "$@" "$prompt" >"$stdout_file" 2>"$stderr_file"
+	RLM_JJ=0 RLM_UNSAFE_NO_JJ_WRITE=1 RLM_SHARED_SESSIONS=0 "$@" "$prompt" >"$stdout_file" 2>"$stderr_file"
 	local rc=$?
 	set -e
 	printf "%s" "$rc" > "$status_file"
@@ -80,8 +80,11 @@ check_case() {
 echo "artifacts=$RUN_DIR"
 
 # Parity is checked over the shell-helper path, so the bare `pi -e` case opts into the
-# helper with YPI_SHELL_HELPER=1 (the wrapper sets this implicitly). The native-tool-only
-# default for a bare extension load is proven separately in pure-extension/test.sh.
+# helper with YPI_SHELL_HELPER=1 (the wrapper sets this implicitly). The depth-1 child
+# must use bash to launch its grandchild; this isolated proof therefore chooses the
+# explicitly named no-jj write-capable mode rather than silently downgrading tools. The
+# native-tool-only default for a bare extension load is proven separately in
+# pure-extension/test.sh.
 run_case "pure-extension" "PURE_COMPARE_OK" \
 	env -u RLM_PROVIDER -u RLM_MODEL \
 		YPI_EXTENSION_ROOT="$PROJECT_DIR" \
