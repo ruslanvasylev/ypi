@@ -118,6 +118,8 @@ for var in $(env | grep '^YPI_' | cut -d= -f1); do unset "$var"; done
 # use the mock. A live parent ypi session exports YPI_PI_BIN to the real pi;
 # without this override unit tests accidentally make real model calls.
 export YPI_PI_BIN="$MOCK_BIN/pi"
+# The unit harness explicitly chooses no-jj read-only children.
+export RLM_JJ=0
 # Disable JSON mode in unit tests — mock pi doesn't output JSON
 export RLM_JSON=0
 

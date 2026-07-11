@@ -112,7 +112,7 @@ Depth 0 (root)    -> full Pi with native rlm_query + bash
     Depth 2 (leaf) -> full Pi with bash, but no rlm_query (max depth)
 ```
 
-**File isolation with jj:** When jj is available and `RLM_JJ` is not `0`, recursive children use [jj workspaces](https://martinvonz.github.io/jj/latest/working-copy/) for isolation. Without jj, the minimal extension still works, but children exclude built-in mutators (`bash`, `edit`, `write`) unless `RLM_UNSAFE_NO_JJ_WRITE=1`. Installed extension tools remain available by default, so package trust still follows Pi's installed-package model.
+**File isolation with jj:** When jj is available and `RLM_JJ` is not `0`, recursive children use [jj workspaces](https://martinvonz.github.io/jj/latest/working-copy/) for isolation. If jj is missing, the checkout is not initialized, or workspace creation fails, recursion stops with an explicit choice instead of silently changing task capability: set `RLM_JJ=0` for read-only children, initialize colocated jj, or set `RLM_UNSAFE_NO_JJ_WRITE=1` to allow writes in the current checkout. Explicit read-only children exclude built-in mutators (`bash`, `edit`, `write`); installed extension tools remain available, so package trust still follows Pi's installed-package model.
 
 ### Why It Works
 

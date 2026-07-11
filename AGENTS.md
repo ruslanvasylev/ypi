@@ -286,8 +286,8 @@ testing between changes. One variable at a time.
 | `RLM_CHILD_MODELS` | Comma-separated per-child-depth model route, depth 1,2,... | (none) |
 | `RLM_CHILD_PROVIDERS` | Comma-separated per-child-depth provider route, depth 1,2,... | (none) |
 | `RLM_CHILD_THINKING_LEVELS` | Comma-separated per-child-depth thinking route, depth 1,2,... | (none) |
-| `RLM_JJ` | Enable jj workspace isolation | `1` (set `0` to disable) |
-| `RLM_UNSAFE_NO_JJ_WRITE` | Allow writable child tools when jj is disabled/unavailable | `0` |
+| `RLM_JJ` | Require jj workspace isolation; set `0` as an explicit read-only no-jj choice | `1` |
+| `RLM_UNSAFE_NO_JJ_WRITE` | Explicitly allow writable children in the current checkout when jj is unavailable/disabled | `0` |
 | `RLM_SHARED_SESSIONS` | Allow child agents to write trace-named Pi sessions | `1` (set `0` for `--no-session`) |
 | `RLM_CHILD_DISCOVERY` | Set to `0` to disable child Pi non-extension skill, prompt-template, theme, context-file, and approval-prompt discovery; use with `RLM_CHILD_EXTENSIONS=0` for full package/resource isolation | enabled by default |
 | `YPI_SHELL_HELPER` | Expose the shell `rlm_query` helper (its dir on `PATH` + its source in the prompt); the `ypi` wrapper sets this | `0` (a bare `pi -e` / npm install uses the native tool only) |

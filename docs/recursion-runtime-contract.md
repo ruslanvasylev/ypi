@@ -25,7 +25,7 @@ Both adapters must resolve the same behavior for:
 - child session and fork behavior
 - child environment allowlisting
 - extension and non-extension discovery policy
-- writable jj workspace or explicit no-jj read-only behavior
+- writable jj workspace or explicit no-jj read-only/current-checkout behavior; automatic jj failure may not silently downgrade capability
 - child process cancellation, exit classification, output bounds, and cleanup
 
 A runtime result must distinguish normal exit, timeout, cancellation, and child
@@ -101,8 +101,9 @@ Resolved stabilization gaps remain part of the evidence history:
   than accepting the `Number.parseInt` prefix
 - extension-isolated children retain the standalone ypi system prompt through
   both adapters
-- no-jj children exclude built-in mutators through both adapters without a
-  global allowlist that could hide installed package tools
+- explicit `RLM_JJ=0` children exclude built-in mutators through both adapters
+  without a global allowlist that could hide installed package tools;
+  requested-but-unavailable jj fails with explicit read-only/initialize/unsafe-write choices
 - native stdout and stderr are now bounded while the child stream is drained;
   the final result reports when raw capture was truncated
 - command substitution around CLI `--async` now returns job metadata without

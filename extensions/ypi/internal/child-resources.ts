@@ -53,6 +53,13 @@ function createPromptFile(prompt: string): string {
 	return promptPath;
 }
 
+function unavailableWorkspace(cwd: string, reason: string): WorkspaceLease {
+	if (process.env.RLM_UNSAFE_NO_JJ_WRITE === "1") {
+		return { cwd, mode: "none", readOnly: false, cleanup() {} };
+	}
+	throw new Error(`jj workspace isolation unavailable (${reason}). Choose explicitly: set RLM_JJ=0 for read-only children, initialize colocated jj with 'jj git init --colocate', or set RLM_UNSAFE_NO_JJ_WRITE=1 to permit writes in the current checkout.`);
+}
+
 function createWorkspace(cwd: string, depth: number): WorkspaceLease {
 	if (process.env.RLM_JJ === "0") {
 		return { cwd, mode: "off", readOnly: process.env.RLM_UNSAFE_NO_JJ_WRITE !== "1", cleanup() {} };
@@ -60,7 +67,7 @@ function createWorkspace(cwd: string, depth: number): WorkspaceLease {
 
 	const root = spawnSync("jj", ["root"], { cwd, stdio: "ignore" });
 	if (root.status !== 0) {
-		return { cwd, mode: "none", readOnly: process.env.RLM_UNSAFE_NO_JJ_WRITE !== "1", cleanup() {} };
+		return unavailableWorkspace(cwd, (root.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT" ? "jj is not installed or not on PATH" : "the current checkout is not a jj workspace");
 	}
 
 	const workspacePath = mkdtempSync(path.join(tmpdir(), `ypi_ws_d${depth}_`));
@@ -69,7 +76,7 @@ function createWorkspace(cwd: string, depth: number): WorkspaceLease {
 	const add = spawnSync("jj", ["workspace", "add", "--name", name, workspacePath], { cwd, stdio: "ignore" });
 	if (add.status !== 0) {
 		rmSync(workspacePath, { recursive: true, force: true });
-		return { cwd, mode: "none", readOnly: process.env.RLM_UNSAFE_NO_JJ_WRITE !== "1", cleanup() {} };
+		return unavailableWorkspace(cwd, "jj workspace add failed");
 	}
 
 	return {

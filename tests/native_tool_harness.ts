@@ -45,6 +45,8 @@ function clearYpiEnv(): void {
 	process.env.TMPDIR = scratch;
 	process.env.YPI_PI_BIN = fakePi;
 	process.env.YPI_FAKE_PI_LOG = logFile;
+	// The harness explicitly chooses no-jj read-only mode unless a case overrides it.
+	process.env.RLM_JJ = "0";
 }
 
 function resetLog(): void {

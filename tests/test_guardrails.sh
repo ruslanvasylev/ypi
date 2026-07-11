@@ -87,8 +87,10 @@ unset RLM_EXTENSIONS RLM_CHILD_EXTENSIONS RLM_CHILD_DISCOVERY RLM_HASHLINE RLM_J
 # YPI_PI_BIN to a real pi binary.
 export YPI_PI_BIN="$MOCK_BIN/pi"
 
-# Disable JSON mode in guardrail tests — mock pi doesn't output JSON
+# Disable JSON mode and explicitly choose no-jj read-only mode for ordinary
+# guardrail probes; the JJ section overrides this where workspace behavior is tested.
 export RLM_JSON=0
+export RLM_JJ=0
 
 TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/rlm_test.XXXXXX")
 export TMPDIR="$TEST_TMP"
@@ -546,7 +548,7 @@ chmod +x "$MOCK_BIN/jj"
 rm -f "$JJ_LOG"
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
-    RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
+    RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=1 \
     RLM_PROVIDER=test RLM_MODEL=test \
     rlm_query "Check JJ workspace"
 )
@@ -577,7 +579,7 @@ assert_not_contains "G13: no-jj read-only does not allowlist away extension tool
 rm -f "$JJ_LOG"
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
-    RLM_DEPTH=2 RLM_MAX_DEPTH=3 \
+    RLM_DEPTH=2 RLM_MAX_DEPTH=3 RLM_JJ=1 \
     RLM_PROVIDER=test RLM_MODEL=test \
     rlm_query "Max depth"
 )
@@ -587,22 +589,42 @@ else
     fail "G14: max depth gets JJ workspace" "jj workspace add not called"
 fi
 
-# G15: No jj on PATH → falls back gracefully
+# G15: automatic jj unavailability requires an explicit mode choice instead of
+# silently downgrading a potentially writable task to read-only.
 SAVED_PATH="$PATH"
 PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "$MOCK_BIN" | paste -sd ':' -)
 PATH="$PROJECT_DIR:$PATH"  # keep rlm_query on PATH
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
-    RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
+    RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=1 \
     RLM_PROVIDER=test RLM_MODEL=test \
     PATH="$PATH" \
     rlm_query "No jj present" 2>&1 || true
 )
+assert_contains "G15: missing jj requires explicit mode choice" "jj workspace isolation unavailable" "$OUTPUT"
+assert_contains "G15: missing jj explains read-only choice" "RLM_JJ=0" "$OUTPUT"
+assert_not_contains "G15: missing jj spawns no child" "MOCK_PI_CALLED" "$OUTPUT"
+
+OUTPUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" \
+    RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=0 \
+    RLM_PROVIDER=test RLM_MODEL=test \
+    PATH="$PATH" \
+    rlm_query "Explicit no-jj read-only" 2>&1
+)
+assert_contains "G15: explicit no-jj read-only proceeds" "MOCK_PI_CALLED" "$OUTPUT"
+assert_contains "G15: explicit no-jj mode excludes mutators" "--exclude-tools bash,edit,write" "$OUTPUT"
+
+OUTPUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" \
+    RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=1 RLM_UNSAFE_NO_JJ_WRITE=1 \
+    RLM_PROVIDER=test RLM_MODEL=test \
+    PATH="$PATH" \
+    rlm_query "Explicit no-jj writable" 2>&1
+)
 PATH="$SAVED_PATH"
-# Should still call mock pi successfully (pi is back on PATH after restore)
-# The key check: no crash/error about jj
-assert_not_contains "G15: no jj error" "jj: command not found" "$OUTPUT"
-pass "G15: gracefully continues without jj"
+assert_contains "G15: explicit unsafe no-jj write proceeds" "MOCK_PI_CALLED" "$OUTPUT"
+assert_not_contains "G15: explicit unsafe mode keeps mutators" "--exclude-tools bash,edit,write" "$OUTPUT"
 
 
 # ═══════════════════════════════════════════════════════════════════════════

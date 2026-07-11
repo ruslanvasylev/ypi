@@ -113,7 +113,7 @@ done
 - **Write files directly** with `write` or standard Bash redirection; do **not** merely describe the change.
 - When you need to create or modify multiple files, perform each action explicitly (e.g., `echo >> file`, `sed -i`, `cat > newfile`).
 - Sub-agents spawned via `rlm_query` use jj workspaces when jj is available and enabled.
-- If jj is disabled or unavailable, sub-agents run in the current checkout with built-in mutators (`bash`, `edit`, `write`) disabled by default. Installed extension tools remain available by Pi package discovery, so trust those packages explicitly. Set `RLM_UNSAFE_NO_JJ_WRITE=1` only when you intentionally want writable no-jj child agents.
+- `RLM_JJ=0` is an explicit read-only choice: children run in the current checkout with built-in mutators (`bash`, `edit`, `write`) disabled. If jj was requested but is missing, uninitialized, or cannot create a workspace, recursion fails with choices instead of silently changing capability. Initialize colocated jj, set `RLM_JJ=0` for read-only work, or set `RLM_UNSAFE_NO_JJ_WRITE=1` only when you intentionally accept writable children in the current checkout. Installed extension tools remain discoverable, so trust those packages explicitly.
 - If you create useful work in a child jj workspace, commit or clearly report the change before exiting; otherwise the workspace may be forgotten.
 
 ## SECTION 4 – Guardrails & Cost Awareness

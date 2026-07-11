@@ -43,7 +43,7 @@ Behavior is controlled through `RLM_*` environment variables. The pure extension
 | `RLM_BUDGET` | `RLM_BUDGET=0.50` | Max dollar spend for the recursive tree (requires `RLM_JSON=1`, the default). |
 | `RLM_TIMEOUT` | `RLM_TIMEOUT=60` | Wall-clock limit (seconds) for the entire recursive tree. |
 | `RLM_MAX_CALLS` | `RLM_MAX_CALLS=128` | Max total `rlm_query` invocations (default `128`). |
-| `RLM_JJ` | `RLM_JJ=0` | Disable `jj` workspace isolation (used automatically when available). |
+| `RLM_JJ` | `RLM_JJ=0` | Explicitly choose read-only children without jj; requested-but-unavailable jj otherwise stops with guidance. |
 
 The shell-helper guardrails and cost/session CLI commands (e.g. `rlm_cost`) documented in the
 [ypi README](https://github.com/rawwerks/ypi#readme) apply only to the `ypi` wrapper package, not

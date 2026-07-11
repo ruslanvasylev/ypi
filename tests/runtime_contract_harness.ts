@@ -285,6 +285,17 @@ async function run(): Promise<void> {
 		`native=${JSON.stringify(malformedNative.error)} CLI code=${malformedCli.code}`,
 	);
 
+	const noJjNative = await invokeNative({ ...baseEnv("native-no-jj-choice"), RLM_JJ: "1", RLM_UNSAFE_NO_JJ_WRITE: "0" }, prompt);
+	const noJjCli = await invokeCli({ ...baseEnv("cli-no-jj-choice"), RLM_JJ: "1", RLM_UNSAFE_NO_JJ_WRITE: "0" }, prompt);
+	record(
+		Boolean(noJjNative.error?.includes("Choose explicitly"))
+			&& Boolean(noJjCli.error?.includes("Choose explicitly"))
+			&& !noJjNative.observation
+			&& !noJjCli.observation,
+		"both adapters reject automatic no-jj capability downgrade",
+		`native=${JSON.stringify(noJjNative.error)} CLI=${JSON.stringify(noJjCli.error)}`,
+	);
+
 	const extensionsOffNative = await invokeNative({ ...baseEnv("native-ext-off"), RLM_CHILD_EXTENSIONS: "0" }, prompt);
 	const extensionsOffCli = await invokeCli({ ...baseEnv("cli-ext-off"), RLM_CHILD_EXTENSIONS: "0" }, prompt);
 	if (extensionsOffNative.observation && extensionsOffCli.observation) {
