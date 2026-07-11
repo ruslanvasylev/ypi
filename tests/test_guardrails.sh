@@ -516,6 +516,27 @@ else
     fail "G11d: CLI cancellation terminates child and exits 130" "cancellation probe failed"
 fi
 
+# G11e: the thin CLI does not invent a trailing newline that the child did not
+# emit; byte presentation remains pipe-compatible with the retained CLI.
+cat > "$MOCK_BIN/pi" << 'BYTESPI'
+#!/bin/bash
+printf '%s' NO_TRAILING_NEWLINE
+BYTESPI
+chmod +x "$MOCK_BIN/pi"
+if RLM_QUERY_PATH="$RLM_QUERY" TEST_CONTEXT="$TEST_TMP/ctx.txt" TEST_COUNTER="$TEST_TMP/bytes.counter" python3 <<'PY'
+import os, subprocess
+env=os.environ.copy()
+env.update({"CONTEXT":os.environ["TEST_CONTEXT"],"RLM_DEPTH":"0","RLM_MAX_DEPTH":"3","RLM_JSON":"0","RLM_JJ":"0","RLM_SHARED_SESSIONS":"0","RLM_CALL_COUNTER_FILE":os.environ["TEST_COUNTER"],"RLM_TRACE_ID":"bytes"})
+r=subprocess.run([os.environ["RLM_QUERY_PATH"],"Exact bytes?"],env=env,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+assert r.returncode==0,(r.returncode,r.stderr)
+assert r.stdout==b"NO_TRAILING_NEWLINE",repr(r.stdout)
+PY
+then
+    pass "G11e: CLI preserves exact child stdout bytes"
+else
+    fail "G11e: CLI preserves exact child stdout bytes" "byte probe failed"
+fi
+
 # Restore normal mock before subsequent sections.
 cat > "$MOCK_BIN/pi" << 'MOCK_PI'
 #!/bin/bash

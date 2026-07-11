@@ -194,7 +194,6 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
 	const abort = () => controller.abort();
 	process.once("SIGINT", abort);
 	process.once("SIGTERM", abort);
-	let lastTextCharacter = "";
 	try {
 		const result = await executeRequest(runtime, flags, source, {
 			cwd: process.cwd(),
@@ -203,10 +202,8 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
 			signal: controller.signal,
 			onText(text) {
 				process.stdout.write(text);
-				lastTextCharacter = text.at(-1) || lastTextCharacter;
 			},
 		});
-		if (lastTextCharacter && lastTextCharacter !== "\n") process.stdout.write("\n");
 		for (const warning of result.warnings) console.error(`[${warning}]`);
 		if (result.stderr) console.error(result.stderr);
 		return 0;

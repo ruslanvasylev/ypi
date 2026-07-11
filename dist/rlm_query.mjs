@@ -1260,7 +1260,6 @@ async function main(args = process.argv.slice(2)) {
   const abort = () => controller.abort();
   process.once("SIGINT", abort);
   process.once("SIGTERM", abort);
-  let lastTextCharacter = "";
   try {
     const result = await executeRequest(runtime, flags, source, {
       cwd: process.cwd(),
@@ -1269,13 +1268,8 @@ async function main(args = process.argv.slice(2)) {
       signal: controller.signal,
       onText(text) {
         process.stdout.write(text);
-        lastTextCharacter = text.at(-1) || lastTextCharacter;
       }
     });
-    if (lastTextCharacter && lastTextCharacter !== `
-`)
-      process.stdout.write(`
-`);
     for (const warning of result.warnings)
       console.error(`[${warning}]`);
     if (result.stderr)
