@@ -8,9 +8,10 @@
 #
 # What it cleans:
 #   1. ${TMPDIR:-/tmp}/rlm_* temp files (context, prompts, cost, async output)
-#   2. ${TMPDIR:-/tmp}/rlm_async_* private job directories
-#   3. ${TMPDIR:-/tmp}/rlm_ws_* and ypi_ws_* workspace directories
-#   4. Stale jj workspaces named rlm-* in the current repo (if in a jj repo)
+#   2. ${TMPDIR:-/tmp}/rlm_calls_*.counter.lock stale call-counter locks
+#   3. ${TMPDIR:-/tmp}/rlm_async_* private job directories
+#   4. ${TMPDIR:-/tmp}/rlm_ws_* and ypi_ws_* workspace directories
+#   5. Stale jj workspaces named rlm-* in the current repo (if in a jj repo)
 #
 # Safe by default: dry-run unless --force is passed.
 
@@ -52,7 +53,21 @@ if [ "$FILE_COUNT" -gt 0 ]; then
     fi
 fi
 
-# --- 2. Private async job directories ---
+# --- 2. Stale call-counter lock directories ---
+LOCK_DIRS=$(find "$TMP_ROOT" -maxdepth 1 -name 'rlm_calls_*.counter.lock' -type d -mmin +"$AGE_MIN" 2>/dev/null || true)
+LOCK_COUNT=0
+[ -n "$LOCK_DIRS" ] && LOCK_COUNT=$(echo "$LOCK_DIRS" | wc -l)
+echo "Call-counter locks older than ${AGE_MIN}m: $LOCK_COUNT"
+if [ "$LOCK_COUNT" -gt 0 ]; then
+    if [ "$FORCE" = true ]; then
+        echo "$LOCK_DIRS" | xargs rm -rf 2>/dev/null
+        echo "  ✓ deleted"
+    else
+        echo "  (use --force to delete)"
+    fi
+fi
+
+# --- 3. Private async job directories ---
 ASYNC_DIRS=$(
     find "$TMP_ROOT" -maxdepth 1 -name 'rlm_async_*' -type d -mmin +"$AGE_MIN" 2>/dev/null | while IFS= read -r candidate; do
         name=$(basename "$candidate")
@@ -77,7 +92,7 @@ if [ "$ASYNC_COUNT" -gt 0 ]; then
     fi
 fi
 
-# --- 3. Workspace directories ---
+# --- 4. Workspace directories ---
 WS_DIRS=$(find "$TMP_ROOT" -maxdepth 1 \( -name 'rlm_ws_*' -o -name 'ypi_ws_*' \) -type d -mmin +"$AGE_MIN" 2>/dev/null || true)
 WS_COUNT=0
 [ -n "$WS_DIRS" ] && WS_COUNT=$(echo "$WS_DIRS" | wc -l)
@@ -94,7 +109,7 @@ if [ "$WS_COUNT" -gt 0 ]; then
     fi
 fi
 
-# --- 4. Stale jj workspaces (rlm-* pattern) ---
+# --- 5. Stale jj workspaces (rlm-* pattern) ---
 if jj root &>/dev/null 2>&1; then
     STALE_WS=$(jj workspace list 2>/dev/null | grep -E '^(rlm-|ypi-)' | awk '{print $1}' | sed 's/:$//' || true)
     STALE_WS_COUNT=$(echo "$STALE_WS" | grep -c . 2>/dev/null || echo 0)

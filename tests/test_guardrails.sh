@@ -367,15 +367,18 @@ assert_eq "G10: temp cleaned after error" "$BEFORE" "$AFTER"
 # directories, remains dry-run by default, and ignores lookalikes without owned entries.
 ASYNC_OWNED="$TMPDIR/rlm_async_cleanup_ABC123"
 ASYNC_LOOKALIKE="$TMPDIR/rlm_async_unrelated_DEF456"
-mkdir -p "$ASYNC_OWNED" "$ASYNC_LOOKALIKE"
+STALE_COUNTER_LOCK="$TMPDIR/rlm_calls_cleanup.counter.lock"
+mkdir -p "$ASYNC_OWNED" "$ASYNC_LOOKALIKE" "$STALE_COUNTER_LOCK"
 printf '%s\n' done > "$ASYNC_OWNED/output.txt"
 printf '%s\n' keep > "$ASYNC_LOOKALIKE/unrelated.txt"
-touch -d '3 hours ago' "$ASYNC_OWNED" "$ASYNC_LOOKALIKE"
+touch -d '3 hours ago' "$ASYNC_OWNED" "$ASYNC_LOOKALIKE" "$STALE_COUNTER_LOCK"
 CLEANUP_DRY=$(TMPDIR="$TMPDIR" "$PROJECT_DIR/rlm_cleanup" --age 60)
 assert_contains "G10b: cleanup dry-run discovers owned async directory" "Async job dirs older than 60m: 1" "$CLEANUP_DRY"
-if [ -d "$ASYNC_OWNED" ]; then pass "G10b: cleanup is dry-run by default"; else fail "G10b: cleanup is dry-run by default" "owned directory removed"; fi
+assert_contains "G10b: cleanup dry-run discovers stale counter lock" "Call-counter locks older than 60m: 1" "$CLEANUP_DRY"
+if [ -d "$ASYNC_OWNED" ] && [ -d "$STALE_COUNTER_LOCK" ]; then pass "G10b: cleanup is dry-run by default"; else fail "G10b: cleanup is dry-run by default" "owned directory removed"; fi
 TMPDIR="$TMPDIR" "$PROJECT_DIR/rlm_cleanup" --age 60 --force >/dev/null
 if [ ! -e "$ASYNC_OWNED" ]; then pass "G10b: forced cleanup removes owned async directory"; else fail "G10b: forced cleanup removes owned async directory" "directory remains"; fi
+if [ ! -e "$STALE_COUNTER_LOCK" ]; then pass "G10b: forced cleanup removes stale counter lock"; else fail "G10b: forced cleanup removes stale counter lock" "lock remains"; fi
 if [ -d "$ASYNC_LOOKALIKE" ]; then pass "G10b: cleanup preserves unrelated lookalike"; else fail "G10b: cleanup preserves unrelated lookalike" "lookalike removed"; fi
 rm -rf "$ASYNC_LOOKALIKE"
 
