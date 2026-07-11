@@ -37,8 +37,9 @@ budget enforcement must fail closed rather than record a partial value.
 
 ## Default guardrail posture
 
-- `RLM_MAX_DEPTH=4` supports an observed orchestrate → review → adjudicate →
-  focused-probe chain without treating deeper recursion as a target.
+- `RLM_MAX_DEPTH=3` remains the default. In the bounded contract-audit ablation,
+  depth 3 returned all 12 expected findings with no false positives; depth 4 used
+  1.82× the tokens and 1.34× the cost, then timed out without a final answer.
 - `RLM_MAX_CALLS=128` bounds total fan-out with headroom above the approximately
   52-call evaluation trace that motivated this change.
 - Timeout and dollar budget remain explicit per-run choices because hosted and

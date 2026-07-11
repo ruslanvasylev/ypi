@@ -13,7 +13,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ### Changed
 - Bare `ypi` now explicitly preserves Pi-native root model selection: root provider/model/thinking come from Pi settings (`defaultProvider`, `defaultModel`, `defaultThinkingLevel`), `/model`, or CLI flags, while children inherit the active root route by default. Recursive child routing can now be lowered by depth with `RLM_CHILD_MODELS`, `RLM_CHILD_PROVIDERS`, and `RLM_CHILD_THINKING_LEVELS` without narrowing the root default, toolset, timeout, or call-limit behavior.
 - Agent-facing guidance now describes ypi as an RLM-inspired recursive coding-agent runtime rather than an Algorithm 1 reproduction, distinguishes the root prompt from delegated prompt files, and states which configured guardrails actually enforce bounds.
-- The bounded-recursion default is now depth 4 with a 128-call session/tree cap, supporting an observed orchestrate → review → adjudicate → focused-probe chain while bounding total fan-out. `$RLM_ROOT_PROMPT_FILE` and goal/scope/acceptance echo guidance make deeper delegation directly checkable for drift.
+- The bounded-recursion default remains depth 3 and now adds a 128-call session/tree cap. A controlled depth-3/depth-4 audit kept depth 3 after it found all 12 planted defects while depth 4 used 1.82× the tokens and timed out without an answer. `$RLM_ROOT_PROMPT_FILE` and goal/scope/acceptance echo guidance make deeper per-run experiments directly checkable for drift.
 - `ypi`, `rlm_query`, and `ypi-doctor` prefer the package-local exact Pi dependency over a stale PATH binary. The pure `pi-recursive` package follows Pi's package contract by declaring host-provided Pi and `typebox` as `"*"` peers.
 
 ### Fixed

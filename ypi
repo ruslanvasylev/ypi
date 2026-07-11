@@ -13,7 +13,7 @@
 #   RLM_PROVIDER       — LLM provider override for root + sub-calls (default: Pi active/default provider)
 #   RLM_MODEL          — LLM model override for root + sub-calls (default: Pi active/default model)
 #   RLM_THINKING_LEVEL — thinking-level override for sub-calls (default: Pi active/default thinking)
-#   RLM_MAX_DEPTH      — max recursion depth (default: 4)
+#   RLM_MAX_DEPTH      — max recursion depth (default: 3)
 #   RLM_TIMEOUT        — wall-clock seconds for entire recursive tree (default: none)
 #   RLM_MAX_CALLS      — max total rlm_query invocations (default: 128)
 #   RLM_CHILD_MODEL    — model for all sub-calls at depth > 0 (default: same as root)
@@ -89,7 +89,7 @@ export PATH="$SCRIPT_DIR:$PATH"
 # Provider/model routing is applied after CLI parsing so explicit --provider / --model
 # flags remain authoritative for the root Pi process.
 export RLM_DEPTH="${RLM_DEPTH:-0}"
-export RLM_MAX_DEPTH="${RLM_MAX_DEPTH:-4}"
+export RLM_MAX_DEPTH="${RLM_MAX_DEPTH:-3}"
 export RLM_SYSTEM_PROMPT="$SCRIPT_DIR/SYSTEM_PROMPT.md"
 
 # Guardrails — preserve explicit values and seed bounded depth/call defaults.

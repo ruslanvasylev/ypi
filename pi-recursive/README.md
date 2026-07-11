@@ -33,7 +33,7 @@ Behavior is controlled through `RLM_*` environment variables. The pure extension
 
 | Variable | Example | What it does |
 | --- | --- | --- |
-| `RLM_MAX_DEPTH` | `RLM_MAX_DEPTH=4` | How deep recursion can go (default `4`). |
+| `RLM_MAX_DEPTH` | `RLM_MAX_DEPTH=3` | How deep recursion can go (default `3`; deeper runs require explicit bounds). |
 | `RLM_CHILD_MODEL` | `RLM_CHILD_MODEL=haiku` | Use one model for all sub-calls at depth > 0. |
 | `RLM_CHILD_PROVIDER` | `RLM_CHILD_PROVIDER=anthropic` | Provider used with `RLM_CHILD_MODEL`. |
 | `RLM_CHILD_THINKING_LEVEL` | `RLM_CHILD_THINKING_LEVEL=high` | Thinking level for all sub-calls at depth > 0. |

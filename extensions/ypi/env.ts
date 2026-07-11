@@ -6,7 +6,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { YpiRuntime } from "./runtime.ts";
 import { debug } from "./runtime.ts";
 
-export const DEFAULT_MAX_DEPTH = 4;
+export const DEFAULT_MAX_DEPTH = 3;
 export const DEFAULT_MAX_CALLS = 128;
 
 function exactNonNegativeInteger(value: string | undefined, fallback: string): number {

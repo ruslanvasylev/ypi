@@ -24,7 +24,7 @@
 #
 # Environment:
 #   RLM_DEPTH         — current recursion depth (default: 0)
-#   RLM_MAX_DEPTH     — max recursion depth (default: 4)
+#   RLM_MAX_DEPTH     — max recursion depth (default: 3)
 #   RLM_PROVIDER      — LLM provider
 #   RLM_MODEL         — LLM model
 #   RLM_THINKING_LEVEL — Pi thinking level for child calls
@@ -173,7 +173,7 @@ PROMPT="${1:?Usage: rlm_query [--fork] [--async] [--notify PID] \"your prompt he
 # This is the only recursion limiter. Children get full tools/extensions.
 # ----------------------------------------------------------------------
 DEPTH="${RLM_DEPTH:-0}"
-MAX_DEPTH="${RLM_MAX_DEPTH:-4}"
+MAX_DEPTH="${RLM_MAX_DEPTH:-3}"
 export RLM_MAX_CALLS="${RLM_MAX_CALLS:-128}"
 
 # Fail closed: a malformed depth config must not bypass the recursion limiter.

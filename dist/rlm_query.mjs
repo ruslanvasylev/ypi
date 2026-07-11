@@ -37,7 +37,7 @@ function debug(message) {
 }
 
 // extensions/ypi/env.ts
-var DEFAULT_MAX_DEPTH = 4;
+var DEFAULT_MAX_DEPTH = 3;
 var DEFAULT_MAX_CALLS = 128;
 function exactNonNegativeInteger(value, fallback) {
   const raw = value ?? fallback;

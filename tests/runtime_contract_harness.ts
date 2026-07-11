@@ -215,7 +215,7 @@ async function run(): Promise<void> {
 	console.log("\n=== Recursion Runtime Contract Harness ===");
 	clearRuntimeEnv();
 	ensureEnvironment(runtime, extensionContext(), pi);
-	equal("default max depth supports four-level workflow", process.env.RLM_MAX_DEPTH, "4");
+	equal("default max depth remains empirically bounded", process.env.RLM_MAX_DEPTH, "3");
 	equal("default total call cap is bounded", process.env.RLM_MAX_CALLS, "128");
 	registerNativeRlmQueryTool(pi, runtime);
 	record(Boolean(nativeTool), "native adapter registered");

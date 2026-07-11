@@ -122,7 +122,7 @@ The design has four properties that compound:
 
 2. **Self-hosting** — The TypeScript runtime core is the canonical recursion machinery. When the CLI helper is enabled (the `ypi` wrapper, or any load with `YPI_SHELL_HELPER=1`), the prompt includes the thin launcher, runtime core, and CLI adapter for inspection. A bare `pi -e` / npm extension install uses the thin native adapter over the same core.
 
-3. **Bounded ancestry with tree guards** — `RLM_MAX_DEPTH` defaults to `4`, enough for an orchestrate → review → adjudicate → focused-probe chain. `RLM_MAX_CALLS` defaults to `128` to bound total fan-out; timeout and budget remain optional because safe universal wall-time and dollar limits do not exist across local and hosted models. These controls reduce runaway risk, but cannot guarantee provider or operating-system termination.
+3. **Bounded ancestry with tree guards** — `RLM_MAX_DEPTH` remains `3`; a controlled depth-3/depth-4 audit found all 12 planted defects at depth 3, while depth 4 used 1.82× the tokens and timed out without an answer. Deeper per-run overrides remain available for tasks that justify them. `RLM_MAX_CALLS` defaults to `128` to bound total fan-out; timeout and budget remain explicit because safe universal wall-time and dollar limits do not exist across local and hosted models.
 
 4. **Symbolic access** — `$CONTEXT` holds external data and each delegated child receives its task through `$RLM_PROMPT_FILE` as well as Pi's prompt argument. The root wrapper prompt remains a normal Pi user message. Agents can use files and line-addressed edits instead of copying bulk data through model memory.
 
@@ -158,7 +158,7 @@ This means root uses Pi's configured default, depth-1 children use high thinking
 | Timeout | `RLM_TIMEOUT=60` | Wall-clock limit for entire recursive tree |
 | Call limit | `RLM_MAX_CALLS=128` | Max total `rlm_query` invocations (default 128; lower it for bounded evaluations) |
 | Model routing | `RLM_CHILD_MODEL=haiku` or `RLM_CHILD_MODELS=big:high,small:medium` | Use one child model for every sub-call, or a comma-separated depth route for depth 1, 2, ... |
-| Depth limit | `RLM_MAX_DEPTH=4` | How deep recursion can go (default 4; increase only with explicit call/time/budget controls) |
+| Depth limit | `RLM_MAX_DEPTH=3` | How deep recursion can go (default 3; increase only for a measured task with explicit call/time/budget controls) |
 | jj disable | `RLM_JJ=0` | Skip workspace isolation; child agents exclude built-in mutators unless `RLM_UNSAFE_NO_JJ_WRITE=1`, while installed extension tools remain available |
 | Plain text | `RLM_JSON=0` | Disable JSON mode (no cost tracking) |
 | Child non-extension discovery isolation | `RLM_CHILD_DISCOVERY=0` | Pass Pi's `--no-skills`, `--no-prompt-templates`, `--no-themes`, `--no-context-files`, and `--no-approve`; installed extensions may still register commands/skills unless extension loading is also disabled |
@@ -205,6 +205,12 @@ There are two published packages, built from one canonical source:
 |---|---|---|---|
 | **`pi-recursive`** | Pi users who want recursion inside plain `pi` | `pi install npm:pi-recursive` or `pi -e npm:pi-recursive` | The native `rlm_query` tool, prompt injection, depth/status/env handling. No `bin`; host `pi` is a peer dependency. |
 | **`ypi`** | Users who want a preconfigured recursive CLI | `npm install -g ypi` / `bun install -g ypi` | The same core and extension plus launcher defaults, the Node-backed `rlm_query` CLI (pipes/async), cost/session helpers, and retained one-release fallbacks. Bundles `pi` so the CLI runs without a separate global install. |
+
+During the convergence window, `YPI_LEGACY_IMPL=1 ypi ...` or
+`YPI_LEGACY_IMPL=1 rlm_query ...` selects the shipped incumbent native/CLI
+engine for rollback and comparison. These paths remain packaged and tested;
+`docs/deletion-candidates.md` is a mark-for-deletion evidence ledger, not
+permission to remove them.
 
 Both ship the same `extensions/` source. `pi-recursive` is the extension-only
 publish view, staged from the repo root by `scripts/build-pi-recursive`; `ypi`
