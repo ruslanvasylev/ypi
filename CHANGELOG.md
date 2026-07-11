@@ -22,7 +22,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - Native recursion depth parsing now rejects integer prefixes such as `0junk` and values outside the safe-integer range instead of silently accepting the numeric prefix.
 - Native and CLI no-jj children now share the same built-in mutator exclusion policy without a global tool allowlist, and extension-isolated children keep the standalone ypi system prompt through both adapters.
 - Budget enforcement now fails closed through both adapters when `RLM_JSON=0`, because unmeasured plain output cannot update the shared cost ledger.
-- Incremental JSON decoding now preserves late answer and cost events after oversized diagnostic events, while CLI stdout streams incrementally and successful child stderr remains on stderr.
+- Incremental JSON decoding now preserves late answer and cost events after oversized diagnostic events, fails configured budgets closed when a skipped event could own cost, while CLI stdout streams incrementally and successful child stderr remains on stderr.
 - SIGINT/SIGTERM cancellation reaches detached child process groups; preflight timeout exits 124 and includes stdin/setup time; malformed call, timeout, start-time, and budget controls fail closed.
 - Async calls are admitted before metadata acknowledgement, snapshot inherited context/fork state, and publish through private exclusive job directories. Broad automatic `/tmp/rlm_*` deletion was removed in favor of lease cleanup plus explicit `rlm_cleanup`.
 - Installed-package and publication checks now cover generated-runtime freshness, package-local Pi resolution, direct bundle root resolution, clean extension registration exits, and packaged doctor availability.

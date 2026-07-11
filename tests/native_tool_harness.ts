@@ -84,6 +84,10 @@ elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "json-huge-tail" ]; then
   printf '%s\\n' '"}'
   printf '%s\\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"LATE_JSON_OK"}}'
   printf '%s\\n' '{"type":"turn_end","message":{"usage":{"totalTokens":11,"cost":{"total":0.456}}},"toolResults":[]}'
+elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "json-huge-turn-end" ]; then
+  printf '%s' '{"type":"turn_end","message":{"usage":{"totalTokens":99,"cost":{"total":9.99}}},"toolResults":["'
+  head -c $((17 * 1024 * 1024)) /dev/zero | tr '\\0' X
+  printf '%s\\n' '"]}'
 elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "sleep" ]; then
   sleep 30
 else
@@ -387,6 +391,19 @@ async function run(): Promise<void> {
 	assertContains("N10b: late JSON answer survives oversized prior event", lateJsonText, "LATE_JSON_OK");
 	const lateCostFile = process.env.RLM_COST_FILE || "";
 	assertContains("N10b: late JSON cost survives oversized prior event", existsSync(lateCostFile) ? readFileSync(lateCostFile, "utf8") : "", '"cost":0.456');
+
+	// N10c: if the oversized event itself could contain turn-end usage, a hard
+	// budget must fail closed rather than record a misleading partial/zero cost.
+	clearYpiEnv();
+	resetLog();
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	process.env.RLM_BUDGET = "20";
+	process.env.YPI_FAKE_PI_MODE = "json-huge-turn-end";
+	ensureEnvironment(runtime, context());
+	await expectThrow("N10c: oversized cost-bearing event fails budget closed", "Cannot enforce RLM_BUDGET", () => invoke());
+	const incompleteCostFile = process.env.RLM_COST_FILE || "";
+	assertNotContains("N10c: incomplete cost is not recorded as authoritative", existsSync(incompleteCostFile) ? readFileSync(incompleteCostFile, "utf8") : "", '"cost":0');
 
 	clearYpiEnv();
 	resetLog();

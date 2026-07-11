@@ -13,6 +13,7 @@ export interface ChildOutputSnapshot {
 	stderrTruncated: boolean;
 	textTruncated: boolean;
 	jsonEventTruncated: boolean;
+	jsonCostIncomplete: boolean;
 }
 
 export interface NormalizedChildOutput {
@@ -31,7 +32,7 @@ export interface BoundedCapture {
 export interface JsonStreamDecoder {
 	append(chunk: string): void;
 	finish(): void;
-	result(): { text: string; cost: CostSummary; textTruncated: boolean; jsonEventTruncated: boolean };
+	result(): { text: string; cost: CostSummary; textTruncated: boolean; jsonEventTruncated: boolean; jsonCostIncomplete: boolean };
 }
 
 export function createBoundedCapture(limit: number): BoundedCapture {
@@ -66,8 +67,14 @@ export function createJsonDecoder(onText?: (text: string) => void): JsonStreamDe
 	let pending = "";
 	let droppingOversizedLine = false;
 	let jsonEventTruncated = false;
+	let jsonCostIncomplete = false;
 	let cost = 0;
 	let tokens = 0;
+
+	const classifyOversizedLine = (prefix: string) => {
+		const eventType = /"type"\s*:\s*"([^"]+)"/.exec(prefix)?.[1];
+		if (!eventType || eventType === "turn_end") jsonCostIncomplete = true;
+	};
 
 	const processLine = (line: string) => {
 		if (!line.trim()) return;
@@ -102,6 +109,7 @@ export function createJsonDecoder(onText?: (text: string) => void): JsonStreamDe
 				const newline = rest.indexOf("\n");
 				if (newline < 0) {
 					if (pending.length + rest.length > MAX_JSON_EVENT_CHARS) {
+						classifyOversizedLine(pending + rest.slice(0, Math.max(0, MAX_JSON_EVENT_CHARS - pending.length)));
 						pending = "";
 						droppingOversizedLine = true;
 						jsonEventTruncated = true;
@@ -112,6 +120,7 @@ export function createJsonDecoder(onText?: (text: string) => void): JsonStreamDe
 				}
 
 				if (pending.length + newline > MAX_JSON_EVENT_CHARS) {
+					classifyOversizedLine(pending + rest.slice(0, Math.max(0, MAX_JSON_EVENT_CHARS - pending.length)));
 					jsonEventTruncated = true;
 				} else {
 					processLine(pending + rest.slice(0, newline));
@@ -130,6 +139,7 @@ export function createJsonDecoder(onText?: (text: string) => void): JsonStreamDe
 				cost: { cost, tokens },
 				textTruncated: text.truncated,
 				jsonEventTruncated,
+				jsonCostIncomplete,
 			};
 		},
 	};
@@ -141,6 +151,7 @@ export function normalizeChildOutput(result: ChildOutputSnapshot): NormalizedChi
 		result.stderrTruncated ? `Child stderr capture exceeded ${MAX_CHILD_STREAM_CHARS} characters; remainder discarded` : "",
 		result.textTruncated ? `Child answer exceeded ${MAX_TOOL_OUTPUT_CHARS} characters; remainder discarded` : "",
 		result.jsonEventTruncated ? `Oversized Pi JSON event exceeded ${MAX_JSON_EVENT_CHARS} characters and was skipped` : "",
+		result.jsonCostIncomplete ? "Cost accounting is incomplete because an oversized turn_end or unclassified Pi JSON event was skipped" : "",
 	].filter(Boolean);
 	return {
 		text: result.text,

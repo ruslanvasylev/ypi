@@ -57,6 +57,7 @@ export interface RecursiveChildDetails {
 	stderrTruncated: boolean;
 	textTruncated: boolean;
 	jsonEventTruncated: boolean;
+	jsonCostIncomplete: boolean;
 	cancelled: boolean;
 }
 
@@ -177,8 +178,8 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 		});
 		const elapsed = Math.max(0, Math.round((Date.now() - started) / 1000));
 		const output = normalizeChildOutput(processResult);
-		if (output.cost) appendCostSummary(output.cost);
-		trace(`[${new Date().toISOString()}] depth=${depth} child_depth=${childDepth} COMPLETED exit=${processResult.code} elapsed=${elapsed}s caller=${request.caller} call=${callCount} cost=${output.cost?.cost ?? "untracked"} tokens=${output.cost?.tokens ?? "untracked"} cancelled=${processResult.cancelled} timeout=${processResult.timedOut} truncated=${processResult.textTruncated || processResult.jsonEventTruncated}`);
+		if (output.cost && !processResult.jsonCostIncomplete) appendCostSummary(output.cost);
+		trace(`[${new Date().toISOString()}] depth=${depth} child_depth=${childDepth} COMPLETED exit=${processResult.code} elapsed=${elapsed}s caller=${request.caller} call=${callCount} cost=${processResult.jsonCostIncomplete ? "incomplete" : output.cost?.cost ?? "untracked"} tokens=${processResult.jsonCostIncomplete ? "incomplete" : output.cost?.tokens ?? "untracked"} cancelled=${processResult.cancelled} timeout=${processResult.timedOut} truncated=${processResult.textTruncated || processResult.jsonEventTruncated}`);
 		const details: RecursiveChildDetails = {
 			depth,
 			childDepth,
@@ -193,6 +194,7 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 			stderrTruncated: processResult.stderrTruncated,
 			textTruncated: processResult.textTruncated,
 			jsonEventTruncated: processResult.jsonEventTruncated,
+			jsonCostIncomplete: processResult.jsonCostIncomplete,
 			cancelled: processResult.cancelled,
 		};
 		if (processResult.code !== 0) {
@@ -203,6 +205,9 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 					: `Child Pi exited with ${processResult.code}`;
 			const childOutput = formatCombinedChildOutput(output);
 			throw new RecursiveChildError(`${reason}${childOutput ? `\n${childOutput}` : ""}`, processResult.code, details);
+		}
+		if (processResult.jsonCostIncomplete && process.env.RLM_BUDGET) {
+			throw new RecursiveChildError("Cannot enforce RLM_BUDGET: an oversized cost-bearing or unclassified Pi JSON event was skipped", 1, details);
 		}
 		return { text: output.text, stderr: output.stderr, warnings: output.warnings, details };
 	} finally {

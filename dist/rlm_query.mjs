@@ -623,8 +623,14 @@ function createJsonDecoder(onText) {
   let pending = "";
   let droppingOversizedLine = false;
   let jsonEventTruncated = false;
+  let jsonCostIncomplete = false;
   let cost = 0;
   let tokens = 0;
+  const classifyOversizedLine = (prefix) => {
+    const eventType = /"type"\s*:\s*"([^"]+)"/.exec(prefix)?.[1];
+    if (!eventType || eventType === "turn_end")
+      jsonCostIncomplete = true;
+  };
   const processLine = (line) => {
     if (!line.trim())
       return;
@@ -659,6 +665,7 @@ function createJsonDecoder(onText) {
 `);
         if (newline < 0) {
           if (pending.length + rest.length > MAX_JSON_EVENT_CHARS) {
+            classifyOversizedLine(pending + rest.slice(0, Math.max(0, MAX_JSON_EVENT_CHARS - pending.length)));
             pending = "";
             droppingOversizedLine = true;
             jsonEventTruncated = true;
@@ -668,6 +675,7 @@ function createJsonDecoder(onText) {
           return;
         }
         if (pending.length + newline > MAX_JSON_EVENT_CHARS) {
+          classifyOversizedLine(pending + rest.slice(0, Math.max(0, MAX_JSON_EVENT_CHARS - pending.length)));
           jsonEventTruncated = true;
         } else {
           processLine(pending + rest.slice(0, newline));
@@ -686,7 +694,8 @@ function createJsonDecoder(onText) {
         text: text.text(),
         cost: { cost, tokens },
         textTruncated: text.truncated,
-        jsonEventTruncated
+        jsonEventTruncated,
+        jsonCostIncomplete
       };
     }
   };
@@ -696,7 +705,8 @@ function normalizeChildOutput(result) {
     result.stdoutTruncated ? `Child stdout diagnostic capture exceeded ${MAX_CHILD_STREAM_CHARS} characters; remainder discarded` : "",
     result.stderrTruncated ? `Child stderr capture exceeded ${MAX_CHILD_STREAM_CHARS} characters; remainder discarded` : "",
     result.textTruncated ? `Child answer exceeded ${MAX_TOOL_OUTPUT_CHARS} characters; remainder discarded` : "",
-    result.jsonEventTruncated ? `Oversized Pi JSON event exceeded ${MAX_JSON_EVENT_CHARS} characters and was skipped` : ""
+    result.jsonEventTruncated ? `Oversized Pi JSON event exceeded ${MAX_JSON_EVENT_CHARS} characters and was skipped` : "",
+    result.jsonCostIncomplete ? "Cost accounting is incomplete because an oversized turn_end or unclassified Pi JSON event was skipped" : ""
   ].filter(Boolean);
   return {
     text: result.text,
@@ -801,6 +811,7 @@ function runChildProcess(options) {
         stderrTruncated: rawStderr.truncated,
         textTruncated: options.jsonMode ? json.textTruncated : plainText.truncated,
         jsonEventTruncated: options.jsonMode ? json.jsonEventTruncated : false,
+        jsonCostIncomplete: options.jsonMode ? json.jsonCostIncomplete : false,
         timedOut,
         cancelled
       });
@@ -1028,9 +1039,9 @@ async function runRecursiveChild(runtime, request) {
     });
     const elapsed = Math.max(0, Math.round((Date.now() - started) / 1000));
     const output = normalizeChildOutput(processResult);
-    if (output.cost)
+    if (output.cost && !processResult.jsonCostIncomplete)
       appendCostSummary(output.cost);
-    trace(`[${new Date().toISOString()}] depth=${depth} child_depth=${childDepth} COMPLETED exit=${processResult.code} elapsed=${elapsed}s caller=${request.caller} call=${callCount} cost=${output.cost?.cost ?? "untracked"} tokens=${output.cost?.tokens ?? "untracked"} cancelled=${processResult.cancelled} timeout=${processResult.timedOut} truncated=${processResult.textTruncated || processResult.jsonEventTruncated}`);
+    trace(`[${new Date().toISOString()}] depth=${depth} child_depth=${childDepth} COMPLETED exit=${processResult.code} elapsed=${elapsed}s caller=${request.caller} call=${callCount} cost=${processResult.jsonCostIncomplete ? "incomplete" : output.cost?.cost ?? "untracked"} tokens=${processResult.jsonCostIncomplete ? "incomplete" : output.cost?.tokens ?? "untracked"} cancelled=${processResult.cancelled} timeout=${processResult.timedOut} truncated=${processResult.textTruncated || processResult.jsonEventTruncated}`);
     const details = {
       depth,
       childDepth,
@@ -1045,6 +1056,7 @@ async function runRecursiveChild(runtime, request) {
       stderrTruncated: processResult.stderrTruncated,
       textTruncated: processResult.textTruncated,
       jsonEventTruncated: processResult.jsonEventTruncated,
+      jsonCostIncomplete: processResult.jsonCostIncomplete,
       cancelled: processResult.cancelled
     };
     if (processResult.code !== 0) {
@@ -1052,6 +1064,9 @@ async function runRecursiveChild(runtime, request) {
       const childOutput = formatCombinedChildOutput(output);
       throw new RecursiveChildError(`${reason}${childOutput ? `
 ${childOutput}` : ""}`, processResult.code, details);
+    }
+    if (processResult.jsonCostIncomplete && process.env.RLM_BUDGET) {
+      throw new RecursiveChildError("Cannot enforce RLM_BUDGET: an oversized cost-bearing or unclassified Pi JSON event was skipped", 1, details);
     }
     return { text: output.text, stderr: output.stderr, warnings: output.warnings, details };
   } finally {

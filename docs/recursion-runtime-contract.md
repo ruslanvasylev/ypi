@@ -32,7 +32,8 @@ A runtime result must distinguish normal exit, timeout, cancellation, and child
 failure. Output limits must be enforced while reading the child stream, not only
 after the full stream is resident in memory. Incremental JSON parsing must retain
 late answer and cost events even when an earlier diagnostic event exceeds its
-capture bound.
+capture bound. If the skipped oversized event itself could own cost, configured
+budget enforcement must fail closed rather than record a partial value.
 
 ## Default guardrail posture
 

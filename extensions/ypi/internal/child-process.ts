@@ -94,6 +94,7 @@ export function runChildProcess(options: ChildProcessOptions): Promise<ChildProc
 				stderrTruncated: rawStderr.truncated,
 				textTruncated: options.jsonMode ? json.textTruncated : plainText.truncated,
 				jsonEventTruncated: options.jsonMode ? json.jsonEventTruncated : false,
+				jsonCostIncomplete: options.jsonMode ? json.jsonCostIncomplete : false,
 				timedOut,
 				cancelled,
 			});
