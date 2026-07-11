@@ -172,7 +172,7 @@ fi
 # ─── E5: Timeout enforcement (if implemented) ────────────────────────────
 
 if should_run "E5"; then
-    if grep -q "RLM_TIMEOUT" "$PROJECT_DIR/rlm_query" 2>/dev/null; then
+    if grep -q "RLM_TIMEOUT" "$PROJECT_DIR/extensions/ypi/guardrails.ts" 2>/dev/null; then
         echo "--- E5: Timeout enforcement ---"
         cat > "$TEST_TMP/ctx_e5.txt" << 'EOF'
 Write a 10,000 word essay about the history of mathematics.
@@ -204,7 +204,7 @@ fi
 # ─── E6: Max calls enforcement (if implemented) ──────────────────────────
 
 if should_run "E6"; then
-    if grep -q "RLM_MAX_CALLS" "$PROJECT_DIR/rlm_query" 2>/dev/null; then
+    if grep -q "RLM_MAX_CALLS" "$PROJECT_DIR/extensions/ypi/guardrails.ts" 2>/dev/null; then
         echo "--- E6: Max calls enforcement ---"
         export CONTEXT="$TEST_TMP/ctx_e4.txt"
         export RLM_DEPTH=0

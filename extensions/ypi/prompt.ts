@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import type { BeforeAgentStartEvent } from "@earendil-works/pi-coding-agent";
 import { shellHelperEnabled } from "./env.ts";
+import { renderActiveTaskFilesSection } from "./internal/task-files.ts";
 import type { YpiRuntime } from "./runtime.ts";
 import { debug } from "./runtime.ts";
 
@@ -64,23 +65,6 @@ ${cliAdapter}
 `;
 }
 
-function markdownPath(filePath: string): string {
-	return filePath.replaceAll("`", "\\`").replaceAll("\n", "\\n").replaceAll("\r", "\\r");
-}
-
-function activeTaskFilesSection(): string {
-	const contextPath = process.env.CONTEXT;
-	const promptPath = process.env.RLM_PROMPT_FILE;
-	const rootPromptPath = process.env.RLM_ROOT_PROMPT_FILE;
-	if (!contextPath && !promptPath && !rootPromptPath) return "";
-	const rows = [
-		contextPath ? `- External task context: \`${markdownPath(contextPath)}\`` : "",
-		promptPath ? `- Current delegated charter: \`${markdownPath(promptPath)}\`` : "",
-		rootPromptPath ? `- Root delegation charter: \`${markdownPath(rootPromptPath)}\`` : "",
-	].filter(Boolean).join("\n");
-	return `\n\n## Active Recursive Task Files\n\n${rows}\n\nThe external task context is the primary evidence surface for a context-grounded\nquestion. Inspect it before using persistent memory, browser, provider, or other\nretrieval tools. Do not call Honcho or unrelated retrieval when the requested\nanswer is present in this task file. Use persistent memory only when the prompt\nasks for it or the task context is absent or explicitly insufficient.\n`;
-}
-
 export function buildYpiPrompt(runtime: YpiRuntime): string {
 	let systemPrompt: string;
 	if (existsSync(runtime.systemPromptPath)) {
@@ -90,7 +74,11 @@ export function buildYpiPrompt(runtime: YpiRuntime): string {
 		systemPrompt = MINIMAL_SYSTEM_PROMPT;
 	}
 
-	return `${systemPrompt}${activeTaskFilesSection()}${runtimeImplementationSection(runtime)}`;
+	return `${systemPrompt}${renderActiveTaskFilesSection({
+		contextPath: process.env.CONTEXT,
+		promptPath: process.env.RLM_PROMPT_FILE,
+		rootPromptPath: process.env.RLM_ROOT_PROMPT_FILE,
+	})}${runtimeImplementationSection(runtime)}`;
 }
 
 export function patchSystemPrompt(runtime: YpiRuntime, event: BeforeAgentStartEvent): string {

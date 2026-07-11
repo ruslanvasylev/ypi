@@ -125,6 +125,8 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 		parentSessionDir: request.parent.sessionDir,
 		childDepth,
 		callCount,
+		systemPromptPath: runtime.systemPromptPath,
+		rootPromptPath: depth === 0 ? undefined : process.env.RLM_ROOT_PROMPT_FILE,
 	});
 
 	try {
@@ -160,7 +162,7 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 		const extensionsEnabled = childExtensionsEnabled(childDepth);
 		if (!extensionsEnabled) args.push("--no-extensions");
 		if (extensionsEnabled && extensionPath && existsSync(extensionPath)) args.push("-e", extensionPath);
-		else if (existsSync(runtime.systemPromptPath)) args.push("--system-prompt", runtime.systemPromptPath);
+		else if (resources.standaloneSystemPromptFile) args.push("--system-prompt", resources.standaloneSystemPromptFile);
 		args.push(request.prompt);
 
 		const timeoutSeconds = timeoutOrThrow();

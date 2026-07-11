@@ -1,8 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { safeTraceId, sharedSessionsEnabled } from "../env.ts";
+import { renderActiveTaskFilesSection } from "./task-files.ts";
 
 export interface ChildResourceInput {
 	prompt: string;
@@ -14,6 +15,8 @@ export interface ChildResourceInput {
 	parentSessionDir?: string;
 	childDepth: number;
 	callCount: number;
+	systemPromptPath?: string;
+	rootPromptPath?: string;
 }
 
 export interface WorkspaceLease {
@@ -27,6 +30,7 @@ export interface ChildResourceLease {
 	promptFile: string;
 	contextFile?: string;
 	childSession?: string;
+	standaloneSystemPromptFile?: string;
 	workspace: WorkspaceLease;
 	cleanup(): void;
 }
@@ -51,6 +55,18 @@ function createPromptFile(prompt: string): string {
 	const promptPath = path.join(mkdtempSync(path.join(tmpdir(), "ypi_prompt_")), "prompt.txt");
 	writeFileSync(promptPath, prompt);
 	return promptPath;
+}
+
+function createStandaloneSystemPrompt(input: ChildResourceInput, promptFile: string, contextFile?: string): string | undefined {
+	if (!input.systemPromptPath || !existsSync(input.systemPromptPath)) return undefined;
+	const outputPath = path.join(mkdtempSync(path.join(tmpdir(), "ypi_system_")), "system-prompt.md");
+	const section = renderActiveTaskFilesSection({
+		contextPath: contextFile,
+		promptPath: promptFile,
+		rootPromptPath: input.rootPromptPath || promptFile,
+	});
+	writeFileSync(outputPath, `${readFileSync(input.systemPromptPath, "utf8")}${section}`);
+	return outputPath;
 }
 
 function unavailableWorkspace(cwd: string, reason: string): WorkspaceLease {
@@ -112,10 +128,12 @@ function removeArtifact(filePath: string | undefined): void {
 export function acquireChildResources(input: ChildResourceInput): ChildResourceLease {
 	let promptFile: string | undefined;
 	let contextFile: string | undefined;
+	let standaloneSystemPromptFile: string | undefined;
 	let workspace: WorkspaceLease | undefined;
 	try {
 		promptFile = createPromptFile(input.prompt);
 		contextFile = createContextFile(input);
+		standaloneSystemPromptFile = createStandaloneSystemPrompt(input, promptFile, contextFile);
 		const childSession = childSessionFile(input);
 		copyForkSession(input, childSession);
 		workspace = createWorkspace(input.cwd, input.childDepth);
@@ -123,17 +141,20 @@ export function acquireChildResources(input: ChildResourceInput): ChildResourceL
 			promptFile,
 			contextFile,
 			childSession,
+			standaloneSystemPromptFile,
 			workspace,
 			cleanup() {
 				workspace?.cleanup();
 				removeArtifact(promptFile);
 				removeArtifact(contextFile);
+				removeArtifact(standaloneSystemPromptFile);
 			},
 		};
 	} catch (error) {
 		workspace?.cleanup();
 		removeArtifact(promptFile);
 		removeArtifact(contextFile);
+		removeArtifact(standaloneSystemPromptFile);
 		throw error;
 	}
 }

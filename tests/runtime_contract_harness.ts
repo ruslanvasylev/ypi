@@ -55,6 +55,13 @@ function contains(label: string, value: string, expected: string): void {
 
 writeFileSync(fakePi, `#!/usr/bin/env bash
 set -euo pipefail
+SYSTEM_PROMPT_FILE=""
+for ((i=1; i<=$#; i++)); do
+  if [ "\${!i}" = "--system-prompt" ]; then
+    j=$((i + 1))
+    SYSTEM_PROMPT_FILE="\${!j}"
+  fi
+done
 {
   printf 'ARGS='; printf '<%s>' "$@"; printf '\n'
   printf 'RLM_DEPTH=%s\n' "\${RLM_DEPTH:-unset}"
@@ -68,6 +75,7 @@ set -euo pipefail
   printf 'PROMPT_CONTENT=%s\n' "$(cat "\${RLM_PROMPT_FILE:-/dev/null}" 2>/dev/null || true)"
   printf 'ROOT_PROMPT_CONTENT=%s\n' "$(cat "\${RLM_ROOT_PROMPT_FILE:-/dev/null}" 2>/dev/null || true)"
   printf 'CONTEXT_CONTENT=%s\n' "$(cat "\${CONTEXT:-/dev/null}" 2>/dev/null || true)"
+  printf 'SYSTEM_PROMPT_CONTEXT=%s\n' "$(grep -F 'External task context:' "$SYSTEM_PROMPT_FILE" 2>/dev/null | head -1 || true)"
 } > "$YPI_FAKE_PI_LOG"
 echo FAKE_CHILD_OK
 `);
@@ -309,6 +317,11 @@ async function run(): Promise<void> {
 		record(
 			extensionsOffNative.observation.ARGS.includes("<--system-prompt>") && extensionsOffCli.observation.ARGS.includes("<--system-prompt>"),
 			"both adapters retain a system prompt when extensions are disabled",
+		);
+		record(
+			extensionsOffNative.observation.SYSTEM_PROMPT_CONTEXT?.includes("External task context: `") === true
+				&& extensionsOffCli.observation.SYSTEM_PROMPT_CONTEXT?.includes("External task context: `") === true,
+			"extension-disabled adapters project exact context paths into standalone prompts",
 		);
 	} else {
 		record(false, "both adapters emitted extensions-off observations");

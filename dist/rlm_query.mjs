@@ -832,9 +832,39 @@ function runChildProcess(options) {
 
 // extensions/ypi/internal/child-resources.ts
 import { spawnSync } from "node:child_process";
-import { copyFileSync as copyFileSync2, existsSync as existsSync5, mkdirSync as mkdirSync3, mkdtempSync as mkdtempSync3, rmSync as rmSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { copyFileSync as copyFileSync2, existsSync as existsSync5, mkdirSync as mkdirSync3, mkdtempSync as mkdtempSync3, readFileSync as readFileSync3, rmSync as rmSync4, writeFileSync as writeFileSync3 } from "node:fs";
 import { tmpdir as tmpdir5 } from "node:os";
 import path7 from "node:path";
+
+// extensions/ypi/internal/task-files.ts
+function markdownPath(filePath) {
+  return filePath.replaceAll("`", "\\`").replaceAll(`
+`, "\\n").replaceAll("\r", "\\r");
+}
+function renderActiveTaskFilesSection(files) {
+  if (!files.contextPath && !files.promptPath && !files.rootPromptPath)
+    return "";
+  const rows = [
+    files.contextPath ? `- External task context: \`${markdownPath(files.contextPath)}\`` : "",
+    files.promptPath ? `- Current delegated charter: \`${markdownPath(files.promptPath)}\`` : "",
+    files.rootPromptPath ? `- Root delegation charter: \`${markdownPath(files.rootPromptPath)}\`` : ""
+  ].filter(Boolean).join(`
+`);
+  return `
+
+## Active Recursive Task Files
+
+${rows}
+
+The external task context is the primary evidence surface for a context-grounded
+question. Inspect it before using persistent memory, browser, provider, or other
+retrieval tools. Do not call Honcho or unrelated retrieval when the requested
+answer is present in this task file. Use persistent memory only when the prompt
+asks for it or the task context is absent or explicitly insufficient.
+`;
+}
+
+// extensions/ypi/internal/child-resources.ts
 function createContextFile(input) {
   if (input.context !== undefined) {
     const contextPath = path7.join(mkdtempSync3(path7.join(tmpdir5(), "ypi_ctx_")), "context.txt");
@@ -853,6 +883,18 @@ function createPromptFile(prompt) {
   const promptPath = path7.join(mkdtempSync3(path7.join(tmpdir5(), "ypi_prompt_")), "prompt.txt");
   writeFileSync3(promptPath, prompt);
   return promptPath;
+}
+function createStandaloneSystemPrompt(input, promptFile, contextFile) {
+  if (!input.systemPromptPath || !existsSync5(input.systemPromptPath))
+    return;
+  const outputPath = path7.join(mkdtempSync3(path7.join(tmpdir5(), "ypi_system_")), "system-prompt.md");
+  const section = renderActiveTaskFilesSection({
+    contextPath: contextFile,
+    promptPath: promptFile,
+    rootPromptPath: input.rootPromptPath || promptFile
+  });
+  writeFileSync3(outputPath, `${readFileSync3(input.systemPromptPath, "utf8")}${section}`);
+  return outputPath;
 }
 function unavailableWorkspace(cwd, reason) {
   if (process.env.RLM_UNSAFE_NO_JJ_WRITE === "1") {
@@ -908,10 +950,12 @@ function removeArtifact(filePath) {
 function acquireChildResources(input) {
   let promptFile;
   let contextFile;
+  let standaloneSystemPromptFile;
   let workspace;
   try {
     promptFile = createPromptFile(input.prompt);
     contextFile = createContextFile(input);
+    standaloneSystemPromptFile = createStandaloneSystemPrompt(input, promptFile, contextFile);
     const childSession = childSessionFile(input);
     copyForkSession(input, childSession);
     workspace = createWorkspace(input.cwd, input.childDepth);
@@ -919,17 +963,20 @@ function acquireChildResources(input) {
       promptFile,
       contextFile,
       childSession,
+      standaloneSystemPromptFile,
       workspace,
       cleanup() {
         workspace?.cleanup();
         removeArtifact(promptFile);
         removeArtifact(contextFile);
+        removeArtifact(standaloneSystemPromptFile);
       }
     };
   } catch (error) {
     workspace?.cleanup();
     removeArtifact(promptFile);
     removeArtifact(contextFile);
+    removeArtifact(standaloneSystemPromptFile);
     throw error;
   }
 }
@@ -988,7 +1035,9 @@ async function runRecursiveChild(runtime, request) {
     parentSessionFile: request.parent.sessionFile,
     parentSessionDir: request.parent.sessionDir,
     childDepth,
-    callCount
+    callCount,
+    systemPromptPath: runtime.systemPromptPath,
+    rootPromptPath: depth === 0 ? undefined : process.env.RLM_ROOT_PROMPT_FILE
   });
   try {
     const { provider, model, thinkingLevel } = resolveChildRoute(request.parent, childDepth);
@@ -1032,8 +1081,8 @@ async function runRecursiveChild(runtime, request) {
       args.push("--no-extensions");
     if (extensionsEnabled && extensionPath && existsSync6(extensionPath))
       args.push("-e", extensionPath);
-    else if (existsSync6(runtime.systemPromptPath))
-      args.push("--system-prompt", runtime.systemPromptPath);
+    else if (resources.standaloneSystemPromptFile)
+      args.push("--system-prompt", resources.standaloneSystemPromptFile);
     args.push(request.prompt);
     const timeoutSeconds = timeoutOrThrow();
     request.onAdmitted?.(callCount);
