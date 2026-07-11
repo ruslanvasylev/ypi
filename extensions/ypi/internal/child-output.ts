@@ -29,9 +29,9 @@ export interface BoundedCapture {
 }
 
 export interface JsonStreamDecoder {
-	append(chunk: string): void;
+	append(chunk: string): boolean;
 	finish(): void;
-	result(): { text: string; cost: CostSummary; textTruncated: boolean; jsonEventTruncated: boolean; jsonCostIncomplete: boolean };
+	result(): { text: string; cost?: CostSummary; textTruncated: boolean; jsonEventTruncated: boolean; jsonCostIncomplete: boolean };
 }
 
 export function createBoundedCapture(limit: number): BoundedCapture {
@@ -61,7 +61,7 @@ function truncate(text: string): string {
 	return `${text.slice(0, MAX_TOOL_OUTPUT_CHARS)}\n\n[Output truncated by ypi recursion runtime]`;
 }
 
-export function createJsonDecoder(onText?: (text: string) => void): JsonStreamDecoder {
+export function createJsonDecoder(onText?: (text: string) => boolean | void): JsonStreamDecoder {
 	const text = createBoundedCapture(MAX_TOOL_OUTPUT_CHARS);
 	let pending = "";
 	let droppingOversizedLine = false;
@@ -69,21 +69,24 @@ export function createJsonDecoder(onText?: (text: string) => void): JsonStreamDe
 	let jsonCostIncomplete = false;
 	let cost = 0;
 	let tokens = 0;
+	let sawTurnEnd = false;
 
 	const classifyOversizedLine = (prefix: string) => {
 		const eventType = /"type"\s*:\s*"([^"]+)"/.exec(prefix)?.[1];
 		if (!eventType || eventType === "turn_end") jsonCostIncomplete = true;
 	};
 
-	const processLine = (line: string) => {
-		if (!line.trim()) return;
+	const processLine = (line: string): boolean => {
+		if (!line.trim()) return true;
+		let keepFlowing = true;
 		try {
 			const event = JSON.parse(line);
 			if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") {
 				const accepted = text.append(String(event.assistantMessageEvent.delta || ""));
-				if (accepted) onText?.(accepted);
+				if (accepted && onText?.(accepted) === false) keepFlowing = false;
 			}
 			if (event.type === "turn_end") {
+				sawTurnEnd = true;
 				const usage = event.message?.usage || {};
 				cost += Number(usage.cost?.total || 0);
 				tokens += Number(usage.totalTokens || 0);
@@ -91,15 +94,17 @@ export function createJsonDecoder(onText?: (text: string) => void): JsonStreamDe
 		} catch {
 			// Ignore non-JSON chatter from extensions or wrappers.
 		}
+		return keepFlowing;
 	};
 
 	return {
 		append(chunk: string) {
 			let rest = chunk;
+			let keepFlowing = true;
 			while (rest.length > 0) {
 				if (droppingOversizedLine) {
 					const newline = rest.indexOf("\n");
-					if (newline < 0) return;
+					if (newline < 0) return keepFlowing;
 					rest = rest.slice(newline + 1);
 					droppingOversizedLine = false;
 					continue;
@@ -115,18 +120,19 @@ export function createJsonDecoder(onText?: (text: string) => void): JsonStreamDe
 					} else {
 						pending += rest;
 					}
-					return;
+					return keepFlowing;
 				}
 
 				if (pending.length + newline > MAX_JSON_EVENT_CHARS) {
 					classifyOversizedLine(pending + rest.slice(0, Math.max(0, MAX_JSON_EVENT_CHARS - pending.length)));
 					jsonEventTruncated = true;
-				} else {
-					processLine(pending + rest.slice(0, newline));
+				} else if (!processLine(pending + rest.slice(0, newline))) {
+					keepFlowing = false;
 				}
 				pending = "";
 				rest = rest.slice(newline + 1);
 			}
+			return keepFlowing;
 		},
 		finish() {
 			if (!droppingOversizedLine && pending) processLine(pending);
@@ -135,7 +141,7 @@ export function createJsonDecoder(onText?: (text: string) => void): JsonStreamDe
 		result() {
 			return {
 				text: text.text(),
-				cost: { cost, tokens },
+				cost: sawTurnEnd ? { cost, tokens } : undefined,
 				textTruncated: text.truncated,
 				jsonEventTruncated,
 				jsonCostIncomplete,

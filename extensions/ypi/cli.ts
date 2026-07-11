@@ -2,7 +2,8 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ensureEnvironment } from "./env.ts";
-import { createAsyncJob, discardAsyncJob, finishAsyncJob, launchAsyncWorker, markAsyncJobAdmitted, readAsyncJob, waitForAsyncAdmission } from "./internal/cli-async.ts";
+import { remainingTimeoutSeconds } from "./guardrails.ts";
+import { cancelAsyncJob, createAsyncJob, discardAsyncJob, finishAsyncJob, launchAsyncWorker, markAsyncJobAdmitted, markAsyncJobChildPid, readAsyncJob, waitForAsyncAdmission, waitForAsyncTerminal } from "./internal/cli-async.ts";
 import { resolveContextSource, type ContextSource } from "./internal/cli-input.ts";
 import { formatRecursiveResultForTool, RecursiveChildError, runRecursiveChild } from "./runtime-core.ts";
 import { resolveRuntime, type YpiRuntime } from "./runtime.ts";
@@ -18,8 +19,10 @@ interface CliExecutionOptions {
 	cwd?: string;
 	extensionPath?: string | null;
 	treeStartTimeSeconds?: number;
-	onText?: (text: string) => void;
+	onText?: (text: string) => boolean | void;
+	onTextDrain?: () => Promise<void>;
 	onAdmitted?: (callCount: number) => void;
+	onChildSpawn?: (pid: number) => void;
 	signal?: AbortSignal;
 }
 
@@ -115,17 +118,26 @@ async function executeRequest(runtime: YpiRuntime, flags: Pick<CliFlags, "prompt
 		extensionPath: options.extensionPath === undefined ? configuredExtensionPath() : options.extensionPath,
 		treeStartTimeSeconds: options.treeStartTimeSeconds,
 		onText: options.onText,
+		onTextDrain: options.onTextDrain,
 		onAdmitted: options.onAdmitted,
+		onChildSpawn: options.onChildSpawn,
 		signal: options.signal,
 		parent: parentContext(options.cwd),
 	});
 }
 
 async function runWorker(jobPath: string): Promise<void> {
+	const controller = new AbortController();
+	let requestedExitCode: number | undefined;
+	const onInterrupt = () => { requestedExitCode = 130; controller.abort(); };
+	const onTerminate = () => { requestedExitCode = 143; controller.abort(); };
+	process.once("SIGINT", onInterrupt);
+	process.once("SIGTERM", onTerminate);
 	const job = readAsyncJob(jobPath);
 	const runtime = activeRuntime();
 	ensureEnvironment(runtime);
 	if (job.parentSessionSnapshot) process.env.RLM_SESSION_FILE = job.parentSessionSnapshot;
+	if (job.rootPromptSnapshot) process.env.RLM_ROOT_PROMPT_FILE = job.rootPromptSnapshot;
 	let code = 0;
 	let output = "";
 	try {
@@ -134,13 +146,17 @@ async function runWorker(jobPath: string): Promise<void> {
 			extensionPath: job.extensionPath,
 			treeStartTimeSeconds: job.treeStartTimeSeconds,
 			onAdmitted: () => markAsyncJobAdmitted(job),
+			onChildSpawn: (pid) => markAsyncJobChildPid(job, pid),
+			signal: controller.signal,
 		});
 		output = formatRecursiveResultForTool(result);
 	} catch (error) {
-		code = errorExitCode(error);
+		code = requestedExitCode ?? errorExitCode(error);
 		output = `${cliErrorText(error)}\n`;
 	}
 	finishAsyncJob(job, code, output);
+	process.removeListener("SIGINT", onInterrupt);
+	process.removeListener("SIGTERM", onTerminate);
 }
 
 export async function main(args = process.argv.slice(2)): Promise<number> {
@@ -155,65 +171,97 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
 	ensureEnvironment(runtime);
 	const extensionPath = configuredExtensionPath();
 	if (process.env.RLM_DEPTH === "0") process.env.RLM_START_TIME = String(invocationStartedAt);
-	const flags = parseFlags(args);
-	const source = await resolveContextSource();
-
-	if (flags.async) {
-		let job: ReturnType<typeof createAsyncJob> | undefined;
-		let pid = 0;
-		try {
-			job = createAsyncJob({
-				prompt: flags.prompt,
-				fork: flags.fork,
-				notifyPid: flags.notifyPid,
-				cwd: process.cwd(),
-				context: source.context,
-				contextPath: source.contextPath,
-				extensionPath,
-				treeStartTimeSeconds: invocationStartedAt,
-			});
-			pid = launchAsyncWorker(job, fileURLToPath(import.meta.url));
-			await waitForAsyncAdmission(job);
-			process.stdout.write(`${JSON.stringify({
-				job_id: path.basename(path.dirname(job.jobPath)),
-				output: job.outputPath,
-				sentinel: job.sentinelPath,
-				pid,
-			})}\n`);
-			return 0;
-		} catch (error) {
-			if (job) discardAsyncJob(job, pid);
-			console.error(cliErrorText(error));
-			return errorExitCode(error);
-		} finally {
-			source.cleanup?.();
-		}
-	}
-
 	const controller = new AbortController();
-	const abort = () => controller.abort();
-	process.once("SIGINT", abort);
-	process.once("SIGTERM", abort);
+	let signalExitCode = 130;
+	let brokenPipe = false;
+	let stdoutFailure: Error | undefined;
+	const onStdoutError = (error: NodeJS.ErrnoException) => {
+		if (error.code === "EPIPE") brokenPipe = true;
+		else stdoutFailure = error;
+		controller.abort();
+	};
+	const onInterrupt = () => { signalExitCode = 130; controller.abort(); };
+	const onTerminate = () => { signalExitCode = 143; controller.abort(); };
+	process.once("SIGINT", onInterrupt);
+	process.once("SIGTERM", onTerminate);
+	process.stdout.on("error", onStdoutError);
+	let source: ContextSource | undefined;
 	try {
+		const flags = parseFlags(args);
+		const remaining = remainingTimeoutSeconds();
+		source = await resolveContextSource({
+			signal: controller.signal,
+			timeoutMilliseconds: remaining === undefined ? undefined : Math.max(0, remaining * 1000),
+		});
+
+		if (flags.async) {
+			let job: ReturnType<typeof createAsyncJob> | undefined;
+			let pid = 0;
+			try {
+				job = createAsyncJob({
+					prompt: flags.prompt,
+					fork: flags.fork,
+					notifyPid: flags.notifyPid,
+					cwd: process.cwd(),
+					context: source.context,
+					contextPath: source.contextPath,
+					extensionPath,
+					treeStartTimeSeconds: invocationStartedAt,
+				});
+				pid = launchAsyncWorker(job, fileURLToPath(import.meta.url));
+				await waitForAsyncAdmission(job, 30_000, controller.signal);
+				if (controller.signal.aborted) throw new Error("Async recursion acknowledgement cancelled");
+				process.stdout.write(`${JSON.stringify({
+					job_id: path.basename(path.dirname(job.jobPath)),
+					output: job.outputPath,
+					sentinel: job.sentinelPath,
+					pid,
+				})}\n`);
+				return 0;
+			} catch (error) {
+				if (job && controller.signal.aborted) {
+					cancelAsyncJob(job, pid);
+					if (!await waitForAsyncTerminal(job)) {
+						cancelAsyncJob(job, pid, "SIGKILL");
+						await waitForAsyncTerminal(job, 1_000);
+					}
+					discardAsyncJob(job);
+					return signalExitCode;
+				}
+				if (job) discardAsyncJob(job, pid);
+				console.error(cliErrorText(error));
+				return errorExitCode(error);
+			}
+		}
+
 		const result = await executeRequest(runtime, flags, source, {
 			cwd: process.cwd(),
 			extensionPath,
 			treeStartTimeSeconds: invocationStartedAt,
 			signal: controller.signal,
 			onText(text) {
-				process.stdout.write(text);
+				return process.stdout.write(text);
+			},
+			onTextDrain() {
+				return new Promise((resolve) => process.stdout.once("drain", resolve));
 			},
 		});
 		for (const warning of result.warnings) console.error(`[${warning}]`);
 		if (result.stderr) console.error(result.stderr);
 		return 0;
 	} catch (error) {
-		console.error(cliErrorText(error));
-		return errorExitCode(error);
+		if (brokenPipe) return 0;
+		if (stdoutFailure) {
+			console.error(cliErrorText(stdoutFailure));
+			return 1;
+		}
+		if (!controller.signal.aborted) console.error(cliErrorText(error));
+		return controller.signal.aborted ? signalExitCode : errorExitCode(error);
 	} finally {
-		process.removeListener("SIGINT", abort);
-		process.removeListener("SIGTERM", abort);
-		source.cleanup?.();
+		process.removeListener("SIGINT", onInterrupt);
+		process.removeListener("SIGTERM", onTerminate);
+		process.stdout.removeListener("error", onStdoutError);
+		source?.cleanup?.();
 	}
 }
 

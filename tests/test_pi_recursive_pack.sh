@@ -88,11 +88,17 @@ if command -v pi >/dev/null 2>&1; then
 printf '%s\n' PACKED_NATIVE_EXEC_OK
 FAKEPI
 		chmod +x "$FAKE_PI"
-		if bun "$PROJECT_DIR/tests/installed_extension_harness.ts" "$EXT" "$FAKE_PI" >"$TEST_TMP/execute.out" 2>"$TEST_TMP/execute.err" \
-			&& grep -q 'INSTALLED_EXTENSION_EXECUTION=PASS' "$TEST_TMP/execute.out"; then
+		if bun "$PROJECT_DIR/tests/installed_extension_harness.ts" "$EXT" "$FAKE_PI" canonical >"$TEST_TMP/execute.out" 2>"$TEST_TMP/execute.err" \
+			&& grep -q 'INSTALLED_EXTENSION_EXECUTION=PASS implementation=canonical' "$TEST_TMP/execute.out"; then
 			pass "installed pi-recursive native tool executes through canonical runtime"
 		else
 			fail "installed pi-recursive native tool executes through canonical runtime" "$(tail -4 "$TEST_TMP/execute.err")"
+		fi
+		if bun "$PROJECT_DIR/tests/installed_extension_harness.ts" "$EXT" "$FAKE_PI" legacy >"$TEST_TMP/execute-legacy.out" 2>"$TEST_TMP/execute-legacy.err" \
+			&& grep -q 'INSTALLED_EXTENSION_EXECUTION=PASS implementation=legacy' "$TEST_TMP/execute-legacy.out"; then
+			pass "installed pi-recursive native tool executes through retained fallback"
+		else
+			fail "installed pi-recursive native tool executes through retained fallback" "$(tail -4 "$TEST_TMP/execute-legacy.err")"
 		fi
 
 		ERRF="$TEST_TMP/load.err"

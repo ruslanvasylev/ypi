@@ -77,6 +77,9 @@ done
   echo "RLM_CALL_COUNTER_FILE=\${RLM_CALL_COUNTER_FILE:-unset}"
   echo "RLM_COST_FILE=\${RLM_COST_FILE:-unset}"
   echo "SECRET_TOKEN=\${SECRET_TOKEN:-unset}"
+  echo "PI_CODING_AGENT_DIR=\${PI_CODING_AGENT_DIR:-unset}"
+  echo "PI_PACKAGE_DIR=\${PI_PACKAGE_DIR:-unset}"
+  echo "PI_OFFLINE=\${PI_OFFLINE:-unset}"
   echo "CHILD_PID=$$"
   echo "SYSTEM_PROMPT_CONTEXT=$(grep -E 'External task context:|Current delegated charter:' "$SYSTEM_PROMPT_FILE" 2>/dev/null | head -1 || true)"
 } >> "$YPI_FAKE_PI_LOG"
@@ -90,6 +93,9 @@ elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "huge" ]; then
 elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "json" ]; then
   printf '%s\\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"JSON_CHILD_OK"}}'
   printf '%s\\n' '{"type":"turn_end","message":{"usage":{"totalTokens":7,"cost":{"total":0.123}}},"toolResults":[]}'
+elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "json-no-turn-end" ]; then
+  printf '%s\\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"PARTIAL_ONLY"}}'
+  exit 42
 elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "json-huge-tail" ]; then
   printf '%s' '{"type":"tool_result","payload":"'
   head -c $((17 * 1024 * 1024)) /dev/zero | tr '\\0' X
@@ -144,9 +150,9 @@ function context(): ExtensionContext {
 	} as ExtensionContext;
 }
 
-async function invoke(prompt = "child prompt", signal?: AbortSignal): Promise<string> {
+async function invoke(prompt = "child prompt", signal?: AbortSignal, onUpdate?: (result: any) => void): Promise<string> {
 	if (!tool) throw new Error("native tool was not registered");
-	const result = await tool.execute("test-call", { prompt }, signal, undefined, context());
+	const result = await tool.execute("test-call", { prompt }, signal, onUpdate, context());
 	const text = result.content.find((item) => item.type === "text")?.text || "";
 	return text;
 }
@@ -376,6 +382,9 @@ async function run(): Promise<void> {
 	assertContains("N8d: full child isolation disables non-extension skills", readLog(), "--no-skills");
 	assertContains("N8d: full child isolation keeps generated system prompt", readLog(), "--system-prompt ");
 	assertContains("N8d: full child isolation exposes delegated charter", readLog(), "SYSTEM_PROMPT_CONTEXT=- Current delegated charter: `");
+	assertContains("N8d: full child isolation uses a private Pi agent root", readLog(), "PI_CODING_AGENT_DIR=");
+	assertNotContains("N8d: private Pi agent root is not the ambient default", readLog(), "PI_CODING_AGENT_DIR=unset");
+	assertContains("N8d: full child isolation forces offline package resolution", readLog(), "PI_OFFLINE=1");
 	assertNotContains("N8d: full child isolation avoids explicit ypi extension", readLog(), "-e ");
 
 	clearYpiEnv();
@@ -395,8 +404,12 @@ async function run(): Promise<void> {
 	process.env.RLM_BUDGET = "1";
 	process.env.YPI_FAKE_PI_MODE = "json";
 	ensureEnvironment(runtime, context());
-	const jsonText = await invoke();
+	const progressUpdates: string[] = [];
+	const jsonText = await invoke("child prompt", undefined, (update) => {
+		progressUpdates.push(update.content?.find((item: any) => item.type === "text")?.text || "");
+	});
 	assertContains("N10: JSON child text parsed", jsonText, "JSON_CHILD_OK");
+	assertContains("N10: native onUpdate receives bounded child progress", progressUpdates.join("\n"), "JSON_CHILD_OK");
 	const costFile = process.env.RLM_COST_FILE || "";
 	assertContains("N10: JSON child cost recorded", existsSync(costFile) ? readFileSync(costFile, "utf8") : "", '"cost":0.123');
 
@@ -426,6 +439,21 @@ async function run(): Promise<void> {
 	await expectThrow("N10c: oversized cost-bearing event fails budget closed", "Cannot enforce RLM_BUDGET", () => invoke());
 	const incompleteCostFile = process.env.RLM_COST_FILE || "";
 	assertNotContains("N10c: incomplete cost is not recorded as authoritative", existsSync(incompleteCostFile) ? readFileSync(incompleteCostFile, "utf8") : "", '"cost":0');
+
+	clearYpiEnv();
+	resetLog();
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	process.env.RLM_BUDGET = "20";
+	process.env.YPI_FAKE_PI_MODE = "json-no-turn-end";
+	ensureEnvironment(runtime, context());
+	await expectThrow("N10d: failed JSON child reports its nonzero exit", "exited with 42", () => invoke());
+	const missingTurnEndCostFile = process.env.RLM_COST_FILE || "";
+	assertContains("N10d: missing turn_end writes an incomplete cost marker", readFileSync(missingTurnEndCostFile, "utf8"), '"incomplete":true');
+	process.env.YPI_FAKE_PI_MODE = "json";
+	resetLog();
+	await expectThrow("N10d: later budget admission fails closed after unknown spend", "Budget accounting is incomplete", () => invoke());
+	assertNotContains("N10d: incomplete ledger blocks before another child spawn", readLog(), "ARGS:");
 
 	clearYpiEnv();
 	resetLog();

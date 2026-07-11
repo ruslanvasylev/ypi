@@ -37,13 +37,21 @@ export function registerNativeRlmQueryTool(pi: ExtensionAPI, runtime: YpiRuntime
 		parameters: RlmQueryParams,
 		executionMode: "parallel" as const,
 
-		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+			let progress = "";
 			const result = await runRecursiveChild(runtime, {
 				prompt: params.prompt,
 				context: params.context,
 				fork: params.fork,
 				caller: "tool",
 				signal,
+				onText(text) {
+					progress = `${progress}${text}`.slice(-8_192);
+					onUpdate?.({
+						content: [{ type: "text" as const, text: progress }],
+						details: { phase: "streaming" },
+					});
+				},
 				parent: {
 					cwd: ctx.cwd,
 					provider: ctx.model?.provider,

@@ -210,18 +210,51 @@ fi
 
 # G4b: depth-0 timeout starts at CLI invocation, including stdin spooling, and
 # preflight timeout has the conventional exit status 124.
+STDIN_FIFO="$TEST_TMP/open-stdin.fifo"
+mkfifo "$STDIN_FIFO"
+( exec 3>"$STDIN_FIFO"; sleep 30 ) &
+STDIN_WRITER_PID=$!
+START_NS=$(python3 -c 'import time; print(time.monotonic_ns())')
 set +e
 OUTPUT=$(
-    { sleep 2; printf '%s\n' delayed-context; } | \
     env RLM_STDIN=1 RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_TIMEOUT=1 \
         RLM_JJ=0 RLM_UNSAFE_NO_JJ_WRITE=1 RLM_CALL_COUNTER_FILE="$TEST_TMP/stdin-timeout.counter" \
-        rlm_query "Delayed input must consume timeout" 2>&1
+        rlm_query "Open input must obey timeout" <"$STDIN_FIFO" 2>&1
 )
 STDIN_TIMEOUT_RC=$?
 set -e
+END_NS=$(python3 -c 'import time; print(time.monotonic_ns())')
+kill "$STDIN_WRITER_PID" 2>/dev/null || true
+wait "$STDIN_WRITER_PID" 2>/dev/null || true
+rm -f "$STDIN_FIFO"
+STDIN_TIMEOUT_MS=$(( (END_NS - START_NS) / 1000000 ))
 assert_eq "G4b: stdin/setup timeout exits 124" "124" "$STDIN_TIMEOUT_RC"
 assert_not_contains "G4b: expired stdin budget spawns no child" "MOCK_PI_CALLED" "$OUTPUT"
 assert_contains "G4b: expired stdin budget is explicit" "Timeout exceeded" "$OUTPUT"
+if [ "$STDIN_TIMEOUT_MS" -lt 1800 ]; then pass "G4b: active deadline interrupts an open stdin pipe"; else fail "G4b: active deadline interrupts an open stdin pipe" "elapsed=${STDIN_TIMEOUT_MS}ms"; fi
+
+# G4c: synchronous jj discovery/setup is bounded by the same invocation deadline.
+cat > "$MOCK_BIN/jj" <<'SLOWJJ'
+#!/bin/bash
+sleep 30
+SLOWJJ
+chmod +x "$MOCK_BIN/jj"
+START_NS=$(python3 -c 'import time; print(time.monotonic_ns())')
+set +e
+OUTPUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_TIMEOUT=1 \
+    RLM_JJ=1 RLM_CALL_COUNTER_FILE="$TEST_TMP/jj-timeout.counter" \
+    rlm_query "Bound jj setup" 2>&1
+)
+JJ_TIMEOUT_RC=$?
+set -e
+END_NS=$(python3 -c 'import time; print(time.monotonic_ns())')
+JJ_TIMEOUT_MS=$(( (END_NS - START_NS) / 1000000 ))
+rm -f "$MOCK_BIN/jj"
+assert_eq "G4c: jj setup timeout exits 124" "124" "$JJ_TIMEOUT_RC"
+assert_not_contains "G4c: expired jj setup spawns no child" "MOCK_PI_CALLED" "$OUTPUT"
+assert_contains "G4c: jj setup timeout is explicit" "RLM_TIMEOUT expired during jj root" "$OUTPUT"
+if [ "$JJ_TIMEOUT_MS" -lt 3000 ]; then pass "G4c: jj setup obeys the invocation deadline"; else fail "G4c: jj setup obeys the invocation deadline" "elapsed=${JJ_TIMEOUT_MS}ms"; fi
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -535,6 +568,35 @@ then
     pass "G11e: CLI preserves exact child stdout bytes"
 else
     fail "G11e: CLI preserves exact child stdout bytes" "byte probe failed"
+fi
+
+# G11f: downstream pipe closure is handled as normal pipeline termination; it
+# aborts paid child work instead of crashing Node with an unhandled EPIPE.
+cat > "$MOCK_BIN/pi" << 'PIPEPI'
+#!/bin/bash
+python3 - <<'PY'
+for i in range(200000):
+    print(f"line-{i:06d}-" + "x" * 200)
+PY
+PIPEPI
+chmod +x "$MOCK_BIN/pi"
+if RLM_QUERY_PATH="$RLM_QUERY" TEST_CONTEXT="$TEST_TMP/ctx.txt" TEST_COUNTER="$TEST_TMP/epipe.counter" python3 <<'PY'
+import os, subprocess
+env=os.environ.copy()
+env.update({"CONTEXT":os.environ["TEST_CONTEXT"],"RLM_DEPTH":"0","RLM_MAX_DEPTH":"3","RLM_JSON":"0","RLM_JJ":"0","RLM_SHARED_SESSIONS":"0","RLM_CALL_COUNTER_FILE":os.environ["TEST_COUNTER"],"RLM_TRACE_ID":"epipe"})
+p=subprocess.Popen([os.environ["RLM_QUERY_PATH"],"Pipe close?"],env=env,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+assert p.stdout is not None
+assert p.stdout.readline()
+p.stdout.close()
+stderr=p.stderr.read() if p.stderr else b""
+rc=p.wait(timeout=5)
+assert rc==0,(rc,stderr[-500:])
+assert b"EPIPE" not in stderr,stderr[-500:]
+PY
+then
+    pass "G11f: downstream EPIPE cancels cleanly without an unhandled error"
+else
+    fail "G11f: downstream EPIPE cancels cleanly without an unhandled error" "pipe closure probe failed"
 fi
 
 # Restore normal mock before subsequent sections.
@@ -992,6 +1054,9 @@ echo "MOCK_PI_CALLED"
 echo "ARGS: $*"
 echo "RLM_DEPTH=$RLM_DEPTH"
 echo "RLM_MODEL=$RLM_MODEL"
+echo "PI_CODING_AGENT_DIR=${PI_CODING_AGENT_DIR:-unset}"
+echo "PI_PACKAGE_DIR=${PI_PACKAGE_DIR:-unset}"
+echo "PI_OFFLINE=${PI_OFFLINE:-unset}"
 MOCK_PI
 chmod +x "$MOCK_BIN/pi"
 
@@ -1078,6 +1143,9 @@ OUTPUT=$(
 assert_contains "G38c: full child isolation disables extensions" "--no-extensions" "$OUTPUT"
 assert_contains "G38c: full child isolation disables non-extension skills" "--no-skills" "$OUTPUT"
 assert_not_contains "G38c: full child isolation avoids explicit ypi extension" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
+assert_not_contains "G38c: full isolation replaces the ambient Pi agent root" "PI_CODING_AGENT_DIR=unset" "$OUTPUT"
+assert_not_contains "G38c: full isolation replaces the ambient package root" "PI_PACKAGE_DIR=unset" "$OUTPUT"
+assert_contains "G38c: full isolation prevents package installation" "PI_OFFLINE=1" "$OUTPUT"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1136,6 +1204,44 @@ OUTPUT=$(
 )
 assert_contains "G40b: measurable budget with no spend proceeds" "MOCK_PI_CALLED" "$OUTPUT"
 rm -f "$COST_FILE"
+
+# G40c: a failed measurable child without turn_end poisons the shared ledger
+# rather than recording authoritative zero cost and admitting more spend.
+cat > "$MOCK_BIN/pi" << 'NOENDPI'
+#!/bin/bash
+printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"PARTIAL"}}'
+exit 42
+NOENDPI
+chmod +x "$MOCK_BIN/pi"
+COST_FILE=$(mktemp "${TMPDIR:-/tmp}/rlm_cost_incomplete.jsonl.XXXXXX")
+OUTPUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JSON=1 \
+    RLM_BUDGET=1.00 RLM_COST_FILE="$COST_FILE" \
+    RLM_CALL_COUNTER_FILE="$TEST_TMP/incomplete-cost.counter" \
+    rlm_query "Unknown failed spend" 2>&1 || true
+)
+assert_contains "G40c: missing turn_end records incomplete budget state" '"incomplete":true' "$(cat "$COST_FILE")"
+OUTPUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JSON=1 \
+    RLM_BUDGET=1.00 RLM_COST_FILE="$COST_FILE" \
+    RLM_CALL_COUNTER_FILE="$TEST_TMP/incomplete-cost.counter" \
+    rlm_query "Must not spend again" 2>&1 || true
+)
+assert_contains "G40c: incomplete budget state blocks later admission" "Budget accounting is incomplete" "$OUTPUT"
+rm -f "$COST_FILE"
+cat > "$MOCK_BIN/pi" << 'MOCK_PI'
+#!/bin/bash
+if printf '%s\n' "$*" | grep -q -- '--mode json'; then
+    printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"MOCK_PI_CALLED"}}'
+    printf '%s\n' '{"type":"turn_end","message":{"usage":{"totalTokens":1,"cost":{"total":0.01}}},"toolResults":[]}'
+else
+    echo "MOCK_PI_CALLED"
+    echo "ARGS: $*"
+    echo "RLM_DEPTH=$RLM_DEPTH"
+    echo "RLM_MODEL=$RLM_MODEL"
+fi
+MOCK_PI
+chmod +x "$MOCK_BIN/pi"
 
 # G41: budget exceeded — cost file shows spend over budget
 COST_FILE=$(mktemp "${TMPDIR:-/tmp}/rlm_cost_test.jsonl.XXXXXX")
@@ -1432,6 +1538,69 @@ SNAPSHOTPI
     ASYNC_MODE=$(stat -c '%a' "$(dirname "$SNAPSHOT_OUTPUT")" 2>/dev/null || echo unknown)
     assert_eq "G53d: async job directory is private" "700" "$ASYNC_MODE"
 
+    # G53e: root charter and fork session are immutable invocation snapshots too.
+    cat > "$MOCK_BIN/pi" << 'ROOTSNAPPI'
+#!/bin/bash
+sleep 1
+cat "$RLM_ROOT_PROMPT_FILE"
+[ -f "${RLM_SESSION_FILE:-}" ] && cat "$RLM_SESSION_FILE"
+ROOTSNAPPI
+    chmod +x "$MOCK_BIN/pi"
+    printf '%s\n' ORIGINAL_ROOT_CHARTER > "$TEST_TMP/mutable-root-prompt.txt"
+    printf '%s\n' ORIGINAL_PARENT_SESSION > "$TEST_TMP/mutable-parent-session.jsonl"
+    mkdir -p "$TEST_TMP/async-sessions"
+    JOB=$(
+        CONTEXT="$TEST_TMP/ctx.txt" RLM_ROOT_PROMPT_FILE="$TEST_TMP/mutable-root-prompt.txt" \
+        RLM_SESSION_FILE="$TEST_TMP/mutable-parent-session.jsonl" RLM_SESSION_DIR="$TEST_TMP/async-sessions" \
+        RLM_SHARED_SESSIONS=1 RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=0 RLM_JSON=0 \
+        RLM_TRACE_ID="async_charter_$$" RLM_CALL_COUNTER_FILE="$TEST_TMP/async_charter.counter" \
+        rlm_query --async --fork "Snapshot charter and session" 2>/dev/null
+    )
+    CHARTER_OUTPUT=$(printf '%s' "$JOB" | python3 -c "import json,sys; print(json.load(sys.stdin)['output'])")
+    CHARTER_SENTINEL=$(printf '%s' "$JOB" | python3 -c "import json,sys; print(json.load(sys.stdin)['sentinel'])")
+    printf '%s\n' MUTATED_ROOT_CHARTER > "$TEST_TMP/mutable-root-prompt.txt"
+    printf '%s\n' MUTATED_PARENT_SESSION > "$TEST_TMP/mutable-parent-session.jsonl"
+    for _ in $(seq 1 50); do [ -e "$CHARTER_SENTINEL" ] && break; sleep 0.1; done
+    CHARTER_RESULT=$(cat "$CHARTER_OUTPUT")
+    assert_contains "G53e: async worker uses root charter snapshot" "ORIGINAL_ROOT_CHARTER" "$CHARTER_RESULT"
+    assert_not_contains "G53e: async root charter ignores later mutation" "MUTATED_ROOT_CHARTER" "$CHARTER_RESULT"
+    assert_contains "G53e: async fork uses parent session snapshot" "ORIGINAL_PARENT_SESSION" "$CHARTER_RESULT"
+    assert_not_contains "G53e: async fork session ignores later mutation" "MUTATED_PARENT_SESSION" "$CHARTER_RESULT"
+
+    # G53f: signalling the acknowledged worker must abort the detached Pi process
+    # group and still publish a terminal sentinel.
+    cat > "$MOCK_BIN/pi" << 'ASYNCANCELPI'
+#!/bin/bash
+printf '%s\n' "$$" > "$RLM_ASYNC_TEST_PID_FILE"
+sleep 30 &
+printf '%s\n' "$!" > "${RLM_ASYNC_TEST_PID_FILE}.descendant"
+wait
+ASYNCANCELPI
+    chmod +x "$MOCK_BIN/pi"
+    JOB=$(
+        CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=0 RLM_JSON=0 \
+        RLM_ASYNC_TEST_PID_FILE="$TEST_TMP/async-child.pid" \
+        RLM_TRACE_ID="async_cancel_$$" RLM_CALL_COUNTER_FILE="$TEST_TMP/async_cancel.counter" \
+        rlm_query --async "Cancel worker and child" 2>/dev/null
+    )
+    CANCEL_WORKER=$(printf '%s' "$JOB" | python3 -c "import json,sys; print(json.load(sys.stdin)['pid'])")
+    CANCEL_SENTINEL=$(printf '%s' "$JOB" | python3 -c "import json,sys; print(json.load(sys.stdin)['sentinel'])")
+    for _ in $(seq 1 50); do [ -s "$TEST_TMP/async-child.pid" ] && break; sleep 0.1; done
+    kill -TERM "$CANCEL_WORKER"
+    for _ in $(seq 1 70); do [ -e "$CANCEL_SENTINEL" ] && break; sleep 0.1; done
+    assert_eq "G53f: cancelled async worker records SIGTERM exit" "143" "$(cat "$CANCEL_SENTINEL" 2>/dev/null || echo missing)"
+    ASYNC_CHILD_PID=$(cat "$TEST_TMP/async-child.pid" 2>/dev/null || echo 0)
+    ASYNC_DESC_PID=$(cat "$TEST_TMP/async-child.pid.descendant" 2>/dev/null || echo 0)
+    for _ in $(seq 1 30); do
+        if ! kill -0 "$ASYNC_CHILD_PID" 2>/dev/null && ! kill -0 "$ASYNC_DESC_PID" 2>/dev/null; then break; fi
+        sleep 0.1
+    done
+    if kill -0 "$ASYNC_CHILD_PID" 2>/dev/null || kill -0 "$ASYNC_DESC_PID" 2>/dev/null; then
+        fail "G53f: async cancellation leaves no child process group" "child=$ASYNC_CHILD_PID descendant=$ASYNC_DESC_PID"
+    else
+        pass "G53f: async cancellation leaves no child process group"
+    fi
+
     cat > "$MOCK_BIN/pi" << 'NASTYPI'
 #!/bin/bash
 printf '%s\n' 'He said "hello" and used C:\path\to\file'
@@ -1470,6 +1639,8 @@ NASTYPI
         fi
         MSG_OK=$(printf '%s' "$LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print('yes' if 'He said \"hello\"' in d.get('message','') else 'no')" 2>/dev/null || echo "no")
         assert_eq "G53: notify message preserves the hostile content" "yes" "$MSG_OK"
+        EXIT_OK=$(printf '%s' "$LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print('yes' if d.get('exit_code') == 0 and 'exit=0' in d.get('message','') else 'no')" 2>/dev/null || echo "no")
+        assert_eq "G53: notify includes terminal exit status" "yes" "$EXIT_OK"
     else
         fail "G53: notify writes to the peer inbox" "no inbox content at $INBOX"
     fi

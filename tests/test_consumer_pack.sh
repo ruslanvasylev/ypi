@@ -114,21 +114,29 @@ cat > "$TEST_TMP/mock-bin/pi" <<'MOCK_PI'
 printf '%s\n' PACKED_CHILD_OK
 MOCK_PI
 chmod +x "$TEST_TMP/mock-bin/pi"
+set +e
 PACKED_RLM_OUTPUT="$(env \
 	HOME="$TEST_TMP/home" \
 	PATH="$TEST_TMP/mock-bin:$(dirname "$(command -v node)"):/usr/bin:/bin" \
 	YPI_PI_BIN="$TEST_TMP/mock-bin/pi" \
 	RLM_DEPTH=0 RLM_MAX_DEPTH=2 RLM_JSON=0 RLM_JJ=0 \
 	RLM_UNSAFE_NO_JJ_WRITE=1 RLM_SHARED_SESSIONS=0 \
-	"$RLM_BIN" "Packed runtime smoke" 2>&1 || true)"
+	"$RLM_BIN" "Packed runtime smoke" 2>&1)"
+PACKED_RLM_RC=$?
+set -e
+if [ "$PACKED_RLM_RC" -eq 0 ]; then pass "installed canonical CLI exits cleanly"; else fail "installed canonical CLI exits cleanly" "rc=$PACKED_RLM_RC $PACKED_RLM_OUTPUT"; fi
 assert_contains "installed rlm_query executes canonical runtime" "PACKED_CHILD_OK" "$PACKED_RLM_OUTPUT"
+set +e
 PACKED_LEGACY_OUTPUT="$(env \
 	HOME="$TEST_TMP/home" \
 	PATH="$TEST_TMP/mock-bin:$(dirname "$(command -v node)"):/usr/bin:/bin" \
 	YPI_PI_BIN="$TEST_TMP/mock-bin/pi" YPI_LEGACY_IMPL=1 \
 	RLM_DEPTH=0 RLM_MAX_DEPTH=2 RLM_JSON=0 RLM_JJ=0 \
 	RLM_UNSAFE_NO_JJ_WRITE=1 RLM_SHARED_SESSIONS=0 \
-	"$RLM_BIN" "Packed legacy smoke" 2>&1 || true)"
+	"$RLM_BIN" "Packed legacy smoke" 2>&1)"
+PACKED_LEGACY_RC=$?
+set -e
+if [ "$PACKED_LEGACY_RC" -eq 0 ]; then pass "installed retained CLI exits cleanly"; else fail "installed retained CLI exits cleanly" "rc=$PACKED_LEGACY_RC $PACKED_LEGACY_OUTPUT"; fi
 assert_contains "installed rlm_query retains executable CLI fallback" "PACKED_CHILD_OK" "$PACKED_LEGACY_OUTPUT"
 
 RUN_LOG="$TEST_TMP/ypi-version.log"

@@ -16,7 +16,9 @@ export interface ChildProcessOptions {
 	timeoutSeconds?: number;
 	signal?: AbortSignal;
 	jsonMode: boolean;
-	onText?: (text: string) => void;
+	onText?: (text: string) => boolean | void;
+	onTextDrain?: () => Promise<void>;
+	onSpawn?: (pid: number) => void;
 }
 
 export interface ChildProcessResult extends ChildOutputSnapshot {
@@ -40,6 +42,7 @@ export function runChildProcess(options: ChildProcessOptions): Promise<ChildProc
 			stdio: ["ignore", "pipe", "pipe"],
 			detached: process.platform !== "win32",
 		});
+		if (child.pid) options.onSpawn?.(child.pid);
 		let stdoutCharacters = 0;
 		const rawStderr = createBoundedCapture(MAX_TOOL_OUTPUT_CHARS);
 		const plainText = createBoundedCapture(MAX_TOOL_OUTPUT_CHARS);
@@ -52,12 +55,22 @@ export function runChildProcess(options: ChildProcessOptions): Promise<ChildProc
 
 		child.stdout.setEncoding("utf8");
 		child.stderr.setEncoding("utf8");
+		let flowPaused = false;
+		const applyBackpressure = (keepFlowing: boolean | void) => {
+			if (keepFlowing !== false || flowPaused) return;
+			flowPaused = true;
+			child.stdout.pause();
+			(options.onTextDrain?.() || Promise.resolve()).finally(() => {
+				flowPaused = false;
+				if (!child.stdout.destroyed) child.stdout.resume();
+			});
+		};
 		child.stdout.on("data", (chunk: string) => {
 			stdoutCharacters += chunk.length;
-			if (options.jsonMode) jsonDecoder.append(chunk);
+			if (options.jsonMode) applyBackpressure(jsonDecoder.append(chunk));
 			else {
 				const accepted = plainText.append(chunk);
-				if (accepted) options.onText?.(accepted);
+				if (accepted) applyBackpressure(options.onText?.(accepted));
 			}
 		});
 		child.stderr.on("data", (chunk: string) => rawStderr.append(chunk));

@@ -92,24 +92,30 @@ export interface CostSummary {
 	tokens: number;
 }
 
-export function readCostSummary(costFile = process.env.RLM_COST_FILE): CostSummary {
+export interface CostLedgerSummary extends CostSummary {
+	incomplete: boolean;
+}
+
+export function readCostSummary(costFile = process.env.RLM_COST_FILE): CostLedgerSummary {
 	if (!costFile || !existsSync(costFile)) {
-		return { cost: 0, tokens: 0 };
+		return { cost: 0, tokens: 0, incomplete: false };
 	}
 
 	let cost = 0;
 	let tokens = 0;
+	let incomplete = false;
 	for (const line of readFileSync(costFile, "utf8").split(/\r?\n/)) {
 		if (!line.trim()) continue;
 		try {
 			const parsed = JSON.parse(line);
 			cost += Number(parsed.cost || 0);
 			tokens += Number(parsed.tokens || 0);
+			if (parsed.incomplete === true) incomplete = true;
 		} catch {
 			// Ignore malformed cost lines; this matches rlm_cost's tolerant parser.
 		}
 	}
-	return { cost, tokens };
+	return { cost, tokens, incomplete };
 }
 
 // Best-effort: the tool runs in parallel executionMode and cost is recorded only after a
@@ -124,16 +130,22 @@ export function assertBudgetAvailable(): void {
 		throw new Error("RLM_BUDGET requires RLM_JSON=1 in native extension mode so child Pi cost can be measured.");
 	}
 	const current = readCostSummary();
+	if (current.incomplete) {
+		throw new Error("Budget accounting is incomplete from an earlier child; start a new isolated cost ledger before spending more.");
+	}
 	if (current.cost >= budget) {
 		throw new Error(`Budget exceeded: spent $${current.cost.toFixed(6)} of $${budget.toFixed(6)} budget. Increase RLM_BUDGET or simplify the task.`);
 	}
 }
 
 export function appendCostSummary(summary: CostSummary): void {
-	if (!process.env.RLM_COST_FILE) {
-		return;
-	}
+	if (!process.env.RLM_COST_FILE) return;
 	writeFileSync(process.env.RLM_COST_FILE, `${JSON.stringify(summary)}\n`, { flag: "a" });
+}
+
+export function appendIncompleteCostMarker(reason: string): void {
+	if (!process.env.RLM_COST_FILE) return;
+	writeFileSync(process.env.RLM_COST_FILE, `${JSON.stringify({ incomplete: true, reason })}\n`, { flag: "a" });
 }
 
 export function canExecute(filePath: string): boolean {

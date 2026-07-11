@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ensureEnvironment } from "../extensions/ypi/env.ts";
+import recursiveExtension from "../extensions/recursive.ts";
 import { registerNativeRlmQueryTool } from "../extensions/ypi/native-tool.ts";
 import { buildYpiPrompt } from "../extensions/ypi/prompt.ts";
 import { resolveRuntime } from "../extensions/ypi/runtime.ts";
@@ -155,7 +156,6 @@ function baseEnv(label: string): Record<string, string> {
 		RLM_MODEL: "contract-model",
 		RLM_THINKING_LEVEL: "contract-thinking",
 		RLM_SYSTEM_PROMPT: runtime.systemPromptPath,
-		RLM_ROOT_PROMPT_FILE: staleRootPromptFile,
 		RLM_TRACE_ID: `contract-${label}`,
 		RLM_CALL_COUNTER_FILE: path.join(scratch, `${label}.counter`),
 		CONTEXT: contextFile,
@@ -268,10 +268,15 @@ async function run(): Promise<void> {
 	record(cliDefault.code === 0, "CLI default request succeeds", cliDefault.error);
 	if (nativeDefault.observation && cliDefault.observation) {
 		assertCommonObservation(nativeDefault.observation, cliDefault.observation);
-		equal("root delegation prompt propagated symbolically", nativeDefault.observation.ROOT_PROMPT_CONTENT, prompt);
+		equal("root delegation prompt falls back to delegated charter when no root capture exists", nativeDefault.observation.ROOT_PROMPT_CONTENT, prompt);
 	} else {
 		record(false, "both adapters emitted child observations");
 	}
+
+	const capturedRootNative = await invokeNative({ ...baseEnv("native-captured-root"), RLM_ROOT_PROMPT_FILE: staleRootPromptFile }, prompt);
+	const capturedRootCli = await invokeCli({ ...baseEnv("cli-captured-root"), RLM_ROOT_PROMPT_FILE: staleRootPromptFile }, prompt);
+	equal("native preserves captured human root charter", capturedRootNative.observation?.ROOT_PROMPT_CONTENT, "STALE_ROOT_PROMPT");
+	equal("CLI preserves captured human root charter", capturedRootCli.observation?.ROOT_PROMPT_CONTENT, "STALE_ROOT_PROMPT");
 
 	const routedNativeEnv = {
 		...baseEnv("native-route"),
@@ -349,6 +354,18 @@ async function run(): Promise<void> {
 		record(false, "both adapters emitted read-only observations");
 	}
 
+	for (const syntaxPrompt of ["--help", "@literal-file", "-short-option"]) {
+		const syntaxNative = await invokeNative(baseEnv(`native-syntax-${syntaxPrompt}`), syntaxPrompt);
+		const syntaxCli = await invokeCli(baseEnv(`cli-syntax-${syntaxPrompt}`), syntaxPrompt);
+		record(!syntaxNative.error && syntaxCli.code === 0, `file-backed transport admits Pi-like prompt ${syntaxPrompt}`, syntaxNative.error || syntaxCli.error);
+		equal(`native preserves Pi-like prompt ${syntaxPrompt}`, syntaxNative.observation?.PROMPT_CONTENT, syntaxPrompt);
+		equal(`CLI preserves Pi-like prompt ${syntaxPrompt}`, syntaxCli.observation?.PROMPT_CONTENT, syntaxPrompt);
+		record(
+			syntaxNative.observation?.ARGS.includes(`<@`) === true && syntaxCli.observation?.ARGS.includes(`<@`) === true,
+			`both adapters transport Pi-like prompt ${syntaxPrompt} through @file`,
+		);
+	}
+
 	const legacyCli = await invokeCli({ ...baseEnv("cli-legacy"), YPI_LEGACY_IMPL: "1" }, prompt);
 	record(legacyCli.code === 0, "retained CLI fallback remains executable", legacyCli.error);
 	if (legacyCli.observation) {
@@ -357,6 +374,38 @@ async function run(): Promise<void> {
 	} else {
 		record(false, "retained CLI fallback emitted a child observation");
 	}
+
+	clearRuntimeEnv();
+	process.env.YPI_EXTENSION_ROOT = projectRoot;
+	process.env.YPI_EXTENSION_PATH = runtime.extensionPath;
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_SHARED_SESSIONS = "1";
+	const handlers = new Map<string, (...args: any[]) => any>();
+	let firstRegistrations = 0;
+	let duplicateRegistrations = 0;
+	const lifecyclePi = (counter: () => void) => ({
+		registerTool() { counter(); },
+		on(event: string, handler: (...args: any[]) => any) { handlers.set(event, handler); },
+		getThinkingLevel() { return "medium"; },
+		getAllTools() { return [{ name: "read" }, { name: "rlm_query" }]; },
+	}) as unknown as ExtensionAPI;
+	recursiveExtension(lifecyclePi(() => { firstRegistrations++; }));
+	recursiveExtension(lifecyclePi(() => { duplicateRegistrations++; }));
+	equal("only one recursive extension copy registers in a process", firstRegistrations, 1);
+	equal("duplicate recursive extension copy stays inert", duplicateRegistrations, 0);
+	const lifecycleContext = extensionContext();
+	handlers.get("before_agent_start")?.({
+		type: "before_agent_start",
+		prompt: "ROOT HUMAN CHARTER",
+		systemPrompt: "base",
+		systemPromptOptions: { cwd: projectRoot },
+	}, lifecycleContext);
+	const capturedRootPrompt = process.env.RLM_ROOT_PROMPT_FILE;
+	record(Boolean(capturedRootPrompt && existsSync(capturedRootPrompt)), "root prompt is captured before agent start");
+	equal("extension context binds the current root session for shell --fork", process.env.RLM_SESSION_FILE, path.join(sessionDir, "parent.jsonl"));
+	if (capturedRootPrompt) equal("captured root prompt is exact", readFileSync(capturedRootPrompt, "utf8"), "ROOT HUMAN CHARTER");
+	handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, lifecycleContext);
+	record(!capturedRootPrompt || !existsSync(capturedRootPrompt), "root prompt lease is removed at session shutdown");
 
 	console.log(`\nResults: ${pass} passed, ${fail} failed, ${known} known divergences`);
 	if (fail > 0) process.exitCode = 1;

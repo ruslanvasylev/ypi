@@ -31,9 +31,11 @@ export interface AsyncJob {
 	contextPath?: string;
 	ownedContextPath?: string;
 	parentSessionSnapshot?: string;
+	rootPromptSnapshot?: string;
 	outputPath: string;
 	sentinelPath: string;
 	admissionPath: string;
+	childPidPath: string;
 	jobPath: string;
 	extensionPath: string | null;
 	treeStartTimeSeconds: number;
@@ -61,6 +63,7 @@ export function createAsyncJob(input: AsyncJobInput): AsyncJob {
 	const outputPath = path.join(jobDir, "output.txt");
 	const sentinelPath = path.join(jobDir, "done");
 	const admissionPath = path.join(jobDir, "admitted");
+	const childPidPath = path.join(jobDir, "child.pid");
 	try {
 		writeFileSync(outputPath, "", { flag: "wx", mode: 0o600 });
 
@@ -76,6 +79,10 @@ export function createAsyncJob(input: AsyncJobInput): AsyncJob {
 		if (input.fork && process.env.RLM_SESSION_FILE && existsSync(process.env.RLM_SESSION_FILE)) {
 			parentSessionSnapshot = snapshotFile(process.env.RLM_SESSION_FILE, path.join(jobDir, "parent-session.jsonl"));
 		}
+		let rootPromptSnapshot: string | undefined;
+		if (process.env.RLM_ROOT_PROMPT_FILE && existsSync(process.env.RLM_ROOT_PROMPT_FILE)) {
+			rootPromptSnapshot = snapshotFile(process.env.RLM_ROOT_PROMPT_FILE, path.join(jobDir, "root-prompt.txt"));
+		}
 
 		return {
 			prompt: input.prompt,
@@ -85,9 +92,11 @@ export function createAsyncJob(input: AsyncJobInput): AsyncJob {
 			contextPath: ownedContextPath,
 			ownedContextPath,
 			parentSessionSnapshot,
+			rootPromptSnapshot,
 			outputPath,
 			sentinelPath,
 			admissionPath,
+			childPidPath,
 			jobPath,
 			extensionPath: input.extensionPath,
 			treeStartTimeSeconds: input.treeStartTimeSeconds,
@@ -113,7 +122,7 @@ export function launchAsyncWorker(job: AsyncJob, cliPath: string): number {
 export function readAsyncJob(jobPath: string): AsyncJob {
 	const job = JSON.parse(readFileSync(jobPath, "utf8")) as AsyncJob;
 	if (path.resolve(job.jobPath) !== path.resolve(jobPath)) throw new Error("Async job identity mismatch");
-	for (const candidate of [job.outputPath, job.sentinelPath, job.admissionPath, job.ownedContextPath, job.parentSessionSnapshot]) {
+	for (const candidate of [job.outputPath, job.sentinelPath, job.admissionPath, job.childPidPath, job.ownedContextPath, job.parentSessionSnapshot, job.rootPromptSnapshot]) {
 		if (candidate) assertInsideJobDir(job, candidate);
 	}
 	return job;
@@ -121,6 +130,33 @@ export function readAsyncJob(jobPath: string): AsyncJob {
 
 export function markAsyncJobAdmitted(job: AsyncJob): void {
 	writeFileSync(job.admissionPath, "accepted\n", { flag: "wx", mode: 0o600 });
+}
+
+export function markAsyncJobChildPid(job: AsyncJob, pid: number): void {
+	writeFileSync(job.childPidPath, `${pid}\n`, { flag: "wx", mode: 0o600 });
+}
+
+function signalProcessGroup(pid: number, signal: NodeJS.Signals): void {
+	if (pid <= 0) return;
+	const target = process.platform === "win32" ? pid : -pid;
+	try { process.kill(target, signal); } catch { /* process already exited */ }
+}
+
+export function cancelAsyncJob(job: AsyncJob, workerPid: number, signal: NodeJS.Signals = "SIGTERM"): void {
+	if (existsSync(job.childPidPath)) {
+		const childPid = Number(readFileSync(job.childPidPath, "utf8").trim());
+		if (Number.isSafeInteger(childPid) && childPid > 0) signalProcessGroup(childPid, signal);
+	}
+	signalProcessGroup(workerPid, signal);
+}
+
+export async function waitForAsyncTerminal(job: AsyncJob, timeoutMilliseconds = 5_000): Promise<boolean> {
+	const deadline = Date.now() + timeoutMilliseconds;
+	while (Date.now() < deadline) {
+		if (existsSync(job.sentinelPath)) return true;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	return existsSync(job.sentinelPath);
 }
 
 export function discardAsyncJob(job: AsyncJob, workerPid = 0): void {
@@ -131,9 +167,10 @@ export function discardAsyncJob(job: AsyncJob, workerPid = 0): void {
 	rmSync(path.dirname(job.jobPath), { recursive: true, force: true });
 }
 
-export async function waitForAsyncAdmission(job: AsyncJob, timeoutMilliseconds = 30_000): Promise<void> {
+export async function waitForAsyncAdmission(job: AsyncJob, timeoutMilliseconds = 30_000, signal?: AbortSignal): Promise<void> {
 	const deadline = Date.now() + timeoutMilliseconds;
 	while (Date.now() < deadline) {
+		if (signal?.aborted) throw new AsyncAdmissionError("Async recursion admission cancelled", 130);
 		if (existsSync(job.admissionPath)) return;
 		if (existsSync(job.sentinelPath)) {
 			const code = Number(readFileSync(job.sentinelPath, "utf8").trim() || "1");
@@ -142,10 +179,11 @@ export async function waitForAsyncAdmission(job: AsyncJob, timeoutMilliseconds =
 		}
 		await new Promise((resolve) => setTimeout(resolve, 10));
 	}
+	if (signal?.aborted) throw new AsyncAdmissionError("Async recursion admission cancelled", 130);
 	throw new Error(`Async recursion admission timed out after ${timeoutMilliseconds}ms`);
 }
 
-function notifyPeer(job: AsyncJob, output: string): void {
+function notifyPeer(job: AsyncJob, code: number, output: string): void {
 	if (!job.notifyPid) return;
 	// Pi peer inboxes are a host protocol surface rooted at /tmp, independent
 	// from caller-selected TMPDIR used for ypi-owned job artifacts.
@@ -159,7 +197,8 @@ function notifyPeer(job: AsyncJob, output: string): void {
 			const message = {
 				from_pid: process.pid,
 				from_project: "rlm_query",
-				message: `[rlm_query --async result]\n\n${output.slice(-50_000)}`,
+				exit_code: code,
+				message: `[rlm_query --async result exit=${code}]\n\n${output.slice(-50_000)}`,
 				timestamp: new Date().toISOString(),
 				id: `async_${path.basename(path.dirname(job.jobPath))}`,
 			};
@@ -174,8 +213,10 @@ function notifyPeer(job: AsyncJob, output: string): void {
 export function finishAsyncJob(job: AsyncJob, code: number, output: string): void {
 	writeFileSync(job.outputPath, output, { mode: 0o600 });
 	writeFileSync(job.sentinelPath, `${code}\n`, { flag: "wx", mode: 0o600 });
-	notifyPeer(job, output);
+	notifyPeer(job, code, output);
 	rmSync(job.jobPath, { force: true });
 	if (job.ownedContextPath) rmSync(job.ownedContextPath, { force: true });
 	if (job.parentSessionSnapshot) rmSync(job.parentSessionSnapshot, { force: true });
+	if (job.rootPromptSnapshot) rmSync(job.rootPromptSnapshot, { force: true });
+	rmSync(job.childPidPath, { force: true });
 }

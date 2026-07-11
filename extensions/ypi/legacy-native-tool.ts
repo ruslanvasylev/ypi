@@ -493,6 +493,7 @@ export function registerLegacyNativeRlmQueryTool(pi: ExtensionAPI, runtime: YpiR
 				RLM_THINKING_LEVEL: thinkingLevel,
 				RLM_SYSTEM_PROMPT: runtime.systemPromptPath,
 				RLM_PROMPT_FILE: promptFile,
+				RLM_ROOT_PROMPT_FILE: process.env.RLM_ROOT_PROMPT_FILE || promptFile,
 				RLM_SESSION_DIR: process.env.RLM_SESSION_DIR || "",
 				RLM_SESSION_FILE: childSession || "",
 				YPI_EXTENSION_ROOT: runtime.root,
@@ -524,7 +525,7 @@ export function registerLegacyNativeRlmQueryTool(pi: ExtensionAPI, runtime: YpiR
 			} else if (existsSync(runtime.extensionPath)) {
 				args.push("-e", runtime.extensionPath);
 			}
-			args.push(params.prompt);
+			args.push(`@${promptFile}`);
 
 			trace(`[${nowTraceTime()}] depth=${depth}→${childDepth} PID=${process.pid} call=${callCount} trace=${process.env.RLM_TRACE_ID || ""} caller=tool jj=${workspace.mode} prompt: ${params.prompt.slice(0, 120)}`);
 

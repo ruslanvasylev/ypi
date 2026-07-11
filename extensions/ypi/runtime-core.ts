@@ -1,7 +1,9 @@
 import { existsSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import {
 	allocateCallCount,
 	appendCostSummary,
+	appendIncompleteCostMarker,
 	assertBudgetAvailable,
 	assertTimeoutAvailable,
 	assertWithinMaxCalls,
@@ -38,8 +40,10 @@ export interface RecursiveChildRequest {
 	// standalone system-prompt path (CLI compatibility mode).
 	extensionPath?: string | null;
 	treeStartTimeSeconds?: number;
-	onText?: (text: string) => void;
+	onText?: (text: string) => boolean | void;
+	onTextDrain?: () => Promise<void>;
 	onAdmitted?: (callCount: number) => void;
+	onChildSpawn?: (pid: number) => void;
 	signal?: AbortSignal;
 }
 
@@ -114,7 +118,9 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 	const callCount = await allocateCallCount();
 	assertWithinMaxCalls(callCount);
 	assertBudgetAvailable();
-	timeoutOrThrow();
+	const setupRemainingSeconds = timeoutOrThrow();
+	const extensionsEnabled = childExtensionsEnabled(childDepth);
+	const fullResourceIsolation = !extensionsEnabled && process.env.RLM_CHILD_DISCOVERY === "0";
 	const resources = acquireChildResources({
 		prompt: request.prompt,
 		context: request.context,
@@ -127,6 +133,8 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 		callCount,
 		systemPromptPath: runtime.systemPromptPath,
 		rootPromptPath: depth === 0 ? undefined : process.env.RLM_ROOT_PROMPT_FILE,
+		setupDeadlineMilliseconds: setupRemainingSeconds === undefined ? undefined : Date.now() + setupRemainingSeconds * 1000,
+		fullResourceIsolation,
 	});
 
 	try {
@@ -141,7 +149,7 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 			RLM_THINKING_LEVEL: thinkingLevel,
 			RLM_SYSTEM_PROMPT: runtime.systemPromptPath,
 			RLM_PROMPT_FILE: resources.promptFile,
-			RLM_ROOT_PROMPT_FILE: depth === 0 ? resources.promptFile : process.env.RLM_ROOT_PROMPT_FILE || resources.promptFile,
+			RLM_ROOT_PROMPT_FILE: process.env.RLM_ROOT_PROMPT_FILE || resources.promptFile,
 			RLM_SESSION_DIR: process.env.RLM_SESSION_DIR || "",
 			RLM_SESSION_FILE: resources.childSession || "",
 			YPI_EXTENSION_ROOT: runtime.root,
@@ -149,6 +157,11 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 			YPI_RLM_QUERY_CALLER: request.caller,
 		}, runtime, childDepth);
 		if (resources.contextFile) env.CONTEXT = resources.contextFile;
+		if (resources.isolatedPiRoot) {
+			env.PI_CODING_AGENT_DIR = path.join(resources.isolatedPiRoot, "agent");
+			env.PI_PACKAGE_DIR = path.join(resources.isolatedPiRoot, "packages");
+			env.PI_OFFLINE = "1";
+		}
 
 		const jsonMode = process.env.RLM_JSON !== "0";
 		const args = jsonMode ? ["--mode", "json"] : ["-p"];
@@ -159,11 +172,13 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 		if (process.env.RLM_CHILD_DISCOVERY === "0") args.push("--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve");
 		if (resources.childSession) args.push("--session", resources.childSession);
 		else args.push("--no-session");
-		const extensionsEnabled = childExtensionsEnabled(childDepth);
 		if (!extensionsEnabled) args.push("--no-extensions");
 		if (extensionsEnabled && extensionPath && existsSync(extensionPath)) args.push("-e", extensionPath);
 		else if (resources.standaloneSystemPromptFile) args.push("--system-prompt", resources.standaloneSystemPromptFile);
-		args.push(request.prompt);
+		// Pi treats leading '-' and '@' argv tokens as CLI syntax and large argv
+		// payloads are constrained by ARG_MAX. Its documented @file input path
+		// preserves the exact delegated charter already owned by this lease.
+		args.push(`@${resources.promptFile}`);
 
 		const timeoutSeconds = timeoutOrThrow();
 		request.onAdmitted?.(callCount);
@@ -177,10 +192,14 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 			signal: request.signal,
 			jsonMode,
 			onText: request.onText,
+			onTextDrain: request.onTextDrain,
+			onSpawn: request.onChildSpawn,
 		});
 		const elapsed = Math.max(0, Math.round((Date.now() - started) / 1000));
 		const output = normalizeChildOutput(processResult);
-		if (output.cost && !processResult.jsonCostIncomplete) appendCostSummary(output.cost);
+		if (jsonMode && !output.cost) processResult.jsonCostIncomplete = true;
+		if (processResult.jsonCostIncomplete) appendIncompleteCostMarker("child exited without complete measurable turn_end cost");
+		else if (output.cost) appendCostSummary(output.cost);
 		trace(`[${new Date().toISOString()}] depth=${depth} child_depth=${childDepth} COMPLETED exit=${processResult.code} elapsed=${elapsed}s caller=${request.caller} call=${callCount} cost=${processResult.jsonCostIncomplete ? "incomplete" : output.cost?.cost ?? "untracked"} tokens=${processResult.jsonCostIncomplete ? "incomplete" : output.cost?.tokens ?? "untracked"} cancelled=${processResult.cancelled} timeout=${processResult.timedOut} truncated=${processResult.textTruncated || processResult.jsonEventTruncated}`);
 		const details: RecursiveChildDetails = {
 			depth,

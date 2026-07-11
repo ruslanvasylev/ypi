@@ -95,7 +95,7 @@ export function ensureEnvironment(runtime: YpiRuntime, ctx?: ExtensionContext, p
 	// begins, not at extension load. Seeding it here would freeze a long-running root Pi's
 	// budget at session start; the native tool and shell rlm_query set it at the depth-0 call.
 	process.env.YPI_EXTENSION_ROOT = runtime.root;
-	process.env.YPI_EXTENSION_PATH = process.env.YPI_EXTENSION_PATH || runtime.extensionPath;
+	process.env.YPI_EXTENSION_PATH = runtime.extensionPath;
 	ensureCallCounterFile();
 	ensureCostFile();
 
@@ -103,8 +103,15 @@ export function ensureEnvironment(runtime: YpiRuntime, ctx?: ExtensionContext, p
 		prependPath(runtime.root);
 	}
 
-	if (ctx?.sessionManager.getSessionFile() && sharedSessionsEnabled() && !process.env.RLM_SESSION_DIR) {
-		process.env.RLM_SESSION_DIR = ctx.sessionManager.getSessionDir();
+	if (ctx && sharedSessionsEnabled()) {
+		const sessionFile = ctx.sessionManager.getSessionFile();
+		if (sessionFile) {
+			process.env.RLM_SESSION_FILE = sessionFile;
+			process.env.RLM_SESSION_DIR = ctx.sessionManager.getSessionDir();
+		} else if (process.env.RLM_DEPTH === "0") {
+			delete process.env.RLM_SESSION_FILE;
+			delete process.env.RLM_SESSION_DIR;
+		}
 	}
 	if (process.env.RLM_SESSION_DIR && sharedSessionsEnabled()) {
 		mkdirSync(process.env.RLM_SESSION_DIR, { recursive: true });

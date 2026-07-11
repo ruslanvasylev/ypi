@@ -17,6 +17,8 @@ export interface ChildResourceInput {
 	callCount: number;
 	systemPromptPath?: string;
 	rootPromptPath?: string;
+	setupDeadlineMilliseconds?: number;
+	fullResourceIsolation?: boolean;
 }
 
 export interface WorkspaceLease {
@@ -31,6 +33,7 @@ export interface ChildResourceLease {
 	contextFile?: string;
 	childSession?: string;
 	standaloneSystemPromptFile?: string;
+	isolatedPiRoot?: string;
 	workspace: WorkspaceLease;
 	cleanup(): void;
 }
@@ -76,12 +79,33 @@ function unavailableWorkspace(cwd: string, reason: string): WorkspaceLease {
 	throw new Error(`jj workspace isolation unavailable (${reason}). Choose explicitly: set RLM_JJ=0 for read-only children, initialize colocated jj with 'jj git init --colocate', or set RLM_UNSAFE_NO_JJ_WRITE=1 to permit writes in the current checkout.`);
 }
 
-function createWorkspace(cwd: string, depth: number): WorkspaceLease {
+function remainingSetupMilliseconds(input: ChildResourceInput, cleanup = false): number | undefined {
+	if (input.setupDeadlineMilliseconds === undefined) return cleanup ? 1_000 : undefined;
+	const remaining = input.setupDeadlineMilliseconds - Date.now();
+	if (remaining <= 0 && !cleanup) {
+		const error = new Error("RLM_TIMEOUT expired during recursive workspace setup") as Error & { exitCode: number };
+		error.exitCode = 124;
+		throw error;
+	}
+	return Math.max(1, cleanup ? Math.min(1_000, remaining) : remaining);
+}
+
+function assertSpawnWithinDeadline(result: ReturnType<typeof spawnSync>, operation: string): void {
+	if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") {
+		const error = new Error(`RLM_TIMEOUT expired during ${operation}`) as Error & { exitCode: number };
+		error.exitCode = 124;
+		throw error;
+	}
+}
+
+function createWorkspace(input: ChildResourceInput): WorkspaceLease {
+	const { cwd, childDepth: depth } = input;
 	if (process.env.RLM_JJ === "0") {
 		return { cwd, mode: "off", readOnly: process.env.RLM_UNSAFE_NO_JJ_WRITE !== "1", cleanup() {} };
 	}
 
-	const root = spawnSync("jj", ["root"], { cwd, stdio: "ignore" });
+	const root = spawnSync("jj", ["root"], { cwd, stdio: "ignore", timeout: remainingSetupMilliseconds(input) });
+	assertSpawnWithinDeadline(root, "jj root");
 	if (root.status !== 0) {
 		return unavailableWorkspace(cwd, (root.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT" ? "jj is not installed or not on PATH" : "the current checkout is not a jj workspace");
 	}
@@ -89,7 +113,8 @@ function createWorkspace(cwd: string, depth: number): WorkspaceLease {
 	const workspacePath = mkdtempSync(path.join(tmpdir(), `ypi_ws_d${depth}_`));
 	const workspaceSuffix = path.basename(workspacePath).replace(/^ypi_ws_/, "");
 	const name = `ypi-d${depth}-${process.pid}-${workspaceSuffix}`;
-	const add = spawnSync("jj", ["workspace", "add", "--name", name, workspacePath], { cwd, stdio: "ignore" });
+	const add = spawnSync("jj", ["workspace", "add", "--name", name, workspacePath], { cwd, stdio: "ignore", timeout: remainingSetupMilliseconds(input) });
+	assertSpawnWithinDeadline(add, "jj workspace add");
 	if (add.status !== 0) {
 		rmSync(workspacePath, { recursive: true, force: true });
 		return unavailableWorkspace(cwd, "jj workspace add failed");
@@ -100,7 +125,7 @@ function createWorkspace(cwd: string, depth: number): WorkspaceLease {
 		mode: "jj",
 		readOnly: false,
 		cleanup() {
-			spawnSync("jj", ["workspace", "forget", name], { cwd: workspacePath, stdio: "ignore" });
+			spawnSync("jj", ["workspace", "forget", name], { cwd: workspacePath, stdio: "ignore", timeout: remainingSetupMilliseconds(input, true) });
 			rmSync(workspacePath, { recursive: true, force: true });
 		},
 	};
@@ -129,25 +154,34 @@ export function acquireChildResources(input: ChildResourceInput): ChildResourceL
 	let promptFile: string | undefined;
 	let contextFile: string | undefined;
 	let standaloneSystemPromptFile: string | undefined;
+	let isolatedPiRoot: string | undefined;
 	let workspace: WorkspaceLease | undefined;
 	try {
 		promptFile = createPromptFile(input.prompt);
 		contextFile = createContextFile(input);
 		standaloneSystemPromptFile = createStandaloneSystemPrompt(input, promptFile, contextFile);
+		if (input.fullResourceIsolation) {
+			isolatedPiRoot = mkdtempSync(path.join(tmpdir(), "ypi_isolated_pi_"));
+			mkdirSync(path.join(isolatedPiRoot, "agent"), { recursive: true, mode: 0o700 });
+			mkdirSync(path.join(isolatedPiRoot, "packages"), { recursive: true, mode: 0o700 });
+		}
 		const childSession = childSessionFile(input);
 		copyForkSession(input, childSession);
-		workspace = createWorkspace(input.cwd, input.childDepth);
+		if (input.setupDeadlineMilliseconds !== undefined && Date.now() >= input.setupDeadlineMilliseconds) remainingSetupMilliseconds(input);
+		workspace = createWorkspace(input);
 		return {
 			promptFile,
 			contextFile,
 			childSession,
 			standaloneSystemPromptFile,
+			isolatedPiRoot,
 			workspace,
 			cleanup() {
 				workspace?.cleanup();
 				removeArtifact(promptFile);
 				removeArtifact(contextFile);
 				removeArtifact(standaloneSystemPromptFile);
+				if (isolatedPiRoot) rmSync(isolatedPiRoot, { recursive: true, force: true });
 			},
 		};
 	} catch (error) {
@@ -155,6 +189,7 @@ export function acquireChildResources(input: ChildResourceInput): ChildResourceL
 		removeArtifact(promptFile);
 		removeArtifact(contextFile);
 		removeArtifact(standaloneSystemPromptFile);
+		if (isolatedPiRoot) rmSync(isolatedPiRoot, { recursive: true, force: true });
 		throw error;
 	}
 }

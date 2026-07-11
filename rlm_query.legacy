@@ -300,7 +300,7 @@ COMBINED_PROMPT=""
 # Write prompt to a file for symbolic access — agents can grep/sed the original
 # question instead of relying on in-context token copying.
 PROMPT_FILE=$(mktemp "${TMPDIR:-/tmp}/rlm_prompt_d${NEXT_DEPTH}.XXXXXX")
-echo "$PROMPT" > "$PROMPT_FILE"
+printf '%s' "$PROMPT" > "$PROMPT_FILE"
 
 # ----------------------------------------------------------------------
 # jj workspace isolation — give recursive children their own working copy
@@ -534,7 +534,7 @@ if [ "$ASYNC" = true ]; then
     (umask 077; : > "$ASYNC_OUTPUT")
 
     # Build the full command
-    CHILD_CMD=(env -i "${CHILD_ENV[@]}" "${TIMEOUT_PREFIX[@]}" "$PI_BIN" "${CMD_ARGS[@]}" "$PROMPT")
+    CHILD_CMD=(env -i "${CHILD_ENV[@]}" "${TIMEOUT_PREFIX[@]}" "$PI_BIN" "${CMD_ARGS[@]}" "@$PROMPT_FILE")
 
     # Spawn in background: run child, capture output, touch sentinel, optionally notify.
     # The whole worker closes inherited stdio so command substitution such as
@@ -637,7 +637,7 @@ if [ "${RLM_JSON:-1}" != "0" ]; then
     PARSER="$SCRIPT_DIR/rlm_parse_json"
 
     set +e
-    env -i "${CHILD_ENV[@]}" "${TIMEOUT_PREFIX[@]}" "$PI_BIN" "${JSON_CMD_ARGS[@]}" "$PROMPT" 2>"$ERR_OUT" | python3 "$PARSER" 3>"$COST_OUT"
+    env -i "${CHILD_ENV[@]}" "${TIMEOUT_PREFIX[@]}" "$PI_BIN" "${JSON_CMD_ARGS[@]}" "@$PROMPT_FILE" 2>"$ERR_OUT" | python3 "$PARSER" 3>"$COST_OUT"
     PIPE_STATUS=("${PIPESTATUS[@]}")
     set -e
     RC="${PIPE_STATUS[0]}"
@@ -666,7 +666,7 @@ if [ "${RLM_JSON:-1}" != "0" ]; then
 else
     # Plain text mode (RLM_JSON=0): no cost tracking
     set +e
-    env -i "${CHILD_ENV[@]}" "${TIMEOUT_PREFIX[@]}" "$PI_BIN" "${CMD_ARGS[@]}" "$PROMPT"
+    env -i "${CHILD_ENV[@]}" "${TIMEOUT_PREFIX[@]}" "$PI_BIN" "${CMD_ARGS[@]}" "@$PROMPT_FILE"
     RC=$?
     set -e
 
