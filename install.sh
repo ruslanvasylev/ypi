@@ -50,20 +50,6 @@ if [ "$HAS_NPM" = false ] && [ "$HAS_BUN" = false ]; then
     exit 1
 fi
 
-# ── Install Pi if not present ────────────────────────────────────────────
-
-if ! command -v pi &>/dev/null; then
-    info "Installing Pi coding agent..."
-    if [ "$HAS_BUN" = true ]; then
-        bun install -g @earendil-works/pi-coding-agent
-    else
-        npm install -g @earendil-works/pi-coding-agent
-    fi
-    dim "Installed $(pi --version 2>/dev/null | head -1 || echo 'pi')"
-else
-    dim "Pi already installed: $(which pi)"
-fi
-
 # ── Clone ypi ────────────────────────────────────────────────────────────
 
 INSTALL_DIR="${YPI_DIR:-$HOME/.ypi}"
@@ -79,6 +65,20 @@ else
     cd "$INSTALL_DIR"
     git submodule update --init --depth 1 --quiet
 fi
+
+# Install the exact Pi/runtime dependency versions declared by this checkout.
+# A global PATH Pi may coexist, but ypi deliberately resolves this local copy first.
+info "Installing pinned ypi runtime dependencies..."
+if [ "$HAS_BUN" = true ]; then
+    bun install --production --frozen-lockfile
+else
+    npm install --omit=dev --ignore-scripts
+fi
+if [ ! -x "$INSTALL_DIR/node_modules/.bin/pi" ]; then
+    warn "Pinned Pi dependency was not installed at $INSTALL_DIR/node_modules/.bin/pi"
+    exit 1
+fi
+dim "Pinned Pi dependency: $($INSTALL_DIR/node_modules/.bin/pi --version 2>/dev/null | head -1 || echo 'installed')"
 
 # ── Add to PATH ──────────────────────────────────────────────────────────
 

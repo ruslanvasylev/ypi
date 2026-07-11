@@ -49,11 +49,11 @@ PKG_JSON="$PKG_DIR/package.json"
 HAS_BIN="$(node -e "console.log('bin' in require('$PKG_JSON'))")"
 HAS_PI_EXT="$(node -e "const p=require('$PKG_JSON');console.log((p.pi?.extensions||[]).join(','))")"
 HAS_PEER="$(node -e "const p=require('$PKG_JSON');console.log(p.peerDependencies?.['@earendil-works/pi-coding-agent']||'')")"
-HAS_TYPEBOX="$(node -e "const p=require('$PKG_JSON');console.log(p.dependencies?.typebox||'')")"
+HAS_TYPEBOX="$(node -e "const p=require('$PKG_JSON');console.log(p.peerDependencies?.typebox||'')")"
 [ "$HAS_BIN" = "false" ] && pass "manifest has no bin (pure extension)" || fail "manifest has no bin" "bin present"
 assert_contains "manifest exposes canonical extension" "./extensions/recursive.ts" "$HAS_PI_EXT"
-[ -n "$HAS_PEER" ] && pass "manifest declares pi as a peer dependency ($HAS_PEER)" || fail "manifest declares pi as a peer dependency" "missing"
-[ -n "$HAS_TYPEBOX" ] && pass "manifest pins typebox ($HAS_TYPEBOX)" || fail "manifest pins typebox" "missing"
+[ "$HAS_PEER" = "*" ] && pass "manifest declares host Pi as an unrestricted peer" || fail "manifest declares host Pi as an unrestricted peer" "value=$HAS_PEER"
+[ "$HAS_TYPEBOX" = "*" ] && pass "manifest declares host typebox as an unrestricted peer" || fail "manifest declares host typebox as an unrestricted peer" "value=$HAS_TYPEBOX"
 
 # Pack and inspect the tarball surface.
 PACK_OUTPUT="$(cd "$PKG_DIR" && bun pm pack --destination "$TEST_TMP" --ignore-scripts --quiet)"
@@ -66,6 +66,7 @@ assert_contains "tarball ships canonical extension" "package/extensions/recursiv
 assert_contains "tarball ships native adapter" "package/extensions/ypi/native-tool.ts" "$TARBALL_LIST"
 assert_contains "tarball ships canonical runtime core" "package/extensions/ypi/runtime-core.ts" "$TARBALL_LIST"
 assert_contains "tarball ships internal child-process owner" "package/extensions/ypi/internal/child-process.ts" "$TARBALL_LIST"
+assert_contains "tarball ships internal child-output owner" "package/extensions/ypi/internal/child-output.ts" "$TARBALL_LIST"
 assert_contains "tarball ships retained native fallback" "package/extensions/ypi/legacy-native-tool.ts" "$TARBALL_LIST"
 assert_contains "tarball ships system prompt" "package/SYSTEM_PROMPT.md" "$TARBALL_LIST"
 assert_not_contains "tarball excludes the wrapper launcher" "package/ypi" "$TARBALL_LIST"
@@ -81,14 +82,30 @@ if command -v pi >/dev/null 2>&1; then
 	(cd "$CONSUMER" && bun add "$TARBALL" --no-save >/dev/null 2>&1)
 	EXT="$CONSUMER/node_modules/pi-recursive/extensions/recursive.ts"
 	if [ -f "$EXT" ]; then
+		FAKE_PI="$TEST_TMP/fake-pi"
+		cat > "$FAKE_PI" <<'FAKEPI'
+#!/usr/bin/env bash
+printf '%s\n' PACKED_NATIVE_EXEC_OK
+FAKEPI
+		chmod +x "$FAKE_PI"
+		if bun "$PROJECT_DIR/tests/installed_extension_harness.ts" "$EXT" "$FAKE_PI" >"$TEST_TMP/execute.out" 2>"$TEST_TMP/execute.err" \
+			&& grep -q 'INSTALLED_EXTENSION_EXECUTION=PASS' "$TEST_TMP/execute.out"; then
+			pass "installed pi-recursive native tool executes through canonical runtime"
+		else
+			fail "installed pi-recursive native tool executes through canonical runtime" "$(tail -4 "$TEST_TMP/execute.err")"
+		fi
+
 		ERRF="$TEST_TMP/load.err"
 		set +e
 		YPI_EXTENSION_DEBUG=1 RLM_MAX_DEPTH=2 timeout 30 pi --no-extensions -e "$EXT" --list-models test >"$TEST_TMP/load.out" 2>"$ERRF"
+		LOAD_RC=$?
 		set -e
-		if grep -qE '__YPI_NATIVE_TOOL_REGISTERED__|__YPI_EXTENSION_LOADED__' "$ERRF"; then
-			pass "installed pi-recursive loads and registers the native rlm_query tool"
+		if [ "$LOAD_RC" -eq 0 ] \
+			&& grep -q '__YPI_EXTENSION_LOADED__' "$ERRF" \
+			&& grep -q '__YPI_NATIVE_TOOL_REGISTERED__' "$ERRF"; then
+			pass "installed pi-recursive exits cleanly, loads, and registers native rlm_query"
 		else
-			fail "installed pi-recursive loads and registers the native rlm_query tool" "$(tail -3 "$ERRF")"
+			fail "installed pi-recursive exits cleanly, loads, and registers native rlm_query" "rc=$LOAD_RC $(tail -3 "$ERRF")"
 		fi
 	else
 		fail "installed package exposes the extension" "missing $EXT"

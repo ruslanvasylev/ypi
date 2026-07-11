@@ -6,6 +6,9 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { YpiRuntime } from "./runtime.ts";
 import { debug } from "./runtime.ts";
 
+export const DEFAULT_MAX_DEPTH = 4;
+export const DEFAULT_MAX_CALLS = 128;
+
 function exactNonNegativeInteger(value: string | undefined, fallback: string): number {
 	const raw = value ?? fallback;
 	if (!/^\d+$/.test(raw)) return Number.NaN;
@@ -18,7 +21,7 @@ export function currentDepth(): number {
 }
 
 export function maxDepth(): number {
-	return exactNonNegativeInteger(process.env.RLM_MAX_DEPTH, "3");
+	return exactNonNegativeInteger(process.env.RLM_MAX_DEPTH, String(DEFAULT_MAX_DEPTH));
 }
 
 export function nextDepth(): number {
@@ -80,7 +83,8 @@ function ensureCostFile(): void {
 
 export function ensureEnvironment(runtime: YpiRuntime, ctx?: ExtensionContext, pi?: ExtensionAPI): void {
 	process.env.RLM_DEPTH = process.env.RLM_DEPTH || "0";
-	process.env.RLM_MAX_DEPTH = process.env.RLM_MAX_DEPTH || "3";
+	process.env.RLM_MAX_DEPTH = process.env.RLM_MAX_DEPTH || String(DEFAULT_MAX_DEPTH);
+	process.env.RLM_MAX_CALLS = process.env.RLM_MAX_CALLS || String(DEFAULT_MAX_CALLS);
 	process.env.RLM_SYSTEM_PROMPT = process.env.RLM_SYSTEM_PROMPT || runtime.systemPromptPath;
 	process.env.RLM_JJ = process.env.RLM_JJ || "1";
 	process.env.RLM_EXTENSIONS = process.env.RLM_EXTENSIONS || "1";

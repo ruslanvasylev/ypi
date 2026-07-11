@@ -83,7 +83,8 @@ echo "ARGS: $*"
 echo "CONTEXT=$CONTEXT"
 echo "RLM_DEPTH=$RLM_DEPTH"
 echo "RLM_MAX_DEPTH=$RLM_MAX_DEPTH"
-echo "RLM_PROVIDER=$RLM_PROVIDER"
+echo "RLM_MAX_CALLS=$RLM_MAX_CALLS"
+echo "RLM_PROVIDER=$RLM_PROVIDER"},{
 echo "RLM_MODEL=$RLM_MODEL"
 echo "RLM_THINKING_LEVEL=${RLM_THINKING_LEVEL:-}"
 echo "RLM_SYSTEM_PROMPT=$RLM_SYSTEM_PROMPT"
@@ -97,7 +98,11 @@ if echo "$*" | grep -q -- "--no-tools"; then
 fi
 # Echo the context file content if it exists
 if [ -n "${CONTEXT:-}" ] && [ -f "${CONTEXT:-}" ]; then
-    echo "CONTEXT_CONTENT=$(cat "$CONTEXT")"
+    if [ -n "${YPI_CAPTURE_CONTEXT:-}" ]; then
+        cp "$CONTEXT" "$YPI_CAPTURE_CONTEXT"
+    else
+        echo "CONTEXT_CONTENT=$(cat "$CONTEXT")"
+    fi
 fi
 MOCK_PI
 chmod +x "$MOCK_BIN/pi"
@@ -171,6 +176,22 @@ OUTPUT=$(
 assert_contains "T3: piped text becomes context" "cats" "$OUTPUT"
 assert_not_contains "T3: parent context NOT inherited" "dogs" "$OUTPUT"
 
+# T3b: stdin is spooled as bytes rather than decoded into an unbounded UTF-8
+# string, preserving invalid UTF-8 and NUL bytes exactly.
+python3 - "$TEST_TMP/binary-context.bin" <<'PY'
+import sys
+open(sys.argv[1], "wb").write(b"\xff\x00binary\n")
+PY
+cat "$TEST_TMP/binary-context.bin" | \
+    YPI_CAPTURE_CONTEXT="$TEST_TMP/captured-binary-context.bin" \
+    RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_PROVIDER=test-provider RLM_MODEL=test-model \
+    rlm_query "Preserve binary context" >/dev/null
+if cmp -s "$TEST_TMP/binary-context.bin" "$TEST_TMP/captured-binary-context.bin"; then
+    pass "T3b: piped context is byte-preserving"
+else
+    fail "T3b: piped context is byte-preserving" "captured bytes differ"
+fi
+
 # T4: no pipe → inherits parent context
 OUTPUT=$(
     CONTEXT="$TEST_TMP/parent_ctx.txt" \
@@ -233,7 +254,8 @@ assert_contains "T7: depth 1→2" "RLM_DEPTH=2" "$OUTPUT"
 echo ""
 echo "=== System Prompt ==="
 
-# T8: system prompt file path is passed (not content)
+# T8: package-owned system prompt path is propagated symbolically; the explicit
+# canonical extension owns prompt assembly when extensions are enabled.
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=0 \
@@ -243,8 +265,7 @@ OUTPUT=$(
     RLM_SYSTEM_PROMPT="$PROJECT_DIR/SYSTEM_PROMPT.md" \
     rlm_query "Question?"
 )
-assert_contains "T8: --system-prompt in args" "--system-prompt" "$OUTPUT"
-assert_contains "T8: system prompt is file path" "SYSTEM_PROMPT.md" "$OUTPUT"
+assert_contains "T8: system prompt is file path" "RLM_SYSTEM_PROMPT=$PROJECT_DIR/SYSTEM_PROMPT.md" "$OUTPUT"
 
 # T8b: when the canonical ypi extension is available, child Pi reuses it
 # instead of rebuilding the prompt in rlm_query.
@@ -340,6 +361,8 @@ OUTPUT=$(
     rlm_query "Defaults question?"
 )
 assert_contains "T14: default depth=0→1" "RLM_DEPTH=1" "$OUTPUT"
+assert_contains "T14: default maximum depth is four" "RLM_MAX_DEPTH=4" "$OUTPUT"
+assert_contains "T14: default total call cap is bounded" "RLM_MAX_CALLS=128" "$OUTPUT"
 # T14b: provider/model must NOT be hardcoded — Pi's defaults should be used
 assert_contains "T14: no hardcoded provider" "RLM_PROVIDER=" "$OUTPUT"
 assert_not_contains "T14: no cerebras default" "cerebras" "$OUTPUT"

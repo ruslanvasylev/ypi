@@ -13,6 +13,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ### Changed
 - Bare `ypi` now explicitly preserves Pi-native root model selection: root provider/model/thinking come from Pi settings (`defaultProvider`, `defaultModel`, `defaultThinkingLevel`), `/model`, or CLI flags, while children inherit the active root route by default. Recursive child routing can now be lowered by depth with `RLM_CHILD_MODELS`, `RLM_CHILD_PROVIDERS`, and `RLM_CHILD_THINKING_LEVELS` without narrowing the root default, toolset, timeout, or call-limit behavior.
 - Agent-facing guidance now describes ypi as an RLM-inspired recursive coding-agent runtime rather than an Algorithm 1 reproduction, distinguishes the root prompt from delegated prompt files, and states which configured guardrails actually enforce bounds.
+- The bounded-recursion default is now depth 4 with a 128-call session/tree cap, supporting an observed orchestrate → review → adjudicate → focused-probe chain while bounding total fan-out. `$RLM_ROOT_PROMPT_FILE` and goal/scope/acceptance echo guidance make deeper delegation directly checkable for drift.
+- `ypi`, `rlm_query`, and `ypi-doctor` prefer the package-local exact Pi dependency over a stale PATH binary. The pure `pi-recursive` package follows Pi's package contract by declaring host-provided Pi and `typebox` as `"*"` peers.
 
 ### Fixed
 - Native child stdout and stderr are retained through bounded streaming capture instead of unbounded string concatenation, preventing large Pi JSON streams from reaching V8's maximum string length before final tool-output truncation.
@@ -20,6 +22,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - Native recursion depth parsing now rejects integer prefixes such as `0junk` and values outside the safe-integer range instead of silently accepting the numeric prefix.
 - Native and CLI no-jj children now share the same built-in mutator exclusion policy without a global tool allowlist, and extension-isolated children keep the standalone ypi system prompt through both adapters.
 - Budget enforcement now fails closed through both adapters when `RLM_JSON=0`, because unmeasured plain output cannot update the shared cost ledger.
+- Incremental JSON decoding now preserves late answer and cost events after oversized diagnostic events, while CLI stdout streams incrementally and successful child stderr remains on stderr.
+- SIGINT/SIGTERM cancellation reaches detached child process groups; preflight timeout exits 124 and includes stdin/setup time; malformed call, timeout, start-time, and budget controls fail closed.
+- Async calls are admitted before metadata acknowledgement, snapshot inherited context/fork state, and publish through private exclusive job directories. Broad automatic `/tmp/rlm_*` deletion was removed in favor of lease cleanup plus explicit `rlm_cleanup`.
+- Installed-package and publication checks now cover generated-runtime freshness, package-local Pi resolution, direct bundle root resolution, clean extension registration exits, and packaged doctor availability.
 
 ## [0.6.1] - 2026-06-22
 

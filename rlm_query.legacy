@@ -24,7 +24,7 @@
 #
 # Environment:
 #   RLM_DEPTH         — current recursion depth (default: 0)
-#   RLM_MAX_DEPTH     — max recursion depth (default: 3)
+#   RLM_MAX_DEPTH     — max recursion depth (default: 4)
 #   RLM_PROVIDER      — LLM provider
 #   RLM_MODEL         — LLM model
 #   RLM_THINKING_LEVEL — Pi thinking level for child calls
@@ -33,7 +33,7 @@
 #   RLM_STDIN         — set to "1" by the calling pattern to indicate piped input
 #   RLM_TIMEOUT       — max wall‑clock seconds for the whole call chain
 #   RLM_START_TIME    — epoch seconds when the root call started (auto‑set)
-#   RLM_MAX_CALLS     — maximum total rlm_query invocations allowed
+#   RLM_MAX_CALLS     — maximum total rlm_query invocations allowed (default: 128)
 #   RLM_CALL_COUNT    — current count of invocations (auto‑incremented)
 #   RLM_CHILD_MODEL   — model to use for all child calls (depth > 0)
 #   RLM_CHILD_PROVIDER— provider to use with RLM_CHILD_MODEL (depth > 0)
@@ -173,7 +173,8 @@ PROMPT="${1:?Usage: rlm_query [--fork] [--async] [--notify PID] \"your prompt he
 # This is the only recursion limiter. Children get full tools/extensions.
 # ----------------------------------------------------------------------
 DEPTH="${RLM_DEPTH:-0}"
-MAX_DEPTH="${RLM_MAX_DEPTH:-3}"
+MAX_DEPTH="${RLM_MAX_DEPTH:-4}"
+export RLM_MAX_CALLS="${RLM_MAX_CALLS:-128}"
 
 # Fail closed: a malformed depth config must not bypass the recursion limiter.
 case "$DEPTH" in ''|*[!0-9]*)
@@ -184,6 +185,18 @@ case "$MAX_DEPTH" in ''|*[!0-9]*)
     rlm_error "Invalid RLM_MAX_DEPTH" "RLM_MAX_DEPTH='$MAX_DEPTH' is not a non-negative integer" "Unset RLM_MAX_DEPTH or set it to an integer >= 0"
     exit 1 ;;
 esac
+case "${RLM_MAX_CALLS:-}" in ''|*[!0-9]*)
+    rlm_error "Invalid RLM_MAX_CALLS" "RLM_MAX_CALLS='${RLM_MAX_CALLS:-}' is not a non-negative integer" "Set RLM_MAX_CALLS to an integer >= 0"
+    exit 1 ;;
+esac
+case "${RLM_TIMEOUT:-}" in *[!0-9]*)
+    rlm_error "Invalid RLM_TIMEOUT" "RLM_TIMEOUT='${RLM_TIMEOUT:-}' is not a non-negative integer" "Unset RLM_TIMEOUT or set it to whole seconds >= 0"
+    exit 1 ;;
+esac
+if [ -n "${RLM_BUDGET:-}" ] && ! [[ "$RLM_BUDGET" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    rlm_error "Invalid RLM_BUDGET" "RLM_BUDGET='$RLM_BUDGET' is not a finite non-negative number" "Unset RLM_BUDGET or set it to a non-negative dollar amount"
+    exit 1
+fi
 
 NEXT_DEPTH=$((DEPTH + 1))
 
@@ -192,23 +205,10 @@ if [ "$NEXT_DEPTH" -gt "$MAX_DEPTH" ]; then
     exit 1
 fi
 
-# ----------------------------------------------------------------------
-# Stale temp reaper — runs once per root invocation (depth 0 only)
-# Cleans up leaked files from crashed/killed processes (SIGKILL skips traps)
-# ----------------------------------------------------------------------
-if [ "$DEPTH" -eq 0 ]; then
-    (
-        # Delete rlm temp files older than 2 hours whose parent process is gone
-        find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'rlm_*' -mmin +120 -delete 2>/dev/null
-        # Remove stale jj workspace directories older than 2 hours
-        find "${TMPDIR:-/tmp}" -maxdepth 1 \( -name 'rlm_ws_*' -o -name 'ypi_ws_*' \) -type d -mmin +120 -exec rm -rf {} + 2>/dev/null
-    ) &
-fi
-
 PROVIDER="${RLM_PROVIDER:-}"
 MODEL="${RLM_MODEL:-}"
 THINKING_LEVEL="${RLM_THINKING_LEVEL:-}"
-SYSTEM_PROMPT_FILE="${RLM_SYSTEM_PROMPT:-}"
+SYSTEM_PROMPT_FILE="${RLM_SYSTEM_PROMPT:-$SCRIPT_DIR/SYSTEM_PROMPT.md}"
 
 # ----------------------------------------------------------------------
 # Timeout start time initialization
@@ -218,6 +218,10 @@ SYSTEM_PROMPT_FILE="${RLM_SYSTEM_PROMPT:-}"
 if [ "$DEPTH" -eq 0 ] || [ -z "${RLM_START_TIME:-}" ]; then
     export RLM_START_TIME=$(date +%s)
 fi
+case "$RLM_START_TIME" in ''|*[!0-9]*)
+    rlm_error "Invalid RLM_START_TIME" "RLM_START_TIME='$RLM_START_TIME' is not a non-negative integer epoch" "Unset RLM_START_TIME at depth 0 or provide a valid inherited epoch"
+    exit 1 ;;
+esac
 
 # ----------------------------------------------------------------------
 # Session tree — each child gets a persisted session file
@@ -481,7 +485,7 @@ COMBINED_PROMPT=""
 if [ "$USE_YPI_EXTENSION" != true ] && [ -n "$SYSTEM_PROMPT_FILE" ] && [ -f "$SYSTEM_PROMPT_FILE" ]; then
     COMBINED_PROMPT=$(mktemp "${TMPDIR:-/tmp}/rlm_system_prompt.XXXXXX")
     cat "$SYSTEM_PROMPT_FILE" > "$COMBINED_PROMPT"
-    SELF_SOURCE="$SCRIPT_DIR/rlm_query"
+    SELF_SOURCE="$SCRIPT_DIR/rlm_query.legacy"
     if [ -f "$SELF_SOURCE" ]; then
         cat >> "$COMBINED_PROMPT" << 'SYSEOF'
 
@@ -522,9 +526,12 @@ fi
 # Async mode — spawn child in background and return immediately
 # ----------------------------------------------------------------------
 if [ "$ASYNC" = true ]; then
-    ASYNC_ID="rlm_async_${RLM_TRACE_ID}_c${RLM_CALL_COUNT}_$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-    ASYNC_OUTPUT="${TMPDIR:-/tmp}/${ASYNC_ID}.txt"
-    ASYNC_SENTINEL="${TMPDIR:-/tmp}/${ASYNC_ID}.done"
+    ASYNC_DIR=$(mktemp -d "${TMPDIR:-/tmp}/rlm_async_${RLM_TRACE_ID}_c${RLM_CALL_COUNT}.XXXXXX")
+    chmod 700 "$ASYNC_DIR"
+    ASYNC_ID=$(basename "$ASYNC_DIR")
+    ASYNC_OUTPUT="$ASYNC_DIR/output.txt"
+    ASYNC_SENTINEL="$ASYNC_DIR/done"
+    (umask 077; : > "$ASYNC_OUTPUT")
 
     # Build the full command
     CHILD_CMD=(env -i "${CHILD_ENV[@]}" "${TIMEOUT_PREFIX[@]}" "$PI_BIN" "${CMD_ARGS[@]}" "$PROMPT")

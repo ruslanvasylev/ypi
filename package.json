@@ -36,7 +36,8 @@
     "rlm_cost": "rlm_cost",
     "rlm_parse_json": "rlm_parse_json",
     "rlm_sessions": "rlm_sessions",
-    "rlm_cleanup": "rlm_cleanup"
+    "rlm_cleanup": "rlm_cleanup",
+    "ypi-doctor": "scripts/doctor"
   },
   "files": [
     "ypi",
@@ -46,6 +47,8 @@
     "rlm_parse_json",
     "rlm_sessions",
     "rlm_cleanup",
+    ".pi-version",
+    "scripts/doctor",
     "SYSTEM_PROMPT.md",
     "install.sh",
     "README.md",

@@ -28,11 +28,17 @@ fi
 echo "==> release consistency (lockstep + dated CHANGELOG)"
 ./scripts/check-release-consistency --require-dated
 
+echo "==> canonical runtime typecheck + generated artifact freshness"
+make typecheck-runtime check-runtime-cli
+
 VER="$(node -e "console.log(require('./package.json').version)")"
 echo "==> target version: $VER (ypi + pi-recursive in lockstep)"
 
 echo "==> stage pi-recursive publish view"
 ./scripts/build-pi-recursive
+
+echo "==> installed-package smoke gates"
+make test-consumer-pack test-pi-recursive-pack
 
 if [ "$DRY" = true ]; then
     echo "== DRY RUN: ypi =="

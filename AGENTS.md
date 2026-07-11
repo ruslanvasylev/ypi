@@ -268,15 +268,17 @@ testing between changes. One variable at a time.
 |---|---|---|
 | `CONTEXT` | Path to context file on disk | (required for QA) |
 | `RLM_DEPTH` | Current recursion depth | `0` |
-| `RLM_MAX_DEPTH` | Maximum recursion depth | `3` |
+| `RLM_MAX_DEPTH` | Maximum recursion depth | `4` |
 | `RLM_PROVIDER` | LLM provider override for root + sub-calls; otherwise seeded from Pi's active/root provider | Pi settings/active model |
 | `RLM_MODEL` | LLM model override for root + sub-calls; otherwise seeded from Pi's active/root model | Pi settings/active model |
 | `RLM_THINKING_LEVEL` | Thinking level propagated to child calls; otherwise seeded from Pi's active/root thinking level | Pi settings/active thinking |
-| `RLM_SYSTEM_PROMPT` | Path to system prompt file | (required) |
+| `RLM_SYSTEM_PROMPT` | Path to system prompt file | package-owned default |
+| `RLM_PROMPT_FILE` | Exact current child charter | auto-created |
+| `RLM_ROOT_PROMPT_FILE` | Exact first delegation charter for goal-drift checks | auto-created per tree |
 | `PI_TRACE_FILE` | Trace log path | (none) |
 | `RLM_TIMEOUT` | Max wall-clock seconds | (none = unlimited) |
 | `RLM_START_TIME` | Epoch seconds when the current depth-0 tree began | (auto-set per top-level call) |
-| `RLM_MAX_CALLS` | Max total rlm_query invocations (permits 1..N, rejects N+1) | (none = unlimited) |
+| `RLM_MAX_CALLS` | Max total rlm_query invocations (permits 1..N, rejects N+1) | `128` |
 | `RLM_CALL_COUNT` | Running count of calls so far | `0` |
 | `RLM_CHILD_MODEL` | Model override for all child depths | (none = same as parent/root route) |
 | `RLM_CHILD_PROVIDER` | Provider override used with `RLM_CHILD_MODEL` | (none = same as parent/root route) |

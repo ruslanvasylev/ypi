@@ -25,7 +25,8 @@ export RLM_SYSTEM_PROMPT="$PROJECT_DIR/SYSTEM_PROMPT.md"
 # E2E needs a real model — cheap and fast for CI
 export RLM_PROVIDER="${RLM_PROVIDER:-openrouter}"
 export RLM_MODEL="${RLM_MODEL:-google/gemini-3-flash-preview}"
-export RLM_MAX_DEPTH="${RLM_MAX_DEPTH:-3}"
+export RLM_MAX_DEPTH="${RLM_MAX_DEPTH:-4}"
+export RLM_MAX_CALLS="${RLM_MAX_CALLS:-128}"
 
 PASS=0
 FAIL=0

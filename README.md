@@ -122,7 +122,7 @@ The design has four properties that compound:
 
 2. **Self-hosting** — The TypeScript runtime core is the canonical recursion machinery. When the CLI helper is enabled (the `ypi` wrapper, or any load with `YPI_SHELL_HELPER=1`), the prompt includes the thin launcher, runtime core, and CLI adapter for inspection. A bare `pi -e` / npm extension install uses the thin native adapter over the same core.
 
-3. **Bounded ancestry with optional tree guards** — `RLM_MAX_DEPTH` defaults to `3` and bounds recursive ancestry. Optional call, timeout, and budget limits constrain total breadth, wall time, and measured spend. These controls reduce runaway risk; only configured hard limits can enforce their respective bounds, and they cannot guarantee provider or operating-system termination.
+3. **Bounded ancestry with tree guards** — `RLM_MAX_DEPTH` defaults to `4`, enough for an orchestrate → review → adjudicate → focused-probe chain. `RLM_MAX_CALLS` defaults to `128` to bound total fan-out; timeout and budget remain optional because safe universal wall-time and dollar limits do not exist across local and hosted models. These controls reduce runaway risk, but cannot guarantee provider or operating-system termination.
 
 4. **Symbolic access** — `$CONTEXT` holds external data and each delegated child receives its task through `$RLM_PROMPT_FILE` as well as Pi's prompt argument. The root wrapper prompt remains a normal Pi user message. Agents can use files and line-addressed edits instead of copying bulk data through model memory.
 
@@ -156,9 +156,9 @@ This means root uses Pi's configured default, depth-1 children use high thinking
 |---------|---------|-------------|
 | Budget | `RLM_BUDGET=0.50` | Max dollar spend for entire recursive tree; native extension mode requires JSON output so child cost can be measured |
 | Timeout | `RLM_TIMEOUT=60` | Wall-clock limit for entire recursive tree |
-| Call limit | `RLM_MAX_CALLS=20` | Max total `rlm_query` invocations |
+| Call limit | `RLM_MAX_CALLS=128` | Max total `rlm_query` invocations (default 128; lower it for bounded evaluations) |
 | Model routing | `RLM_CHILD_MODEL=haiku` or `RLM_CHILD_MODELS=big:high,small:medium` | Use one child model for every sub-call, or a comma-separated depth route for depth 1, 2, ... |
-| Depth limit | `RLM_MAX_DEPTH=3` | How deep recursion can go |
+| Depth limit | `RLM_MAX_DEPTH=4` | How deep recursion can go (default 4; increase only with explicit call/time/budget controls) |
 | jj disable | `RLM_JJ=0` | Skip workspace isolation; child agents exclude built-in mutators unless `RLM_UNSAFE_NO_JJ_WRITE=1`, while installed extension tools remain available |
 | Plain text | `RLM_JSON=0` | Disable JSON mode (no cost tracking) |
 | Child non-extension discovery isolation | `RLM_CHILD_DISCOVERY=0` | Pass Pi's `--no-skills`, `--no-prompt-templates`, `--no-themes`, `--no-context-files`, and `--no-approve`; installed extensions may still register commands/skills unless extension loading is also disabled |
@@ -189,12 +189,13 @@ If Pi changes how sessions or extensions work, our guardrail tests should catch 
 
 ### Troubleshooting
 
-If `ypi` or recursion **seems broken**, run `make doctor` first. The most common
-cause is the wrong host `pi`: either the old `@mariozechner/pi-coding-agent`
-shadowing the current `@earendil-works/pi-coding-agent`, or a version older than
-`.pi-version`. `make doctor` reports the exact mismatch and the one-line fix
-(`bun add -g @earendil-works/pi-coding-agent@<pinned>`). It honors `YPI_PI_BIN`,
-so it checks the same binary recursion actually spawns.
+If `ypi` or recursion **seems broken**, run `ypi-doctor` for an npm install or
+`make doctor` from a source checkout. The most common cause is the wrong host
+`pi`: either the old `@mariozechner/pi-coding-agent` shadowing the current
+`@earendil-works/pi-coding-agent`, or a version older than `.pi-version`. The
+doctor prefers ypi's package-local exact dependency over PATH, reports the
+mismatch, and honors an explicit `YPI_PI_BIN`, so it checks the same binary
+recursion actually spawns.
 
 ### Package Boundary
 

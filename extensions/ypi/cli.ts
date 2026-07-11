@@ -1,10 +1,10 @@
-import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { ensureEnvironment } from "./env.ts";
-import { createAsyncJob, finishAsyncJob, launchAsyncWorker, readAsyncJob } from "./internal/cli-async.ts";
-import { RecursiveChildError, runRecursiveChild } from "./runtime-core.ts";
+import { createAsyncJob, finishAsyncJob, launchAsyncWorker, markAsyncJobAdmitted, readAsyncJob, waitForAsyncAdmission } from "./internal/cli-async.ts";
+import { resolveContextSource, type ContextSource } from "./internal/cli-input.ts";
+import { formatRecursiveResultForTool, RecursiveChildError, runRecursiveChild } from "./runtime-core.ts";
 import { resolveRuntime, type YpiRuntime } from "./runtime.ts";
 
 interface CliFlags {
@@ -14,12 +14,20 @@ interface CliFlags {
 	prompt: string;
 }
 
-interface ContextSource {
-	context?: string;
-	contextPath?: string;
+interface CliExecutionOptions {
+	cwd?: string;
+	extensionPath?: string | null;
+	treeStartTimeSeconds?: number;
+	onText?: (text: string) => void;
+	onAdmitted?: (callCount: number) => void;
+	signal?: AbortSignal;
 }
 
-const runtimeFromModule = resolveRuntime(new URL("../recursive.ts", import.meta.url).href);
+const modulePath = fileURLToPath(import.meta.url);
+const moduleExtensionPath = path.basename(modulePath) === "rlm_query.mjs" && path.basename(path.dirname(modulePath)) === "dist"
+	? path.join(path.dirname(modulePath), "..", "extensions", "recursive.ts")
+	: fileURLToPath(new URL("../recursive.ts", import.meta.url));
+const runtimeFromModule = resolveRuntime(pathToFileURL(moduleExtensionPath).href);
 
 function activeRuntime(): YpiRuntime {
 	return {
@@ -69,46 +77,6 @@ function parseFlags(args: string[]): CliFlags {
 	return { fork, async, notifyPid, prompt };
 }
 
-async function readStdin(): Promise<string> {
-	const chunks: Buffer[] = [];
-	for await (const chunk of process.stdin) {
-		chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-	}
-	return Buffer.concat(chunks).toString("utf8");
-}
-
-async function resolveContextSource(): Promise<ContextSource> {
-	const explicitStdin = Boolean(process.env.RLM_STDIN);
-	const shouldReadStdin = explicitStdin || !process.stdin.isTTY;
-	if (shouldReadStdin) {
-		const context = await readStdin();
-		if (context.length > 0 || explicitStdin) return { context };
-	}
-	if (process.env.CONTEXT && existsSync(process.env.CONTEXT)) {
-		return { contextPath: process.env.CONTEXT };
-	}
-	return {};
-}
-
-function removeStaleArtifacts(): void {
-	if (process.env.RLM_DEPTH !== "0") return;
-	const root = process.env.TMPDIR || tmpdir();
-	const cutoff = Date.now() - 120 * 60 * 1000;
-	try {
-		for (const name of readdirSync(root)) {
-			if (!name.startsWith("rlm_") && !name.startsWith("ypi_ws_")) continue;
-			const candidate = path.join(root, name);
-			try {
-				if (statSync(candidate).mtimeMs < cutoff) rmSync(candidate, { recursive: true, force: true });
-			} catch {
-				// A concurrent process may remove or update the candidate.
-			}
-		}
-	} catch {
-		// Reaping is best-effort and must never block a recursive call.
-	}
-}
-
 function parentContext(cwd = process.cwd()) {
 	return {
 		cwd,
@@ -125,12 +93,6 @@ function configuredExtensionPath(): string | null {
 	return configured && existsSync(configured) ? configured : null;
 }
 
-function writeTextOutput(text: string): void {
-	if (!text) return;
-	process.stdout.write(text);
-	if (!text.endsWith("\n")) process.stdout.write("\n");
-}
-
 function cliErrorText(error: unknown): string {
 	const message = error instanceof Error ? error.message : String(error);
 	const firstLine = message.split("\n", 1)[0] || "Recursive child failed";
@@ -138,18 +100,24 @@ function cliErrorText(error: unknown): string {
 }
 
 function errorExitCode(error: unknown): number {
-	return error instanceof RecursiveChildError ? error.exitCode : 1;
+	if (error instanceof RecursiveChildError) return error.exitCode;
+	if (typeof error === "object" && error !== null && "exitCode" in error && typeof error.exitCode === "number") return error.exitCode;
+	return 1;
 }
 
-async function executeRequest(runtime: YpiRuntime, flags: Pick<CliFlags, "prompt" | "fork">, source: ContextSource, cwd = process.cwd(), extensionPath: string | null = configuredExtensionPath()) {
+async function executeRequest(runtime: YpiRuntime, flags: Pick<CliFlags, "prompt" | "fork">, source: ContextSource, options: CliExecutionOptions = {}) {
 	return runRecursiveChild(runtime, {
 		prompt: flags.prompt,
 		fork: flags.fork,
 		caller: "cli",
 		context: source.context,
 		contextPath: source.contextPath,
-		extensionPath,
-		parent: parentContext(cwd),
+		extensionPath: options.extensionPath === undefined ? configuredExtensionPath() : options.extensionPath,
+		treeStartTimeSeconds: options.treeStartTimeSeconds,
+		onText: options.onText,
+		onAdmitted: options.onAdmitted,
+		signal: options.signal,
+		parent: parentContext(options.cwd),
 	});
 }
 
@@ -157,11 +125,17 @@ async function runWorker(jobPath: string): Promise<void> {
 	const job = readAsyncJob(jobPath);
 	const runtime = activeRuntime();
 	ensureEnvironment(runtime);
+	if (job.parentSessionSnapshot) process.env.RLM_SESSION_FILE = job.parentSessionSnapshot;
 	let code = 0;
 	let output = "";
 	try {
-		const result = await executeRequest(runtime, { prompt: job.prompt, fork: job.fork }, { contextPath: job.contextPath }, job.cwd, job.extensionPath);
-		output = result.text;
+		const result = await executeRequest(runtime, { prompt: job.prompt, fork: job.fork }, { contextPath: job.contextPath }, {
+			cwd: job.cwd,
+			extensionPath: job.extensionPath,
+			treeStartTimeSeconds: job.treeStartTimeSeconds,
+			onAdmitted: () => markAsyncJobAdmitted(job),
+		});
+		output = formatRecursiveResultForTool(result);
 	} catch (error) {
 		code = errorExitCode(error);
 		output = `${cliErrorText(error)}\n`;
@@ -176,40 +150,70 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
 		return 0;
 	}
 
+	const invocationStartedAt = Math.floor(Date.now() / 1000);
 	const runtime = activeRuntime();
-	const extensionPath = configuredExtensionPath();
 	ensureEnvironment(runtime);
-	removeStaleArtifacts();
+	const extensionPath = configuredExtensionPath();
+	if (process.env.RLM_DEPTH === "0") process.env.RLM_START_TIME = String(invocationStartedAt);
 	const flags = parseFlags(args);
 	const source = await resolveContextSource();
 
 	if (flags.async) {
-		const job = createAsyncJob({
-			prompt: flags.prompt,
-			fork: flags.fork,
-			notifyPid: flags.notifyPid,
-			cwd: process.cwd(),
-			context: source.context,
-			contextPath: source.contextPath,
-			extensionPath,
-		});
-		const pid = launchAsyncWorker(job, fileURLToPath(import.meta.url));
-		process.stdout.write(`${JSON.stringify({
-			job_id: path.basename(job.outputPath, ".txt"),
-			output: job.outputPath,
-			sentinel: job.sentinelPath,
-			pid,
-		})}\n`);
-		return 0;
+		try {
+			const job = createAsyncJob({
+				prompt: flags.prompt,
+				fork: flags.fork,
+				notifyPid: flags.notifyPid,
+				cwd: process.cwd(),
+				context: source.context,
+				contextPath: source.contextPath,
+				extensionPath,
+				treeStartTimeSeconds: invocationStartedAt,
+			});
+			const pid = launchAsyncWorker(job, fileURLToPath(import.meta.url));
+			await waitForAsyncAdmission(job);
+			process.stdout.write(`${JSON.stringify({
+				job_id: path.basename(path.dirname(job.jobPath)),
+				output: job.outputPath,
+				sentinel: job.sentinelPath,
+				pid,
+			})}\n`);
+			return 0;
+		} catch (error) {
+			console.error(cliErrorText(error));
+			return errorExitCode(error);
+		} finally {
+			source.cleanup?.();
+		}
 	}
 
+	const controller = new AbortController();
+	const abort = () => controller.abort();
+	process.once("SIGINT", abort);
+	process.once("SIGTERM", abort);
+	let lastTextCharacter = "";
 	try {
-		const result = await executeRequest(runtime, flags, source, process.cwd(), extensionPath);
-		writeTextOutput(result.text);
+		const result = await executeRequest(runtime, flags, source, {
+			cwd: process.cwd(),
+			extensionPath,
+			treeStartTimeSeconds: invocationStartedAt,
+			signal: controller.signal,
+			onText(text) {
+				process.stdout.write(text);
+				lastTextCharacter = text.at(-1) || lastTextCharacter;
+			},
+		});
+		if (lastTextCharacter && lastTextCharacter !== "\n") process.stdout.write("\n");
+		for (const warning of result.warnings) console.error(`[${warning}]`);
+		if (result.stderr) console.error(result.stderr);
 		return 0;
 	} catch (error) {
 		console.error(cliErrorText(error));
 		return errorExitCode(error);
+	} finally {
+		process.removeListener("SIGINT", abort);
+		process.removeListener("SIGTERM", abort);
+		source.cleanup?.();
 	}
 }
 

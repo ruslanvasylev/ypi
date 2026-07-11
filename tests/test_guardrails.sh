@@ -206,6 +206,21 @@ else
     skip "G4: expired timeout exits early" "RLM_START_TIME not implemented yet"
 fi
 
+# G4b: depth-0 timeout starts at CLI invocation, including stdin spooling, and
+# preflight timeout has the conventional exit status 124.
+set +e
+OUTPUT=$(
+    { sleep 2; printf '%s\n' delayed-context; } | \
+    env RLM_STDIN=1 RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_TIMEOUT=1 \
+        RLM_JJ=0 RLM_UNSAFE_NO_JJ_WRITE=1 RLM_CALL_COUNTER_FILE="$TEST_TMP/stdin-timeout.counter" \
+        rlm_query "Delayed input must consume timeout" 2>&1
+)
+STDIN_TIMEOUT_RC=$?
+set -e
+assert_eq "G4b: stdin/setup timeout exits 124" "124" "$STDIN_TIMEOUT_RC"
+assert_not_contains "G4b: expired stdin budget spawns no child" "MOCK_PI_CALLED" "$OUTPUT"
+assert_contains "G4b: expired stdin budget is explicit" "Timeout exceeded" "$OUTPUT"
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # MODEL ROUTING TESTS
@@ -398,6 +413,97 @@ MOCK_PI
 else
     skip "G11: exit code propagated" "still uses exec (replaces process)"
 fi
+
+# G11b: canonical CLI preserves incremental stdout rather than buffering until
+# child exit.
+cat > "$MOCK_BIN/pi" << 'STREAMPI'
+#!/bin/bash
+printf '%s\n' STREAM_FIRST
+sleep 2
+printf '%s\n' STREAM_SECOND
+STREAMPI
+chmod +x "$MOCK_BIN/pi"
+if RLM_QUERY_PATH="$RLM_QUERY" TEST_CONTEXT="$TEST_TMP/ctx.txt" TEST_COUNTER="$TEST_TMP/stream.counter" python3 <<'PY'
+import os, subprocess, time
+start=time.monotonic()
+env=os.environ.copy()
+env.update({"CONTEXT":os.environ["TEST_CONTEXT"],"RLM_DEPTH":"0","RLM_MAX_DEPTH":"3","RLM_JSON":"0","RLM_JJ":"0","RLM_UNSAFE_NO_JJ_WRITE":"1","RLM_SHARED_SESSIONS":"0","RLM_CALL_COUNTER_FILE":os.environ["TEST_COUNTER"],"RLM_TRACE_ID":"streaming"})
+p=subprocess.Popen([os.environ["RLM_QUERY_PATH"],"Streaming output?"],env=env,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+first=p.stdout.readline().strip()
+elapsed=time.monotonic()-start
+rest,err=p.communicate(timeout=5)
+assert p.returncode==0,(p.returncode,err)
+assert first=="STREAM_FIRST",first
+assert elapsed<1.0,elapsed
+assert "STREAM_SECOND" in rest,rest
+PY
+then
+    pass "G11b: CLI streams stdout before child exit"
+else
+    fail "G11b: CLI streams stdout before child exit" "streaming probe failed"
+fi
+
+# G11c: successful child stderr remains stderr and never contaminates captured
+# answer stdout.
+cat > "$MOCK_BIN/pi" << 'SPLITPI'
+#!/bin/bash
+printf '%s\n' STDOUT_ONLY
+printf '%s\n' STDERR_ONLY >&2
+SPLITPI
+chmod +x "$MOCK_BIN/pi"
+SPLIT_ERR="$TEST_TMP/split.stderr"
+SPLIT_OUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JSON=0 \
+    RLM_JJ=0 RLM_UNSAFE_NO_JJ_WRITE=1 RLM_SHARED_SESSIONS=0 \
+    RLM_CALL_COUNTER_FILE="$TEST_TMP/split.counter" RLM_TRACE_ID=split \
+    rlm_query "Split output?" 2>"$SPLIT_ERR"
+)
+assert_contains "G11c: child stdout remains stdout" "STDOUT_ONLY" "$SPLIT_OUT"
+assert_not_contains "G11c: child stderr excluded from stdout" "STDERR_ONLY" "$SPLIT_OUT"
+assert_contains "G11c: child stderr remains stderr" "STDERR_ONLY" "$(cat "$SPLIT_ERR")"
+
+# G11d: SIGINT reaches the detached child process group and the CLI exits 130.
+cat > "$MOCK_BIN/pi" << 'CANCELPI'
+#!/bin/bash
+printf '%s\n' "$$" > "$YPI_FAKE_PID_FILE"
+sleep 30
+CANCELPI
+chmod +x "$MOCK_BIN/pi"
+if RLM_QUERY_PATH="$RLM_QUERY" TEST_CONTEXT="$TEST_TMP/ctx.txt" TEST_COUNTER="$TEST_TMP/cancel.counter" TEST_PID_FILE="$TEST_TMP/cancel.pid" python3 <<'PY'
+import os, signal, subprocess, time
+env=os.environ.copy()
+env.update({"CONTEXT":os.environ["TEST_CONTEXT"],"RLM_DEPTH":"0","RLM_MAX_DEPTH":"3","RLM_JSON":"0","RLM_JJ":"0","RLM_UNSAFE_NO_JJ_WRITE":"1","RLM_SHARED_SESSIONS":"0","RLM_CALL_COUNTER_FILE":os.environ["TEST_COUNTER"],"RLM_TRACE_ID":"cancel","YPI_FAKE_PID_FILE":os.environ["TEST_PID_FILE"]})
+p=subprocess.Popen([os.environ["RLM_QUERY_PATH"],"Cancel child?"],env=env,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+for _ in range(60):
+    if os.path.exists(os.environ["TEST_PID_FILE"]): break
+    time.sleep(.05)
+assert os.path.exists(os.environ["TEST_PID_FILE"]),"child pid not recorded"
+child_pid=int(open(os.environ["TEST_PID_FILE"]).read())
+p.send_signal(signal.SIGINT)
+p.communicate(timeout=5)
+assert p.returncode==130,p.returncode
+try:
+    os.kill(child_pid,0)
+except ProcessLookupError:
+    pass
+else:
+    raise AssertionError(f"child still alive: {child_pid}")
+PY
+then
+    pass "G11d: CLI cancellation terminates child and exits 130"
+else
+    fail "G11d: CLI cancellation terminates child and exits 130" "cancellation probe failed"
+fi
+
+# Restore normal mock before subsequent sections.
+cat > "$MOCK_BIN/pi" << 'MOCK_PI'
+#!/bin/bash
+echo "MOCK_PI_CALLED"
+echo "ARGS: $*"
+echo "RLM_DEPTH=$RLM_DEPTH"
+echo "RLM_MODEL=$RLM_MODEL"
+MOCK_PI
+chmod +x "$MOCK_BIN/pi"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1209,6 +1315,42 @@ FAILPI
     for _ in $(seq 1 50); do [ -e "$FAILURE_SENTINEL" ] && break; sleep 0.1; done
     assert_eq "G53b: failed async sentinel records child exit code" "42" "$(cat "$FAILURE_SENTINEL" 2>/dev/null || echo missing)"
 
+    # G53c: guardrail rejection occurs before async metadata acknowledges work.
+    set +e
+    REJECTED=$(
+        CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=3 RLM_MAX_DEPTH=3 RLM_JJ=0 \
+        RLM_TRACE_ID="async_reject_$$" RLM_CALL_COUNTER_FILE="$TEST_TMP/async_reject.counter" \
+        rlm_query --async "Reject before acknowledgement" 2>&1
+    )
+    REJECT_RC=$?
+    set -e
+    if [ "$REJECT_RC" -ne 0 ]; then pass "G53c: async guardrail rejection returns nonzero"; else fail "G53c: async guardrail rejection returns nonzero" "$REJECTED"; fi
+    assert_contains "G53c: async rejection reports depth guard" "Max depth exceeded" "$REJECTED"
+    assert_not_contains "G53c: rejected async call emits no accepted job metadata" '"job_id"' "$REJECTED"
+
+    # G53d: inherited context is snapshotted at invocation time, not read from a
+    # mutable caller path after metadata returns.
+    cat > "$MOCK_BIN/pi" << 'SNAPSHOTPI'
+#!/bin/bash
+sleep 1
+cat "$CONTEXT"
+SNAPSHOTPI
+    chmod +x "$MOCK_BIN/pi"
+    printf '%s\n' ORIGINAL_CONTEXT > "$TEST_TMP/mutable-context.txt"
+    JOB=$(
+        CONTEXT="$TEST_TMP/mutable-context.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=0 \
+        RLM_TRACE_ID="async_snapshot_$$" RLM_CALL_COUNTER_FILE="$TEST_TMP/async_snapshot.counter" \
+        rlm_query --async "Snapshot context" 2>/dev/null
+    )
+    SNAPSHOT_OUTPUT=$(printf '%s' "$JOB" | python3 -c "import json,sys; print(json.load(sys.stdin)['output'])")
+    SNAPSHOT_SENTINEL=$(printf '%s' "$JOB" | python3 -c "import json,sys; print(json.load(sys.stdin)['sentinel'])")
+    printf '%s\n' MUTATED_CONTEXT > "$TEST_TMP/mutable-context.txt"
+    for _ in $(seq 1 50); do [ -e "$SNAPSHOT_SENTINEL" ] && break; sleep 0.1; done
+    assert_contains "G53d: async context uses invocation snapshot" "ORIGINAL_CONTEXT" "$(cat "$SNAPSHOT_OUTPUT")"
+    assert_not_contains "G53d: async context ignores later mutation" "MUTATED_CONTEXT" "$(cat "$SNAPSHOT_OUTPUT")"
+    ASYNC_MODE=$(stat -c '%a' "$(dirname "$SNAPSHOT_OUTPUT")" 2>/dev/null || echo unknown)
+    assert_eq "G53d: async job directory is private" "700" "$ASYNC_MODE"
+
     cat > "$MOCK_BIN/pi" << 'NASTYPI'
 #!/bin/bash
 printf '%s\n' 'He said "hello" and used C:\path\to\file'
@@ -1283,6 +1425,42 @@ if _feature_exists "Invalid recursion depth config"; then
 else
     skip "G54: depth validation" "RLM_MAX_DEPTH validation not implemented yet"
 fi
+
+# G55: total-call, timeout, start-time, and budget controls fail closed on
+# malformed values in both canonical and retained fallback adapters.
+for SPEC in \
+    'RLM_MAX_CALLS=12junk|RLM_MAX_CALLS' \
+    'RLM_TIMEOUT=2junk|RLM_TIMEOUT' \
+    'RLM_BUDGET=free|RLM_BUDGET'; do
+    SETTING="${SPEC%%|*}"
+    NAME="${SPEC##*|}"
+    OUTPUT=$(
+        env "$SETTING" CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
+            RLM_JJ=0 RLM_UNSAFE_NO_JJ_WRITE=1 \
+            RLM_CALL_COUNTER_FILE="$TEST_TMP/malformed-${NAME}.counter" \
+            rlm_query "Malformed guardrail?" 2>&1 || true
+    )
+    assert_contains "G55: canonical rejects malformed $NAME" "Invalid $NAME" "$OUTPUT"
+    assert_not_contains "G55: malformed canonical $NAME spawns no child" "MOCK_PI_CALLED" "$OUTPUT"
+
+    OUTPUT=$(
+        env "$SETTING" YPI_LEGACY_IMPL=1 CONTEXT="$TEST_TMP/ctx.txt" \
+            RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=0 RLM_UNSAFE_NO_JJ_WRITE=1 \
+            RLM_CALL_COUNTER_FILE="$TEST_TMP/malformed-legacy-${NAME}.counter" \
+            rlm_query "Malformed legacy guardrail?" 2>&1 || true
+    )
+    assert_contains "G55: legacy rejects malformed $NAME" "Invalid $NAME" "$OUTPUT"
+    assert_not_contains "G55: malformed legacy $NAME spawns no child" "MOCK_PI_CALLED" "$OUTPUT"
+done
+
+OUTPUT=$(
+    env RLM_TIMEOUT=60 RLM_START_TIME=bad CONTEXT="$TEST_TMP/ctx.txt" \
+        RLM_DEPTH=1 RLM_MAX_DEPTH=3 RLM_JJ=0 RLM_UNSAFE_NO_JJ_WRITE=1 \
+        RLM_CALL_COUNTER_FILE="$TEST_TMP/malformed-start.counter" \
+        rlm_query "Malformed inherited start?" 2>&1 || true
+)
+assert_contains "G55: canonical rejects malformed RLM_START_TIME" "Invalid RLM_START_TIME" "$OUTPUT"
+assert_not_contains "G55: malformed start time spawns no child" "MOCK_PI_CALLED" "$OUTPUT"
 
 
 # ─── Summary ──────────────────────────────────────────────────────────────

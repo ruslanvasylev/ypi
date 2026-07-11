@@ -10,18 +10,25 @@ function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function parseNumber(value: string | undefined): number | undefined {
-	if (!value) return undefined;
-	const parsed = Number.parseFloat(value);
-	return Number.isFinite(parsed) ? parsed : undefined;
+function exactNonNegativeInteger(name: string, value: string): number {
+	if (!/^\d+$/.test(value)) throw new Error(`Invalid ${name}: ${JSON.stringify(value)} must be a non-negative integer.`);
+	const parsed = Number(value);
+	if (!Number.isSafeInteger(parsed)) throw new Error(`Invalid ${name}: ${JSON.stringify(value)} exceeds the safe integer range.`);
+	return parsed;
+}
+
+function configuredNonNegativeNumber(name: string, value: string | undefined): number | undefined {
+	if (value === undefined || value === "") return undefined;
+	const parsed = Number(value);
+	if (!Number.isFinite(parsed) || parsed < 0) throw new Error(`Invalid ${name}: ${JSON.stringify(value)} must be a finite non-negative number.`);
+	return parsed;
 }
 
 function readCounter(filePath: string): number {
-	if (!existsSync(filePath)) {
-		return Number.parseInt(process.env.RLM_CALL_COUNT || "0", 10) || 0;
-	}
-	const raw = readFileSync(filePath, "utf8").trim();
-	return Number.parseInt(raw || "0", 10) || 0;
+	const raw = existsSync(filePath)
+		? readFileSync(filePath, "utf8").trim() || "0"
+		: process.env.RLM_CALL_COUNT || "0";
+	return exactNonNegativeInteger("RLM_CALL_COUNT/counter", raw);
 }
 
 export async function allocateCallCount(): Promise<number> {
@@ -52,20 +59,21 @@ export async function allocateCallCount(): Promise<number> {
 }
 
 export function assertWithinMaxCalls(callCount: number): void {
-	const maxCalls = Number.parseInt(process.env.RLM_MAX_CALLS || "", 10);
+	const configured = process.env.RLM_MAX_CALLS;
+	if (configured === undefined || configured === "") return;
+	const maxCalls = exactNonNegativeInteger("RLM_MAX_CALLS", configured);
 	// callCount is the 1-based number of the call being allocated, so RLM_MAX_CALLS=N
 	// must permit calls 1..N and only reject call N+1.
-	if (Number.isFinite(maxCalls) && callCount > maxCalls) {
+	if (callCount > maxCalls) {
 		throw new Error(`Max calls exceeded: ${maxCalls} of ${maxCalls} calls already used. Increase RLM_MAX_CALLS or reduce recursion depth.`);
 	}
 }
 
 export function remainingTimeoutSeconds(): number | undefined {
-	const timeout = Number.parseInt(process.env.RLM_TIMEOUT || "", 10);
-	if (!Number.isFinite(timeout)) {
-		return undefined;
-	}
-	const start = Number.parseInt(process.env.RLM_START_TIME || `${Math.floor(Date.now() / 1000)}`, 10);
+	const configured = process.env.RLM_TIMEOUT;
+	if (configured === undefined || configured === "") return undefined;
+	const timeout = exactNonNegativeInteger("RLM_TIMEOUT", configured);
+	const start = exactNonNegativeInteger("RLM_START_TIME", process.env.RLM_START_TIME || `${Math.floor(Date.now() / 1000)}`);
 	const elapsed = Math.floor(Date.now() / 1000) - start;
 	return timeout - elapsed;
 }
@@ -108,7 +116,7 @@ export function readCostSummary(costFile = process.env.RLM_COST_FILE): CostSumma
 // child finishes, so concurrent calls can each pass this check before any cost lands and a
 // tree may slightly overshoot RLM_BUDGET. The race-free hard ceiling is RLM_MAX_CALLS.
 export function assertBudgetAvailable(): void {
-	const budget = parseNumber(process.env.RLM_BUDGET);
+	const budget = configuredNonNegativeNumber("RLM_BUDGET", process.env.RLM_BUDGET);
 	if (budget === undefined) {
 		return;
 	}

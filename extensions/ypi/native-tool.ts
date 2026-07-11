@@ -2,7 +2,7 @@ import { Type } from "typebox";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { canExecute } from "./guardrails.ts";
 import { registerLegacyNativeRlmQueryTool } from "./legacy-native-tool.ts";
-import { runRecursiveChild } from "./runtime-core.ts";
+import { formatRecursiveResultForTool, runRecursiveChild } from "./runtime-core.ts";
 import type { YpiRuntime } from "./runtime.ts";
 import { debug } from "./runtime.ts";
 
@@ -55,7 +55,7 @@ export function registerNativeRlmQueryTool(pi: ExtensionAPI, runtime: YpiRuntime
 			});
 
 			return {
-				content: [{ type: "text" as const, text: result.text }],
+				content: [{ type: "text" as const, text: formatRecursiveResultForTool(result) }],
 				details: result.details,
 			};
 		},

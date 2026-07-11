@@ -1,0 +1,157 @@
+import type { CostSummary } from "../guardrails.ts";
+
+export const MAX_TOOL_OUTPUT_CHARS = 60 * 1024;
+export const MAX_CHILD_STREAM_CHARS = 16 * 1024 * 1024;
+const MAX_JSON_EVENT_CHARS = 1024 * 1024;
+
+export interface ChildOutputSnapshot {
+	stdout: string;
+	stderr: string;
+	text: string;
+	cost?: CostSummary;
+	stdoutTruncated: boolean;
+	stderrTruncated: boolean;
+	textTruncated: boolean;
+	jsonEventTruncated: boolean;
+}
+
+export interface NormalizedChildOutput {
+	text: string;
+	stderr: string;
+	warnings: string[];
+	cost?: CostSummary;
+}
+
+export interface BoundedCapture {
+	append(chunk: string): string;
+	text(): string;
+	readonly truncated: boolean;
+}
+
+export interface JsonStreamDecoder {
+	append(chunk: string): void;
+	finish(): void;
+	result(): { text: string; cost: CostSummary; textTruncated: boolean; jsonEventTruncated: boolean };
+}
+
+export function createBoundedCapture(limit: number): BoundedCapture {
+	const chunks: string[] = [];
+	let retained = 0;
+	let wasTruncated = false;
+	return {
+		append(chunk: string) {
+			const remaining = limit - retained;
+			if (remaining <= 0) {
+				wasTruncated = true;
+				return "";
+			}
+			const accepted = chunk.length > remaining ? chunk.slice(0, remaining) : chunk;
+			chunks.push(accepted);
+			retained += accepted.length;
+			if (accepted.length < chunk.length) wasTruncated = true;
+			return accepted;
+		},
+		text: () => chunks.join(""),
+		get truncated() { return wasTruncated; },
+	};
+}
+
+function truncate(text: string): string {
+	if (text.length <= MAX_TOOL_OUTPUT_CHARS) return text;
+	return `${text.slice(0, MAX_TOOL_OUTPUT_CHARS)}\n\n[Output truncated by ypi recursion runtime]`;
+}
+
+export function createJsonDecoder(onText?: (text: string) => void): JsonStreamDecoder {
+	const text = createBoundedCapture(MAX_TOOL_OUTPUT_CHARS);
+	let pending = "";
+	let droppingOversizedLine = false;
+	let jsonEventTruncated = false;
+	let cost = 0;
+	let tokens = 0;
+
+	const processLine = (line: string) => {
+		if (!line.trim()) return;
+		try {
+			const event = JSON.parse(line);
+			if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") {
+				const accepted = text.append(String(event.assistantMessageEvent.delta || ""));
+				if (accepted) onText?.(accepted);
+			}
+			if (event.type === "turn_end") {
+				const usage = event.message?.usage || {};
+				cost += Number(usage.cost?.total || 0);
+				tokens += Number(usage.totalTokens || 0);
+			}
+		} catch {
+			// Ignore non-JSON chatter from extensions or wrappers.
+		}
+	};
+
+	return {
+		append(chunk: string) {
+			let rest = chunk;
+			while (rest.length > 0) {
+				if (droppingOversizedLine) {
+					const newline = rest.indexOf("\n");
+					if (newline < 0) return;
+					rest = rest.slice(newline + 1);
+					droppingOversizedLine = false;
+					continue;
+				}
+
+				const newline = rest.indexOf("\n");
+				if (newline < 0) {
+					if (pending.length + rest.length > MAX_JSON_EVENT_CHARS) {
+						pending = "";
+						droppingOversizedLine = true;
+						jsonEventTruncated = true;
+					} else {
+						pending += rest;
+					}
+					return;
+				}
+
+				if (pending.length + newline > MAX_JSON_EVENT_CHARS) {
+					jsonEventTruncated = true;
+				} else {
+					processLine(pending + rest.slice(0, newline));
+				}
+				pending = "";
+				rest = rest.slice(newline + 1);
+			}
+		},
+		finish() {
+			if (!droppingOversizedLine && pending) processLine(pending);
+			pending = "";
+		},
+		result() {
+			return {
+				text: text.text(),
+				cost: { cost, tokens },
+				textTruncated: text.truncated,
+				jsonEventTruncated,
+			};
+		},
+	};
+}
+
+export function normalizeChildOutput(result: ChildOutputSnapshot): NormalizedChildOutput {
+	const warnings = [
+		result.stdoutTruncated ? `Child stdout diagnostic capture exceeded ${MAX_CHILD_STREAM_CHARS} characters; remainder discarded` : "",
+		result.stderrTruncated ? `Child stderr capture exceeded ${MAX_CHILD_STREAM_CHARS} characters; remainder discarded` : "",
+		result.textTruncated ? `Child answer exceeded ${MAX_TOOL_OUTPUT_CHARS} characters; remainder discarded` : "",
+		result.jsonEventTruncated ? `Oversized Pi JSON event exceeded ${MAX_JSON_EVENT_CHARS} characters and was skipped` : "",
+	].filter(Boolean);
+	return {
+		text: result.text,
+		stderr: truncate(result.stderr.trim()),
+		warnings,
+		cost: result.cost,
+	};
+}
+
+export function formatCombinedChildOutput(output: NormalizedChildOutput): string {
+	const warningPrefix = output.warnings.length > 0 ? `[${output.warnings.join("; ")}]\n\n` : "";
+	const combined = output.stderr ? `${output.text.trim()}\n\n[stderr]\n${output.stderr}` : output.text.trim();
+	return truncate(`${warningPrefix}${combined}`);
+}

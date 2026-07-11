@@ -33,7 +33,7 @@ Behavior is controlled through `RLM_*` environment variables. The pure extension
 
 | Variable | Example | What it does |
 | --- | --- | --- |
-| `RLM_MAX_DEPTH` | `RLM_MAX_DEPTH=3` | How deep recursion can go (default `3`). |
+| `RLM_MAX_DEPTH` | `RLM_MAX_DEPTH=4` | How deep recursion can go (default `4`). |
 | `RLM_CHILD_MODEL` | `RLM_CHILD_MODEL=haiku` | Use one model for all sub-calls at depth > 0. |
 | `RLM_CHILD_PROVIDER` | `RLM_CHILD_PROVIDER=anthropic` | Provider used with `RLM_CHILD_MODEL`. |
 | `RLM_CHILD_THINKING_LEVEL` | `RLM_CHILD_THINKING_LEVEL=high` | Thinking level for all sub-calls at depth > 0. |
@@ -42,7 +42,7 @@ Behavior is controlled through `RLM_*` environment variables. The pure extension
 | `RLM_CHILD_THINKING_LEVELS` | `RLM_CHILD_THINKING_LEVELS=high,medium` | Comma-separated thinking route for child depths 1, 2, ... |
 | `RLM_BUDGET` | `RLM_BUDGET=0.50` | Max dollar spend for the recursive tree (requires `RLM_JSON=1`, the default). |
 | `RLM_TIMEOUT` | `RLM_TIMEOUT=60` | Wall-clock limit (seconds) for the entire recursive tree. |
-| `RLM_MAX_CALLS` | `RLM_MAX_CALLS=20` | Max total `rlm_query` invocations. |
+| `RLM_MAX_CALLS` | `RLM_MAX_CALLS=128` | Max total `rlm_query` invocations (default `128`). |
 | `RLM_JJ` | `RLM_JJ=0` | Disable `jj` workspace isolation (used automatically when available). |
 
 The shell-helper guardrails and cost/session CLI commands (e.g. `rlm_cost`) documented in the
@@ -51,10 +51,11 @@ to this pure extension.
 
 ## Compatibility
 
-This extension is verified against `@earendil-works/pi-coding-agent` `0.79.4`. The peer
-dependency is declared as `^0.79.4`, so forward patch/minor Pi releases are accepted; the
-extension API surface used (`ExtensionAPI`/`ExtensionContext`/`defineTool` type imports) is stable
-across patches.
+This extension is tested against the repository-pinned Pi version and the upstream compatibility
+lane. Following Pi's package contract, host-provided core packages
+`@earendil-works/pi-coding-agent` and `typebox` are declared as `"*"` peers rather than bundled or
+artificially restricted to one Pi minor release. Compatibility is established by the package/load
+and recursive smoke tests, not inferred from the peer range.
 
 ## Source
 

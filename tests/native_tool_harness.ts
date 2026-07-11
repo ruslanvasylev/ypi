@@ -68,6 +68,7 @@ writeFileSync(fakePi, `#!/usr/bin/env bash
   echo "RLM_CALL_COUNTER_FILE=\${RLM_CALL_COUNTER_FILE:-unset}"
   echo "RLM_COST_FILE=\${RLM_COST_FILE:-unset}"
   echo "SECRET_TOKEN=\${SECRET_TOKEN:-unset}"
+  echo "CHILD_PID=$$"
 } >> "$YPI_FAKE_PI_LOG"
 if [ "\${YPI_FAKE_PI_MODE:-ok}" = "fail" ]; then
   echo "fake child failure" >&2
@@ -77,6 +78,14 @@ elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "huge" ]; then
 elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "json" ]; then
   printf '%s\\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"JSON_CHILD_OK"}}'
   printf '%s\\n' '{"type":"turn_end","message":{"usage":{"totalTokens":7,"cost":{"total":0.123}}},"toolResults":[]}'
+elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "json-huge-tail" ]; then
+  printf '%s' '{"type":"tool_result","payload":"'
+  head -c $((17 * 1024 * 1024)) /dev/zero | tr '\\0' X
+  printf '%s\\n' '"}'
+  printf '%s\\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"LATE_JSON_OK"}}'
+  printf '%s\\n' '{"type":"turn_end","message":{"usage":{"totalTokens":11,"cost":{"total":0.456}}},"toolResults":[]}'
+elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "sleep" ]; then
+  sleep 30
 else
   echo "FAKE_CHILD_OK"
 fi
@@ -119,9 +128,9 @@ function context(): ExtensionContext {
 	} as ExtensionContext;
 }
 
-async function invoke(prompt = "child prompt"): Promise<string> {
+async function invoke(prompt = "child prompt", signal?: AbortSignal): Promise<string> {
 	if (!tool) throw new Error("native tool was not registered");
-	const result = await tool.execute("test-call", { prompt }, undefined, undefined, context());
+	const result = await tool.execute("test-call", { prompt }, signal, undefined, context());
 	const text = result.content.find((item) => item.type === "text")?.text || "";
 	return text;
 }
@@ -238,7 +247,7 @@ async function run(): Promise<void> {
 	process.env.YPI_FAKE_PI_MODE = "huge";
 	ensureEnvironment(runtime, context());
 	const oversizedText = await invoke();
-	assertContains("N5b: oversized stdout reports streaming capture bound", oversizedText, "Child stdout capture exceeded 16777216 characters");
+	assertContains("N5b: oversized stdout reports streaming capture bound", oversizedText, "Child stdout diagnostic capture exceeded 16777216 characters");
 	record(oversizedText.length < 70 * 1024, "N5b: oversized stdout result stays near final tool-output cap", `length=${oversizedText.length}`);
 
 	clearYpiEnv();
@@ -365,6 +374,20 @@ async function run(): Promise<void> {
 	const costFile = process.env.RLM_COST_FILE || "";
 	assertContains("N10: JSON child cost recorded", existsSync(costFile) ? readFileSync(costFile, "utf8") : "", '"cost":0.123');
 
+	// N10b: diagnostic capture may be bounded, but the incremental JSON decoder
+	// must still see late answer and cost events after an oversized tool event.
+	clearYpiEnv();
+	resetLog();
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	process.env.RLM_BUDGET = "1";
+	process.env.YPI_FAKE_PI_MODE = "json-huge-tail";
+	ensureEnvironment(runtime, context());
+	const lateJsonText = await invoke();
+	assertContains("N10b: late JSON answer survives oversized prior event", lateJsonText, "LATE_JSON_OK");
+	const lateCostFile = process.env.RLM_COST_FILE || "";
+	assertContains("N10b: late JSON cost survives oversized prior event", existsSync(lateCostFile) ? readFileSync(lateCostFile, "utf8") : "", '"cost":0.456');
+
 	clearYpiEnv();
 	resetLog();
 	process.env.RLM_DEPTH = "0";
@@ -393,6 +416,30 @@ async function run(): Promise<void> {
 	const traceLog = readLog();
 	assertContains("N13: hostile trace id is sanitized in the session filename", traceLog, ".._.._etc_evil_d1_c1.jsonl");
 	assertNotContains("N13: hostile trace id cannot traverse out of the session dir", traceLog, "etc/evil");
+
+	// N13b: cancellation crosses the adapter boundary and terminates the detached
+	// child process group instead of leaving paid or writable work orphaned.
+	clearYpiEnv();
+	resetLog();
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	process.env.RLM_JSON = "0";
+	process.env.RLM_JJ = "0";
+	process.env.RLM_UNSAFE_NO_JJ_WRITE = "1";
+	process.env.YPI_FAKE_PI_MODE = "sleep";
+	ensureEnvironment(runtime, context());
+	const controller = new AbortController();
+	const cancelStarted = Date.now();
+	const cancelled = invoke("cancel child", controller.signal);
+	setTimeout(() => controller.abort(), 100);
+	await expectThrow("N13b: cancellation returns explicit error", "Child Pi cancelled", () => cancelled);
+	record(Date.now() - cancelStarted < 5_000, "N13b: cancellation returns promptly");
+	const childPid = Number(/CHILD_PID=(\d+)/.exec(readLog())?.[1] || 0);
+	let childAlive = false;
+	if (childPid > 0) {
+		try { process.kill(childPid, 0); childAlive = true; } catch { /* expected */ }
+	}
+	record(!childAlive, "N13b: cancelled child process is gone", `pid=${childPid}`);
 
 	// N14: convergence keeps the incumbent native implementation available as
 	// an explicit one-release fallback; it is retained, not silently removed.

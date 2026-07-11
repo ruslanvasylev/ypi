@@ -30,7 +30,23 @@ Both adapters must resolve the same behavior for:
 
 A runtime result must distinguish normal exit, timeout, cancellation, and child
 failure. Output limits must be enforced while reading the child stream, not only
-after the full stream is resident in memory.
+after the full stream is resident in memory. Incremental JSON parsing must retain
+late answer and cost events even when an earlier diagnostic event exceeds its
+capture bound.
+
+## Default guardrail posture
+
+- `RLM_MAX_DEPTH=4` supports an observed orchestrate → review → adjudicate →
+  focused-probe chain without treating deeper recursion as a target.
+- `RLM_MAX_CALLS=128` bounds total fan-out with headroom above the approximately
+  52-call evaluation trace that motivated this change.
+- Timeout and dollar budget remain explicit per-run choices because hosted and
+  local models do not share a safe universal value.
+- Deeper overrides require an explicit total-call limit and should use timeout or
+  budget limits when those dimensions are measurable.
+- `$RLM_ROOT_PROMPT_FILE` preserves the first delegation charter through the
+  tree; child prompts must echo applicable goal/scope/acceptance, and parents
+  must validate results before absorption.
 
 ## Adapter-owned responsibilities
 

@@ -64,6 +64,7 @@ set -euo pipefail
   printf 'RLM_SESSION_FILE=%s\n' "\${RLM_SESSION_FILE:-unset}"
   printf 'RLM_SESSION_DIR=%s\n' "\${RLM_SESSION_DIR:-unset}"
   printf 'PROMPT_CONTENT=%s\n' "$(cat "\${RLM_PROMPT_FILE:-/dev/null}" 2>/dev/null || true)"
+  printf 'ROOT_PROMPT_CONTENT=%s\n' "$(cat "\${RLM_ROOT_PROMPT_FILE:-/dev/null}" 2>/dev/null || true)"
   printf 'CONTEXT_CONTENT=%s\n' "$(cat "\${CONTEXT:-/dev/null}" 2>/dev/null || true)"
 } > "$YPI_FAKE_PI_LOG"
 echo FAKE_CHILD_OK
@@ -196,6 +197,7 @@ function assertCommonObservation(native: Observation, cli: Observation): void {
 		"RLM_MODEL",
 		"RLM_THINKING_LEVEL",
 		"PROMPT_CONTENT",
+		"ROOT_PROMPT_CONTENT",
 		"CONTEXT_CONTENT",
 	]) {
 		equal(`shared ${key}`, native[key], cli[key]);
@@ -210,6 +212,8 @@ async function run(): Promise<void> {
 	console.log("\n=== Recursion Runtime Contract Harness ===");
 	clearRuntimeEnv();
 	ensureEnvironment(runtime, extensionContext(), pi);
+	equal("default max depth supports four-level workflow", process.env.RLM_MAX_DEPTH, "4");
+	equal("default total call cap is bounded", process.env.RLM_MAX_CALLS, "128");
 	registerNativeRlmQueryTool(pi, runtime);
 	record(Boolean(nativeTool), "native adapter registered");
 	const nativeAdapterSource = readFileSync(path.join(projectRoot, "extensions/ypi/native-tool.ts"), "utf8");
@@ -236,6 +240,7 @@ async function run(): Promise<void> {
 	record(cliDefault.code === 0, "CLI default request succeeds", cliDefault.error);
 	if (nativeDefault.observation && cliDefault.observation) {
 		assertCommonObservation(nativeDefault.observation, cliDefault.observation);
+		equal("root delegation prompt propagated symbolically", nativeDefault.observation.ROOT_PROMPT_CONTENT, prompt);
 	} else {
 		record(false, "both adapters emitted child observations");
 	}
