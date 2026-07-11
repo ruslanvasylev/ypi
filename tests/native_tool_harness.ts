@@ -58,6 +58,13 @@ function readLog(): string {
 }
 
 writeFileSync(fakePi, `#!/usr/bin/env bash
+SYSTEM_PROMPT_FILE=""
+for ((i=1; i<=$#; i++)); do
+  if [ "\${!i}" = "--system-prompt" ]; then
+    j=$((i + 1))
+    SYSTEM_PROMPT_FILE="\${!j}"
+  fi
+done
 {
   echo "ARGS: $*"
   echo "RLM_DEPTH=$RLM_DEPTH"
@@ -71,6 +78,7 @@ writeFileSync(fakePi, `#!/usr/bin/env bash
   echo "RLM_COST_FILE=\${RLM_COST_FILE:-unset}"
   echo "SECRET_TOKEN=\${SECRET_TOKEN:-unset}"
   echo "CHILD_PID=$$"
+  echo "SYSTEM_PROMPT_CONTEXT=$(grep -E 'External task context:|Current delegated charter:' "$SYSTEM_PROMPT_FILE" 2>/dev/null | head -1 || true)"
 } >> "$YPI_FAKE_PI_LOG"
 if [ "\${YPI_FAKE_PI_MODE:-ok}" = "fail" ]; then
   echo "fake child failure" >&2
@@ -339,7 +347,8 @@ async function run(): Promise<void> {
 	ensureEnvironment(runtime, context());
 	await invoke();
 	assertContains("N8b: child extension override disables extensions", readLog(), "--no-extensions");
-	assertContains("N8b: extension-isolated child keeps system prompt", readLog(), `--system-prompt ${runtime.systemPromptPath}`);
+	assertContains("N8b: extension-isolated child keeps generated system prompt", readLog(), "--system-prompt ");
+	assertContains("N8b: extension-isolated prompt exposes delegated charter", readLog(), "SYSTEM_PROMPT_CONTEXT=- Current delegated charter: `");
 	assertNotContains("N8b: child extension override avoids explicit extension", readLog(), "-e ");
 
 	clearYpiEnv();
@@ -365,7 +374,8 @@ async function run(): Promise<void> {
 	await invoke();
 	assertContains("N8d: full child isolation disables extensions", readLog(), "--no-extensions");
 	assertContains("N8d: full child isolation disables non-extension skills", readLog(), "--no-skills");
-	assertContains("N8d: full child isolation keeps system prompt", readLog(), `--system-prompt ${runtime.systemPromptPath}`);
+	assertContains("N8d: full child isolation keeps generated system prompt", readLog(), "--system-prompt ");
+	assertContains("N8d: full child isolation exposes delegated charter", readLog(), "SYSTEM_PROMPT_CONTEXT=- Current delegated charter: `");
 	assertNotContains("N8d: full child isolation avoids explicit ypi extension", readLog(), "-e ");
 
 	clearYpiEnv();
