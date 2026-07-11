@@ -4,40 +4,42 @@ Use this runbook for large, proof-bound, or self-hosting ypi changes. It keeps
 recursive review useful without turning the root session into an unbounded
 orchestration tree.
 
-This is an operating contract over existing ypi, jj, test, telemetry, and eval
-surfaces. It does not introduce another orchestrator.
+This is an operating contract over existing ypi, repository, test, telemetry,
+and eval surfaces. It does not introduce another orchestrator or VCS.
 
 ## Scope and non-goals
 
-The root agent owns implementation and parent-side adjudication. Recursive
-children are advisory reviewers and focused probes. Do not distribute edits to
-overlapping runtime files, add a new result validator, or make OpenProse the
-proof owner. `.prose/recursive-development.prose` remains a lightweight feature
-workflow and is not the proof-bound path described here.
+The root agent owns the goal, decomposition, parent-side adjudication, and final
+diff acceptance. Read-only children own reviews and focused probes. One bounded
+implementation unit may be delegated with `rlm_query` `mode=implement` after its
+scope and gates are explicit; never run parallel implementers or distribute
+overlapping runtime edits. Do not add a new result validator or make OpenProse
+the proof owner. `.prose/recursive-development.prose` remains a lightweight
+feature workflow and is not the proof-bound path described here.
 
 ## Create the envelope once
 
-The operator must approve the dollar cap and overall deadline before the first
-child. Initialize the run exactly once. The persisted envelope contains only
-non-secret control values; never write the full process environment to disk.
+Initialize the run exactly once. The persisted envelope contains only non-secret
+control and telemetry values; never write the full process environment to disk.
+Cost is observational telemetry and never an admission or stop condition. Time
+checkpoints surface elapsed work but never terminate a child.
 
 ```bash
 set -euo pipefail
 umask 077
 
-: "${YPI_RUN_BUDGET:?set the operator-approved dollar cap}"
-: "${YPI_RUN_DEADLINE_EPOCH:?set the approved overall deadline as epoch seconds}"
-python3 - "$YPI_RUN_BUDGET" "$YPI_RUN_DEADLINE_EPOCH" <<'PY'
-import math, sys, time
-budget = float(sys.argv[1])
-deadline = int(sys.argv[2])
-assert math.isfinite(budget) and budget > 0
-assert deadline > int(time.time())
-PY
+YPI_RUN_STARTED_EPOCH="$(date +%s)"
+YPI_RUN_CHECKPOINT_SECONDS=3600
+unset RLM_BUDGET RLM_TIMEOUT
 
+YPI_RUN_REPO_ROOT="$(git rev-parse --show-toplevel)"
+test "$PWD" = "$YPI_RUN_REPO_ROOT"
 BRANCH="$(git branch --show-current)"
 test -n "$BRANCH"
 case "$BRANCH" in main|master) echo "refusing shared trunk" >&2; exit 1;; esac
+YPI_RUN_BRANCH="$BRANCH"
+YPI_RUN_BASE_HEAD="$(git rev-parse HEAD)"
+YPI_RUN_ORIGIN_PUSH_URL="$(git remote get-url --push origin 2>/dev/null || printf '<none>')"
 BRANCH_SLUG="$(printf '%s' "$BRANCH" | tr -c 'A-Za-z0-9._-' '-')"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 RUN_PARENT="$PWD/tmp/$BRANCH_SLUG/recursive"
@@ -54,8 +56,6 @@ export RLM_CALL_COUNT=0
 export RLM_JSON=1
 export RLM_MAX_DEPTH=2
 export RLM_MAX_CALLS=18
-export RLM_TIMEOUT=3600
-export RLM_BUDGET="$YPI_RUN_BUDGET"
 
 printf '0\n' > "$RLM_CALL_COUNTER_FILE"
 : > "$RLM_COST_FILE"
@@ -63,7 +63,12 @@ printf '0\n' > "$RLM_CALL_COUNTER_FILE"
 
 {
   printf 'export YPI_RECURSIVE_RUN_DIR=%q\n' "$YPI_RECURSIVE_RUN_DIR"
-  printf 'export YPI_RUN_DEADLINE_EPOCH=%q\n' "$YPI_RUN_DEADLINE_EPOCH"
+  printf 'export YPI_RUN_REPO_ROOT=%q\n' "$YPI_RUN_REPO_ROOT"
+  printf 'export YPI_RUN_BRANCH=%q\n' "$YPI_RUN_BRANCH"
+  printf 'export YPI_RUN_BASE_HEAD=%q\n' "$YPI_RUN_BASE_HEAD"
+  printf 'export YPI_RUN_ORIGIN_PUSH_URL=%q\n' "$YPI_RUN_ORIGIN_PUSH_URL"
+  printf 'export YPI_RUN_STARTED_EPOCH=%q\n' "$YPI_RUN_STARTED_EPOCH"
+  printf 'export YPI_RUN_CHECKPOINT_SECONDS=%q\n' "$YPI_RUN_CHECKPOINT_SECONDS"
   printf 'export RLM_TRACE_ID=%q\n' "$RLM_TRACE_ID"
   printf 'export PI_TRACE_FILE=%q\n' "$PI_TRACE_FILE"
   printf 'export RLM_CALL_COUNTER_FILE=%q\n' "$RLM_CALL_COUNTER_FILE"
@@ -71,20 +76,20 @@ printf '0\n' > "$RLM_CALL_COUNTER_FILE"
   printf 'export RLM_JSON=1\n'
   printf 'export RLM_MAX_DEPTH=2\n'
   printf 'export RLM_MAX_CALLS=18\n'
-  printf 'export RLM_TIMEOUT=3600\n'
-  printf 'export RLM_BUDGET=%q\n' "$RLM_BUDGET"
 } > "$RUN_DIR/envelope.sh"
 chmod 600 "$RUN_DIR/envelope.sh"
 ```
 
-`RLM_TIMEOUT` bounds one depth-0 recursive tree, not the entire interactive
-root session. The parent checks `YPI_RUN_DEADLINE_EPOCH` at natural checkpoints.
-A cap hit stops the run; never raise a cap in place.
+At natural checkpoints, report elapsed time when
+`now - YPI_RUN_STARTED_EPOCH >= YPI_RUN_CHECKPOINT_SECONDS`; this is advisory
+only. A call-cap hit stops new child admission, not the task: continue directly
+in the root, preserve completed evidence, and report the topology change without
+asking the user to choose a new cap.
 
 ## Resume without resetting
 
-A continuation brief must carry the exact `RUN_DIR`, HEAD, deadline, open
-blockers, and next action. It must not carry credentials. A continuation sources
+A continuation brief must carry the exact `RUN_DIR`, HEAD, elapsed-time
+checkpoint, open blockers, and next action. It must not carry credentials. A continuation sources
 the existing envelope and requires all ledgers to exist; it never regenerates a
 run ID or truncates a file.
 
@@ -98,19 +103,26 @@ test -f "$RUN_DIR/envelope.sh"
 . "$RUN_DIR/envelope.sh"
 
 test "$YPI_RECURSIVE_RUN_DIR" = "$RUN_DIR"
+test "$(git rev-parse --show-toplevel)" = "$YPI_RUN_REPO_ROOT"
+test "$(git branch --show-current)" = "$YPI_RUN_BRANCH"
+test "$(git remote get-url --push origin 2>/dev/null || printf '<none>')" = "$YPI_RUN_ORIGIN_PUSH_URL"
+git merge-base --is-ancestor "$YPI_RUN_BASE_HEAD" HEAD
 test -f "$RLM_CALL_COUNTER_FILE"
 test -f "$RLM_COST_FILE"
 test -f "$PI_TRACE_FILE"
-test "$(date +%s)" -lt "$YPI_RUN_DEADLINE_EPOCH"
 
 export RLM_CALL_COUNT="$(tr -d '[:space:]' < "$RLM_CALL_COUNTER_FILE")"
 ```
 
-The counter file is authoritative. Explicitly restoring `RLM_CALL_COUNT`
-prevents a missing or contaminated ambient value from becoming the fallback.
-The cost ledger preserves spent budget across sessions.
+The repository root, feature branch, origin push URL, and ancestral base commit
+bind the envelope to one delivery line while allowing later commits on that same
+line. A rebase or remote change requires a fresh run instead of silently moving
+proof state. The counter file is authoritative. Explicitly restoring
+`RLM_CALL_COUNT` prevents a missing or contaminated ambient value from becoming
+the fallback. The cost ledger preserves observational spend and token telemetry
+across sessions.
 
-## Structural budget
+## Call allocation
 
 The 18-call ceiling is allocated as follows:
 
@@ -120,16 +132,19 @@ The 18-call ceiling is allocated as follows:
 - disagreement, failed-admission, or countercheck reserve: 5.
 
 At most three top-level reviewers run concurrently. A reviewer may have only one
-probe in flight. This bounds concurrent budget overshoot while retaining the
-three distinct risk viewpoints. Parent adjudication is direct root work and
+probe in flight. This bounds redundant fan-out while retaining the three distinct risk
+viewpoints. Parent adjudication is direct root work and
 never consumes a child-call slot.
 
 ## Execution order
 
 1. **Discover deterministically.** Use `rg`, Python, source inspection, and
    existing validators before asking a model.
-2. **Implement serially in the root.** Keep self-hosting runtime and shared test
-   edits on one critical path. Run focused tests after each coherent mechanism.
+2. **Choose one implementation head.** Explore and decide in the root. Once a
+   bounded unit has explicit files, constraints, and tests, delegate it to one
+   `mode=implement` child or implement it directly when writing the charter
+   would cost as much as the edit. The root reviews changed scope and the final
+   diff and runs focused gates; it does not absorb a worker's trial-and-error.
 3. **Run three independent reviews in one turn.** Do not expose sibling reports:
    - runtime/lifecycle: deadlines, cancellation, process groups, output,
      async, and jj cleanup;
@@ -167,14 +182,16 @@ Mechanical discovery stays in deterministic tools. A cheaper model is allowed
 only for a bounded synthesis call launched in its own shell process with an
 explicit provider/model route; do not set global depth routing.
 
-Use native parallel calls by default. Async is optional and may be used only
-after a notification smoke proves that this Pi instance receives its sentinel
-and useful root work is queued. If the smoke fails or `YPI_INSTANCE_ID` is
-absent, do not debug a replacement during the run.
+Native calls are sequential so a shared-checkout implementer cannot overlap
+root mutations. Parallel evidence uses at most three shell `rlm_query --async`
+read-only jobs and only after a notification smoke proves that this Pi instance
+receives its sentinel and useful root work is queued. If the smoke fails or
+`YPI_INSTANCE_ID` is absent, stay sequential rather than debugging a replacement
+during the run.
 
-## Freeze before paid evaluation
+## Freeze before provider-backed evaluation
 
-Before the first paid lane:
+Before the first live-model lane:
 
 1. close all source-review blockers;
 2. run focused tests, package/install checks, and release consistency;
@@ -183,7 +200,7 @@ Before the first paid lane:
 5. commit every tracked change;
 6. require a clean worktree and record exact HEAD.
 
-Paid runtime parity runs only through the existing facade:
+Runtime parity runs only through the existing facade:
 
 ```bash
 YPI_EVAL_OUTPUT_ROOT="$RUN_DIR/eval" make eval-runtime-parity LANE=canonical-cli
@@ -195,26 +212,28 @@ YPI_EVAL_OUTPUT_ROOT="$RUN_DIR/eval" make eval-runtime-parity LANE=legacy-native
 `tests/eval/runtime-parity/run-lane.sh` owns recursion-environment sanitization,
 private counters/ledgers, exact transition and call-count proof, and semantic
 scoring. Do not construct an ad-hoc `env -i` lane. Do not edit tracked files
-while lanes run. A tracked edit invalidates final paid evidence. Permit one
+while lanes run. A tracked edit invalidates final runtime evidence. Permit one
 rerun only for a documented provider/transient failure.
 
 ## Closeout and delivery
 
 Completion requires resolved telemetry, deterministic and installed-package
-checks, exact-final-commit paid contracts, parent verification, truth-seeking
+checks, exact-final-commit runtime contracts, parent verification, truth-seeking
 review, telemetry validation, encryption validation, and honest branch state.
 Import a recursive trace into Agent Protocol only when child execution itself is
 being promoted as proof.
 
-Feature branches push to `origin`; never direct-push `upstream`. Upstream PR
-creation or mutation requires a separate explicit instruction. For the current
-plan implementation, push only the feature branch to `origin`.
+Before any push, resolve the push URL and run `scripts/validate-push-owner`.
+Remotes whose exact owner namespace is not `ruslanvasylev` are read-only unless
+the current user request explicitly authorizes that exact target. Release,
+tagging, and package publication are separate user-initiated tasks and are never
+inferred or suggested by this delivery workflow.
 
 ## Metrics
 
 Record allocations, spawned sessions, overlapping child-minutes, root wall
 time, transcript bytes, cost/tokens from the run ledger, duplicate mechanisms,
-timeouts, and rejected paid lanes. The historical non-dollar baseline is 131
+timeouts, and rejected live-model lanes. The historical non-dollar baseline is 131
 allocations, 42 sessions, 842.6 overlapping child-minutes, 31.4 MB transcripts,
 and about 9h20m root wall time. The historical orchestration had no comparable
 `RLM_COST_FILE`; do not invent a dollar baseline or savings percentage.

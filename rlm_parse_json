@@ -38,6 +38,6 @@ for line in sys.stdin:
 cost_line = json.dumps({"cost": total_cost, "tokens": total_tokens})
 try:
     with open(3, "w") as f:
-        f.write(cost_line)
+        f.write(cost_line + "\n")
 except OSError:
     pass  # fd 3 not open, skip

@@ -321,7 +321,7 @@ if should_run "E9"; then
         STDERR_E9="$TEST_TMP/e9_stderr.txt"
         PROMPT_E9="Use the rlm_query tool exactly once with this exact prompt: Reply with exactly CHILD_OK. Then reply with exactly the child answer and no other text."
 
-        # JSON mode keeps configured cost budgets measurable while the runtime
+        # JSON mode keeps observational cost telemetry measurable while the runtime
         # still projects parsed child text back to the root agent. E9 owns an
         # isolated call counter so ambient sessions and earlier E2E cases cannot
         # change its one-child assertion.
@@ -352,8 +352,8 @@ if should_run "E9"; then
             fail "E9: full ypi recursive child call" "missing child answer; stdout=$(head -5 "$STDOUT_E9"); trace=$(tail -5 "$TRACE_E9" 2>/dev/null || true)"
         elif [ "$CALLS" -ne 1 ]; then
             fail "E9: full ypi recursive child call" "expected exactly one depth=0→1 trace entry, got $CALLS; trace=$(tail -10 "$TRACE_E9" 2>/dev/null || true)"
-        elif ! grep -q "prompt: Reply with exactly CHILD_OK" "$TRACE_E9"; then
-            fail "E9: full ypi recursive child call" "trace did not record the child prompt; trace=$(tail -10 "$TRACE_E9" 2>/dev/null || true)"
+        elif grep -q "Reply with exactly CHILD_OK" "$TRACE_E9"; then
+            fail "E9: full ypi recursive child call" "lifecycle trace leaked delegated prompt text; trace=$(tail -10 "$TRACE_E9" 2>/dev/null || true)"
         elif ! grep -q "COMPLETED exit=0" "$TRACE_E9"; then
             fail "E9: full ypi recursive child call" "child did not complete cleanly; trace=$(tail -10 "$TRACE_E9" 2>/dev/null || true)"
         else

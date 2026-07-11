@@ -1,9 +1,9 @@
-import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { safeTraceId, sharedSessionsEnabled } from "../env.ts";
 import { renderActiveTaskFilesSection } from "./task-files.ts";
+import { acquireWorkspace, type ChildMode, type WorkspaceLease } from "./workspace-policy.ts";
 
 export interface ChildResourceInput {
 	prompt: string;
@@ -19,13 +19,7 @@ export interface ChildResourceInput {
 	rootPromptPath?: string;
 	setupDeadlineMilliseconds?: number;
 	fullResourceIsolation?: boolean;
-}
-
-export interface WorkspaceLease {
-	cwd: string;
-	mode: "jj" | "none" | "off";
-	readOnly: boolean;
-	cleanup(): void;
+	mode: ChildMode;
 }
 
 export interface ChildResourceLease {
@@ -72,76 +66,6 @@ function createStandaloneSystemPrompt(input: ChildResourceInput, promptFile: str
 	return outputPath;
 }
 
-function unavailableWorkspace(cwd: string, reason: string): WorkspaceLease {
-	if (process.env.RLM_UNSAFE_NO_JJ_WRITE === "1") {
-		return { cwd, mode: "none", readOnly: false, cleanup() {} };
-	}
-	throw new Error(`jj workspace isolation unavailable (${reason}). Choose explicitly: set RLM_JJ=0 for read-only children, initialize colocated jj with 'jj git init --colocate', or set RLM_UNSAFE_NO_JJ_WRITE=1 to permit writes in the current checkout.`);
-}
-
-const WORKSPACE_CLEANUP_TIMEOUT_MS = 2_000;
-
-function remainingSetupMilliseconds(input: ChildResourceInput): number | undefined {
-	if (input.setupDeadlineMilliseconds === undefined) return undefined;
-	const remaining = input.setupDeadlineMilliseconds - Date.now();
-	if (remaining <= 0) {
-		const error = new Error("RLM_TIMEOUT expired during recursive workspace setup") as Error & { exitCode: number };
-		error.exitCode = 124;
-		throw error;
-	}
-	return Math.max(1, remaining);
-}
-
-function assertSpawnWithinDeadline(result: ReturnType<typeof spawnSync>, operation: string): void {
-	if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") {
-		const error = new Error(`RLM_TIMEOUT expired during ${operation}`) as Error & { exitCode: number };
-		error.exitCode = 124;
-		throw error;
-	}
-}
-
-function createWorkspace(input: ChildResourceInput): WorkspaceLease {
-	const { cwd, childDepth: depth } = input;
-	if (process.env.RLM_JJ === "0") {
-		return { cwd, mode: "off", readOnly: process.env.RLM_UNSAFE_NO_JJ_WRITE !== "1", cleanup() {} };
-	}
-
-	const root = spawnSync("jj", ["root"], { cwd, stdio: "ignore", timeout: remainingSetupMilliseconds(input) });
-	assertSpawnWithinDeadline(root, "jj root");
-	if (root.status !== 0) {
-		return unavailableWorkspace(cwd, (root.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT" ? "jj is not installed or not on PATH" : "the current checkout is not a jj workspace");
-	}
-
-	const workspacePath = mkdtempSync(path.join(tmpdir(), `ypi_ws_d${depth}_`));
-	const workspaceSuffix = path.basename(workspacePath).replace(/^ypi_ws_/, "");
-	const name = `ypi-d${depth}-${process.pid}-${workspaceSuffix}`;
-	const add = spawnSync("jj", ["workspace", "add", "--name", name, workspacePath], { cwd, stdio: "ignore", timeout: remainingSetupMilliseconds(input) });
-	try {
-		assertSpawnWithinDeadline(add, "jj workspace add");
-	} catch (error) {
-		// `jj workspace add` may register metadata before a timeout interrupts its
-		// final response. Give forget an independent bounded cleanup allowance;
-		// reusing an already-expired task deadline would leak the registration.
-		spawnSync("jj", ["workspace", "forget", name], { cwd, stdio: "ignore", timeout: WORKSPACE_CLEANUP_TIMEOUT_MS });
-		rmSync(workspacePath, { recursive: true, force: true });
-		throw error;
-	}
-	if (add.status !== 0) {
-		rmSync(workspacePath, { recursive: true, force: true });
-		return unavailableWorkspace(cwd, "jj workspace add failed");
-	}
-
-	return {
-		cwd: workspacePath,
-		mode: "jj",
-		readOnly: false,
-		cleanup() {
-			spawnSync("jj", ["workspace", "forget", name], { cwd: workspacePath, stdio: "ignore", timeout: WORKSPACE_CLEANUP_TIMEOUT_MS });
-			rmSync(workspacePath, { recursive: true, force: true });
-		},
-	};
-}
-
 function childSessionFile(input: ChildResourceInput): string | undefined {
 	if (!sharedSessionsEnabled()) return undefined;
 	const sessionDir = process.env.RLM_SESSION_DIR || (input.parentSessionFile ? input.parentSessionDir : "");
@@ -177,8 +101,17 @@ export function acquireChildResources(input: ChildResourceInput): ChildResourceL
 		}
 		const childSession = childSessionFile(input);
 		copyForkSession(input, childSession);
-		if (input.setupDeadlineMilliseconds !== undefined && Date.now() >= input.setupDeadlineMilliseconds) remainingSetupMilliseconds(input);
-		workspace = createWorkspace(input);
+		if (input.setupDeadlineMilliseconds !== undefined && Date.now() >= input.setupDeadlineMilliseconds) {
+			const error = new Error("RLM_TIMEOUT expired during recursive resource setup") as Error & { exitCode: number };
+			error.exitCode = 124;
+			throw error;
+		}
+		workspace = acquireWorkspace({
+			cwd: input.cwd,
+			childDepth: input.childDepth,
+			mode: input.mode,
+			setupDeadlineMilliseconds: input.setupDeadlineMilliseconds,
+		});
 		return {
 			promptFile,
 			contextFile,

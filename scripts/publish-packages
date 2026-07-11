@@ -19,6 +19,10 @@ cd "$ROOT_DIR"
 DRY=false
 [ "${1:-}" = "--dry-run" ] && DRY=true
 
+if [ "$DRY" != true ]; then
+    ./scripts/assert-release-authorized
+fi
+
 if ! command -v npm-publish >/dev/null 2>&1; then
     echo "✗ npm-publish wrapper not found on PATH." >&2
     echo "  It runs 'npm publish' with the sops-encrypted token injected (token never in ~/.npmrc)." >&2

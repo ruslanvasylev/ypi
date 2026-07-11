@@ -28,6 +28,12 @@ export interface BoundedCapture {
 	readonly truncated: boolean;
 }
 
+export interface ChildToolActivity {
+	key: string;
+	label: string;
+	status: "running" | "succeeded" | "failed";
+}
+
 export interface JsonStreamDecoder {
 	append(chunk: string): boolean;
 	finish(): void;
@@ -61,7 +67,17 @@ function truncate(text: string): string {
 	return `${text.slice(0, MAX_TOOL_OUTPUT_CHARS)}\n\n[Output truncated by ypi recursion runtime]`;
 }
 
-export function createJsonDecoder(onText?: (text: string) => boolean | void): JsonStreamDecoder {
+const SAFE_PROGRESS_TOOL_NAMES = new Set(["read", "bash", "edit", "write", "grep", "find", "ls", "rlm_query"]);
+
+function safeToolLabel(value: unknown): string {
+	const label = typeof value === "string" ? value : "";
+	return SAFE_PROGRESS_TOOL_NAMES.has(label) ? label : "tool";
+}
+
+export function createJsonDecoder(
+	onText?: (text: string) => boolean | void,
+	onToolActivity?: (activity: ChildToolActivity) => void,
+): JsonStreamDecoder {
 	const text = createBoundedCapture(MAX_TOOL_OUTPUT_CHARS);
 	let pending = "";
 	let droppingOversizedLine = false;
@@ -85,6 +101,14 @@ export function createJsonDecoder(onText?: (text: string) => boolean | void): Js
 				const delta = String(event.assistantMessageEvent.delta || "");
 				text.append(delta);
 				if (delta && onText?.(delta) === false) keepFlowing = false;
+			}
+			if (event.type === "tool_execution_start" || event.type === "tool_execution_update" || event.type === "tool_execution_end") {
+				const key = typeof event.toolCallId === "string" ? event.toolCallId : `unknown-${safeToolLabel(event.toolName)}`;
+				onToolActivity?.({
+					key,
+					label: safeToolLabel(event.toolName),
+					status: event.type === "tool_execution_end" ? (event.isError === true ? "failed" : "succeeded") : "running",
+				});
 			}
 			if (event.type === "turn_end") {
 				sawTurnEnd = true;

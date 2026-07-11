@@ -28,10 +28,14 @@
   "pi": {
     "extensions": [
       "./extensions/recursive.ts"
+    ],
+    "skills": [
+      "./skills"
     ]
   },
   "files": [
     "extensions/**/*.ts",
+    "skills/**/SKILL.md",
     "SYSTEM_PROMPT.md",
     "README.md",
     "LICENSE"

@@ -22,14 +22,14 @@
 #   RLM_CHILD_MODELS   — comma-separated child-depth model list (depth 1,2,...)
 #   RLM_CHILD_PROVIDERS — comma-separated child-depth provider list (depth 1,2,...)
 #   RLM_CHILD_THINKING_LEVELS — comma-separated child-depth thinking list (depth 1,2,...)
-#   RLM_JJ             — set to "0" to disable jj workspace isolation (default: 1)
+#   RLM_JJ             — existing-jj detection policy (default: auto; never initializes a VCS)
 #   RLM_EXTENSIONS     — set to "0" to disable Pi extensions (default: 1)
 #   RLM_CHILD_EXTENSIONS — override extensions for depth > 0 (default: same as parent)
 #   RLM_CHILD_DISCOVERY — set to 0 to disable child non-extension skills/templates/themes/context discovery (default: enabled)
-#   RLM_BUDGET         — max dollar spend for entire recursive tree (default: none)
+#   RLM_COST_FILE      — append-only cost telemetry ledger (default: automatic private temp path)
 #   RLM_JSON           — set to "0" to disable JSON mode / cost tracking (default: 1)
 #   RLM_SHARED_SESSIONS — set to "0" to disable session log sharing (default: 1)
-#   PI_TRACE_FILE      — path to trace log for all calls with timing (default: none)
+#   PI_TRACE_FILE      — lifecycle trace path (default: automatic private temp path)
 
 set -euo pipefail
 
@@ -102,11 +102,11 @@ export RLM_MAX_CALLS="${RLM_MAX_CALLS:-128}"
 [ -n "${RLM_CHILD_PROVIDERS:-}" ] && export RLM_CHILD_PROVIDERS
 [ -n "${RLM_CHILD_THINKING_LEVELS:-}" ] && export RLM_CHILD_THINKING_LEVELS
 [ -n "${PI_TRACE_FILE:-}" ]      && export PI_TRACE_FILE
-export RLM_JJ="${RLM_JJ:-1}"
+export RLM_JJ="${RLM_JJ:-auto}"
 export RLM_EXTENSIONS="${RLM_EXTENSIONS:-1}"
 [ -n "${RLM_CHILD_EXTENSIONS:-}" ] && export RLM_CHILD_EXTENSIONS
 [ -n "${RLM_CHILD_DISCOVERY:-}" ]  && export RLM_CHILD_DISCOVERY
-[ -n "${RLM_BUDGET:-}" ]           && export RLM_BUDGET
+unset RLM_BUDGET
 export RLM_JSON="${RLM_JSON:-1}"
 export RLM_SHARED_SESSIONS="${RLM_SHARED_SESSIONS:-1}"
 
@@ -221,5 +221,8 @@ if [ "${RLM_AMBIENT_EXTENSIONS:-0}" != "1" ]; then
     PI_ARGV+=(--no-extensions)
 fi
 PI_ARGV+=(-e "$YPI_EXTENSION")
+if [ -d "$SCRIPT_DIR/skills" ]; then
+    PI_ARGV+=(--skill "$SCRIPT_DIR/skills")
+fi
 [ ${#PASS_ARGS[@]} -gt 0 ] && PI_ARGV+=("${PASS_ARGS[@]}")
 exec "${PI_ARGV[@]}"

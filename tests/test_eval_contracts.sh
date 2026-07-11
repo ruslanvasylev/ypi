@@ -197,11 +197,14 @@ PY
   cd "$RUNBOOK_TMP/repo"
   "${CLEAN_GIT_ENV[@]}" git init -q
   "${CLEAN_GIT_ENV[@]}" git switch -q -c feature/test
-  "${CLEAN_GIT_ENV[@]}" YPI_RUN_BUDGET=2 YPI_RUN_DEADLINE_EPOCH=$(( $(date +%s) + 3600 )) bash "$RUNBOOK_TMP/init.sh"
+  printf 'baseline\n' > baseline.txt
+  "${CLEAN_GIT_ENV[@]}" git add baseline.txt
+  "${CLEAN_GIT_ENV[@]}" git -c user.name=Test -c user.email=test@example.invalid commit -qm baseline
+  "${CLEAN_GIT_ENV[@]}" RLM_BUDGET=0 RLM_TIMEOUT=1 bash "$RUNBOOK_TMP/init.sh"
 )
 RUNBOOK_ENVELOPE="$(find "$RUNBOOK_TMP/repo/tmp" -name envelope.sh -print)"
 RUNBOOK_RUN_DIR="${RUNBOOK_ENVELOPE%/envelope.sh}"
-if [ -f "$RUNBOOK_RUN_DIR/envelope.sh" ] && ! grep -Eq 'API_KEY|OAUTH_TOKEN|SECRET_ACCESS' "$RUNBOOK_RUN_DIR/envelope.sh"; then pass "bounded runbook persists only non-secret envelope controls"; else fail "bounded runbook persists only non-secret envelope controls" "missing or unsafe envelope"; fi
+if [ -f "$RUNBOOK_RUN_DIR/envelope.sh" ] && ! grep -Eq 'API_KEY|OAUTH_TOKEN|SECRET_ACCESS|RLM_BUDGET|RLM_TIMEOUT' "$RUNBOOK_RUN_DIR/envelope.sh"; then pass "bounded runbook persists only non-secret, non-terminating envelope controls"; else fail "bounded runbook persists only non-secret, non-terminating envelope controls" "missing or unsafe envelope"; fi
 printf '7\n' > "$RUNBOOK_RUN_DIR/calls"
 printf '%s\n' '{"cost":0.5,"tokens":10}' > "$RUNBOOK_RUN_DIR/cost.jsonl"
 python3 - "$RUNBOOK_TMP/resume.sh" "$RUNBOOK_RUN_DIR" <<'PY'
@@ -210,13 +213,18 @@ path, run_dir = sys.argv[1:]
 text = open(path).read().replace("<exact run directory from the continuation brief>", run_dir)
 open(path, "w").write(text + '\nprintf "RESUMED_COUNT=%s\\n" "$RLM_CALL_COUNT"\n')
 PY
-RUNBOOK_RESUME="$(bash "$RUNBOOK_TMP/resume.sh")"
-if [ "$RUNBOOK_RESUME" = "RESUMED_COUNT=7" ] && [ "$(cat "$RUNBOOK_RUN_DIR/calls")" = 7 ] && grep -q '"cost":0.5' "$RUNBOOK_RUN_DIR/cost.jsonl"; then pass "bounded runbook continuation preserves call and cost ledgers"; else fail "bounded runbook continuation preserves call and cost ledgers" "$RUNBOOK_RESUME"; fi
+set +e
+bash "$RUNBOOK_TMP/resume.sh" >/dev/null 2>&1
+WRONG_REPO_RC=$?
+set -e
+if [ "$WRONG_REPO_RC" -ne 0 ]; then pass "bounded runbook rejects continuation from another checkout"; else fail "bounded runbook rejects continuation from another checkout" "rc=0"; fi
+RUNBOOK_RESUME="$(cd "$RUNBOOK_TMP/repo" && bash "$RUNBOOK_TMP/resume.sh")"
+if [ "$RUNBOOK_RESUME" = "RESUMED_COUNT=7" ] && [ "$(cat "$RUNBOOK_RUN_DIR/calls")" = 7 ] && grep -q '"cost":0.5' "$RUNBOOK_RUN_DIR/cost.jsonl"; then pass "bounded runbook continuation preserves bound call and cost ledgers"; else fail "bounded runbook continuation preserves bound call and cost ledgers" "$RUNBOOK_RESUME"; fi
 set +e
 (
   cd "$RUNBOOK_TMP/repo"
   "${CLEAN_GIT_ENV[@]}" git branch -m master
-  "${CLEAN_GIT_ENV[@]}" YPI_RUN_BUDGET=2 YPI_RUN_DEADLINE_EPOCH=$(( $(date +%s) + 3600 )) bash "$RUNBOOK_TMP/init.sh"
+  "${CLEAN_GIT_ENV[@]}" RLM_BUDGET=0 RLM_TIMEOUT=1 bash "$RUNBOOK_TMP/init.sh"
 ) >/dev/null 2>&1
 RUNBOOK_TRUNK_RC=$?
 set -e

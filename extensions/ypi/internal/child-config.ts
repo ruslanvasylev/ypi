@@ -80,9 +80,13 @@ export function buildChildEnvironment(baseEnv: NodeJS.ProcessEnv, overrides: Nod
 		if (baseEnv[key]) env[key] = baseEnv[key];
 	}
 	for (const [key, value] of Object.entries(baseEnv)) {
+		if (key === "RLM_BUDGET" || key.startsWith("YPI_EXPLICIT_") || key === "YPI_ALLOW_LOCAL_REMOTE_FOR_TESTS") continue;
 		if (key.startsWith("RLM_") || key.startsWith("YPI_") || key === "CONTEXT" || key === "PI_TRACE_FILE") env[key] = value;
 	}
 	Object.assign(env, overrides);
+	delete env.YPI_EXPLICIT_RELEASE_REQUEST;
+	delete env.YPI_EXPLICIT_NON_OWNED_REMOTE;
+	delete env.YPI_ALLOW_LOCAL_REMOTE_FOR_TESTS;
 
 	if (childDepth >= maxDepth()) env.PATH = removePathEntry(env.PATH, runtime.root);
 	if (!sharedSessionsEnabled()) {

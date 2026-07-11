@@ -28,6 +28,9 @@
   "pi": {
     "extensions": [
       "./extensions/recursive.ts"
+    ],
+    "skills": [
+      "./skills"
     ]
   },
   "bin": {
@@ -55,6 +58,7 @@
     "LICENSE",
     "CHANGELOG.md",
     "extensions/**/*.ts",
+    "skills/**",
     "dist/*.mjs"
   ],
   "dependencies": {

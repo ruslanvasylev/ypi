@@ -7,7 +7,6 @@ import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-
 import {
 	allocateCallCount,
 	appendCostSummary,
-	assertBudgetAvailable,
 	assertTimeoutAvailable,
 	assertWithinMaxCalls,
 	canExecute,
@@ -63,8 +62,11 @@ function nowTraceTime(): string {
 }
 
 function trace(message: string): void {
-	if (process.env.PI_TRACE_FILE) {
+	if (!process.env.PI_TRACE_FILE) return;
+	try {
 		writeFileSync(process.env.PI_TRACE_FILE, `${message}\n`, { flag: "a" });
+	} catch {
+		delete process.env.PI_TRACE_FILE;
 	}
 }
 
@@ -133,34 +135,10 @@ function createPromptFile(prompt: string): string {
 	return promptPath;
 }
 
-function maybeCreateJjWorkspace(cwd: string, depth: number): Workspace {
-	if (process.env.RLM_JJ === "0") {
-		return { cwd, mode: "off", readOnly: process.env.RLM_UNSAFE_NO_JJ_WRITE !== "1", cleanup() {} };
-	}
-
-	const root = spawnSync("jj", ["root"], { cwd, stdio: "ignore" });
-	if (root.status !== 0) {
-		return { cwd, mode: "none", readOnly: process.env.RLM_UNSAFE_NO_JJ_WRITE !== "1", cleanup() {} };
-	}
-
-	const workspacePath = mkdtempSync(path.join(tmpdir(), `ypi_ws_d${depth}_`));
-	const workspaceSuffix = path.basename(workspacePath).replace(/^ypi_ws_/, "");
-	const name = `ypi-d${depth}-${process.pid}-${workspaceSuffix}`;
-	const add = spawnSync("jj", ["workspace", "add", "--name", name, workspacePath], { cwd, stdio: "ignore" });
-	if (add.status !== 0) {
-		rmSync(workspacePath, { recursive: true, force: true });
-		return { cwd, mode: "none", readOnly: process.env.RLM_UNSAFE_NO_JJ_WRITE !== "1", cleanup() {} };
-	}
-
-	return {
-		cwd: workspacePath,
-		mode: "jj",
-		readOnly: false,
-		cleanup() {
-			spawnSync("jj", ["workspace", "forget", name], { cwd: workspacePath, stdio: "ignore" });
-			rmSync(workspacePath, { recursive: true, force: true });
-		},
-	};
+function maybeCreateJjWorkspace(cwd: string, _depth: number): Workspace {
+	// The retained fallback has no semantic review/implement parameter. Keep it
+	// read-only so it cannot bypass the canonical runtime's single-writer policy.
+	return { cwd, mode: "off", readOnly: true, cleanup() {} };
 }
 
 function commaEntry(value: string | undefined, oneBasedIndex: number): string {
@@ -314,11 +292,15 @@ function buildChildEnvironment(baseEnv: NodeJS.ProcessEnv, overrides: NodeJS.Pro
 		if (baseEnv[key]) env[key] = baseEnv[key];
 	}
 	for (const [key, value] of Object.entries(baseEnv)) {
+		if (key === "RLM_BUDGET" || key.startsWith("YPI_EXPLICIT_") || key === "YPI_ALLOW_LOCAL_REMOTE_FOR_TESTS") continue;
 		if (key.startsWith("RLM_") || key.startsWith("YPI_") || key === "CONTEXT" || key === "PI_TRACE_FILE") {
 			env[key] = value;
 		}
 	}
 	Object.assign(env, overrides);
+	delete env.YPI_EXPLICIT_RELEASE_REQUEST;
+	delete env.YPI_EXPLICIT_NON_OWNED_REMOTE;
+	delete env.YPI_ALLOW_LOCAL_REMOTE_FOR_TESTS;
 
 	if (childDepth >= maxDepth()) {
 		env.PATH = removePathEntry(env.PATH, runtime.root);
@@ -482,7 +464,6 @@ export function registerLegacyNativeRlmQueryTool(pi: ExtensionAPI, runtime: YpiR
 			const counterDeadlineMilliseconds = timeoutSeconds === undefined ? undefined : Date.now() + timeoutSeconds * 1000;
 			const callCount = await allocateCallCount(counterDeadlineMilliseconds);
 			assertWithinMaxCalls(callCount);
-			assertBudgetAvailable();
 			const promptFile = createPromptFile(params.prompt);
 			const contextFile = createContextFile(params);
 			const { provider, model, thinkingLevel } = providerModel(ctx, childDepth, pi.getThinkingLevel());
@@ -522,8 +503,10 @@ export function registerLegacyNativeRlmQueryTool(pi: ExtensionAPI, runtime: YpiR
 			if (!childSession) {
 				args.pop();
 			}
+			// Retained review fallback is canonical-only: ambient extension tools
+			// cannot silently reintroduce write capability.
+			args.push("--no-extensions");
 			if (!childExtensionsEnabled(childDepth)) {
-				args.push("--no-extensions");
 				if (existsSync(runtime.systemPromptPath)) {
 					args.push("--system-prompt", runtime.systemPromptPath);
 				}
@@ -531,7 +514,7 @@ export function registerLegacyNativeRlmQueryTool(pi: ExtensionAPI, runtime: YpiR
 				args.push("-e", runtime.extensionPath);
 			}
 
-			trace(`[${nowTraceTime()}] depth=${depth}→${childDepth} PID=${process.pid} call=${callCount} trace=${process.env.RLM_TRACE_ID || ""} caller=tool jj=${workspace.mode} prompt: ${params.prompt.slice(0, 120)}`);
+			trace(`[${nowTraceTime()}] depth=${depth}→${childDepth} PID=${process.pid} call=${callCount} trace=${process.env.RLM_TRACE_ID || ""} caller=tool jj=${workspace.mode}`);
 
 			try {
 				const started = Date.now();

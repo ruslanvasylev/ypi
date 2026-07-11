@@ -55,6 +55,8 @@ assert_contains "tarball contains native adapter" "package/extensions/ypi/native
 assert_contains "tarball contains canonical runtime core" "package/extensions/ypi/runtime-core.ts" "$TARBALL_LIST"
 assert_contains "tarball contains internal child-process owner" "package/extensions/ypi/internal/child-process.ts" "$TARBALL_LIST"
 assert_contains "tarball contains internal child-output owner" "package/extensions/ypi/internal/child-output.ts" "$TARBALL_LIST"
+assert_contains "tarball contains workspace-policy owner" "package/extensions/ypi/internal/workspace-policy.ts" "$TARBALL_LIST"
+assert_contains "tarball contains bounded delegation skill" "package/skills/bounded-recursive-delegation/SKILL.md" "$TARBALL_LIST"
 assert_contains "tarball contains internal CLI-input owner" "package/extensions/ypi/internal/cli-input.ts" "$TARBALL_LIST"
 assert_contains "tarball contains thin CLI adapter" "package/extensions/ypi/cli.ts" "$TARBALL_LIST"
 assert_contains "tarball contains generated Node CLI projection" "package/dist/rlm_query.mjs" "$TARBALL_LIST"
@@ -121,8 +123,7 @@ PACKED_RLM_OUTPUT="$(env -u RLM_BUDGET -u RLM_COST_FILE -u RLM_TIMEOUT -u RLM_ST
 	YPI_PI_BIN="$TEST_TMP/mock-bin/pi" \
 	RLM_DEPTH=0 RLM_MAX_DEPTH=2 RLM_CALL_COUNT=0 RLM_MAX_CALLS=8 \
 	RLM_CALL_COUNTER_FILE="$TEST_TMP/packed-canonical.counter" RLM_TRACE_ID=packed-canonical \
-	RLM_JSON=0 RLM_JJ=0 \
-	RLM_UNSAFE_NO_JJ_WRITE=1 RLM_SHARED_SESSIONS=0 \
+	RLM_JSON=0 RLM_JJ=auto RLM_SHARED_SESSIONS=0 \
 	"$RLM_BIN" "Packed runtime smoke" 2>&1)"
 PACKED_RLM_RC=$?
 set -e
@@ -135,8 +136,7 @@ PACKED_LEGACY_OUTPUT="$(env -u RLM_BUDGET -u RLM_COST_FILE -u RLM_TIMEOUT -u RLM
 	YPI_PI_BIN="$TEST_TMP/mock-bin/pi" YPI_LEGACY_IMPL=1 \
 	RLM_DEPTH=0 RLM_MAX_DEPTH=2 RLM_CALL_COUNT=0 RLM_MAX_CALLS=8 \
 	RLM_CALL_COUNTER_FILE="$TEST_TMP/packed-legacy.counter" RLM_TRACE_ID=packed-legacy \
-	RLM_JSON=0 RLM_JJ=0 \
-	RLM_UNSAFE_NO_JJ_WRITE=1 RLM_SHARED_SESSIONS=0 \
+	RLM_JSON=0 RLM_JJ=auto RLM_SHARED_SESSIONS=0 \
 	"$RLM_BIN" "Packed legacy smoke" 2>&1)"
 PACKED_LEGACY_RC=$?
 set -e
@@ -201,8 +201,7 @@ DIRECT_BUNDLE_OUTPUT="$(env -u YPI_EXTENSION_ROOT -u YPI_EXTENSION_PATH -u RLM_S
 	YPI_PI_BIN="$TEST_TMP/mock-bin/pi" CONTEXT="$TEST_TMP/ctx.txt" \
 	RLM_DEPTH=0 RLM_MAX_DEPTH=2 RLM_CALL_COUNT=0 RLM_MAX_CALLS=8 \
 	RLM_CALL_COUNTER_FILE="$TEST_TMP/direct-bundle.counter" RLM_TRACE_ID=direct-bundle \
-	RLM_JSON=0 RLM_JJ=0 \
-	RLM_UNSAFE_NO_JJ_WRITE=1 RLM_SHARED_SESSIONS=0 \
+	RLM_JSON=0 RLM_JJ=auto RLM_SHARED_SESSIONS=0 \
 	node "$UNPACKED/dist/rlm_query.mjs" "Direct bundle root smoke" 2>&1 || true)"
 assert_contains "direct generated bundle resolves its packaged root" "PACKED_CHILD_OK" "$DIRECT_BUNDLE_OUTPUT"
 assert_not_contains "direct generated bundle avoids source-relative root failure" "missing packaged" "$DIRECT_BUNDLE_OUTPUT"

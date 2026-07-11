@@ -4,7 +4,6 @@ import {
 	allocateCallCount,
 	appendCostSummary,
 	appendIncompleteCostMarker,
-	assertBudgetAvailable,
 	assertTimeoutAvailable,
 	assertWithinMaxCalls,
 } from "./guardrails.ts";
@@ -15,10 +14,12 @@ import {
 	READ_ONLY_EXCLUDED_BUILTINS,
 	resolveChildRoute,
 } from "./internal/child-config.ts";
-import { formatCombinedChildOutput, normalizeChildOutput } from "./internal/child-output.ts";
+import { formatCombinedChildOutput, normalizeChildOutput, type ChildToolActivity } from "./internal/child-output.ts";
 import { runChildProcess } from "./internal/child-process.ts";
 import { acquireChildResources } from "./internal/child-resources.ts";
+import type { ChildMode, WorkspaceReport } from "./internal/workspace-policy.ts";
 import type { YpiRuntime } from "./runtime.ts";
+export type { ChildToolActivity } from "./internal/child-output.ts";
 
 export interface ParentRuntimeContext {
 	cwd: string;
@@ -41,10 +42,12 @@ export interface RecursiveChildRequest {
 	extensionPath?: string | null;
 	treeStartTimeSeconds?: number;
 	onText?: (text: string) => boolean | void;
+	onToolActivity?: (activity: ChildToolActivity) => void;
 	onTextDrain?: () => Promise<void>;
 	onAdmitted?: (callCount: number) => void;
 	onChildSpawn?: (pid: number) => void;
 	signal?: AbortSignal;
+	mode?: ChildMode;
 }
 
 export interface RecursiveChildDetails {
@@ -58,6 +61,8 @@ export interface RecursiveChildDetails {
 	signal: NodeJS.Signals | null;
 	jj: "jj" | "none" | "off";
 	readOnly: boolean;
+	requestedMode: ChildMode;
+	workspace: WorkspaceReport;
 	stdoutTruncated: boolean;
 	stderrTruncated: boolean;
 	textTruncated: boolean;
@@ -91,9 +96,16 @@ function nowTraceTime(): string {
 }
 
 function trace(message: string): void {
-	if (process.env.PI_TRACE_FILE) {
+	if (!process.env.PI_TRACE_FILE) return;
+	try {
 		writeFileSync(process.env.PI_TRACE_FILE, `${message}\n`, { flag: "a" });
+	} catch {
+		delete process.env.PI_TRACE_FILE;
 	}
+}
+
+export function appendRuntimeTrace(event: string): void {
+	trace(`[${new Date().toISOString()}] ${event}`);
 }
 
 function timeoutOrThrow(): number | undefined {
@@ -106,6 +118,7 @@ function timeoutOrThrow(): number | undefined {
 }
 
 export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveChildRequest): Promise<RecursiveChildResult> {
+	if (request.signal?.aborted) throw new RecursiveChildError("Child Pi cancelled before admission", 130);
 	const depth = currentDepth();
 	const childDepth = nextDepth();
 	const limit = maxDepth();
@@ -113,6 +126,10 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 		throw new RecursiveChildError(`Invalid recursion depth config: RLM_DEPTH=${process.env.RLM_DEPTH ?? ""} RLM_MAX_DEPTH=${process.env.RLM_MAX_DEPTH ?? ""} (must be non-negative integers)`, 1);
 	}
 	if (childDepth > limit) throw new RecursiveChildError(`Max depth exceeded at ${depth}/${limit}`, 1);
+	const requestedMode = request.mode ?? "review";
+	if (requestedMode === "implement" && (depth > 0 || process.env.RLM_WRITE_MODE_CEILING === "review")) {
+		throw new RecursiveChildError("Writable recursion is root-only and cannot be escalated by a child. Continue implementation in the current agent or delegate a read-only review.", 1);
+	}
 	if (depth === 0) process.env.RLM_START_TIME = String(request.treeStartTimeSeconds ?? Math.floor(Date.now() / 1000));
 
 	const counterRemainingSeconds = timeoutOrThrow();
@@ -120,7 +137,6 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 	assertWithinMaxCalls(0);
 	const callCount = await allocateCallCount(counterDeadlineMilliseconds);
 	assertWithinMaxCalls(callCount);
-	assertBudgetAvailable();
 	const setupRemainingSeconds = timeoutOrThrow();
 	const extensionsEnabled = childExtensionsEnabled(childDepth);
 	const fullResourceIsolation = !extensionsEnabled && process.env.RLM_CHILD_DISCOVERY === "0";
@@ -138,9 +154,11 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 		rootPromptPath: process.env.RLM_ROOT_PROMPT_FILE,
 		setupDeadlineMilliseconds: setupRemainingSeconds === undefined ? undefined : Date.now() + setupRemainingSeconds * 1000,
 		fullResourceIsolation,
+		mode: requestedMode,
 	});
 
 	try {
+		if (request.signal?.aborted) throw new RecursiveChildError("Child Pi cancelled during admission before work started", 130);
 		const { provider, model, thinkingLevel } = resolveChildRoute(request.parent, childDepth);
 		const extensionPath = request.extensionPath === null ? "" : request.extensionPath || runtime.extensionPath;
 		const env = buildChildEnvironment(process.env, {
@@ -158,6 +176,8 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 			YPI_EXTENSION_ROOT: runtime.root,
 			YPI_EXTENSION_PATH: extensionPath,
 			YPI_RLM_QUERY_CALLER: request.caller,
+			RLM_WRITE_MODE_CEILING: "review",
+			...(requestedMode === "implement" ? { RLM_AMBIENT_EXTENSIONS: "0" } : {}),
 		}, runtime, childDepth);
 		if (resources.contextFile) env.CONTEXT = resources.contextFile;
 		if (resources.isolatedPiRoot) {
@@ -174,19 +194,20 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 		if (model) args.push("--model", model);
 		if (thinkingLevel) args.push("--thinking", thinkingLevel);
 		if (resources.workspace.readOnly) args.push("--exclude-tools", READ_ONLY_EXCLUDED_BUILTINS.join(","));
+		else if (requestedMode === "implement") args.push("--exclude-tools", "bash");
 		if (process.env.RLM_CHILD_DISCOVERY === "0") args.push("--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve");
 		if (resources.childSession) args.push("--session", resources.childSession);
 		else args.push("--no-session");
 		// Pi cannot unregister an older ambient ypi copy. Load only the exact
 		// canonical child extension by default; ambient extension discovery is an
 		// explicit compatibility opt-in for callers that accept version conflicts.
-		if (!extensionsEnabled || process.env.RLM_AMBIENT_EXTENSIONS !== "1") args.push("--no-extensions");
+		if (requestedMode === "implement" || !extensionsEnabled || process.env.RLM_AMBIENT_EXTENSIONS !== "1") args.push("--no-extensions");
 		if (extensionsEnabled && extensionPath && existsSync(extensionPath)) args.push("-e", extensionPath);
 		else if (resources.standaloneSystemPromptFile) args.push("--system-prompt", resources.standaloneSystemPromptFile);
 
 		const timeoutSeconds = timeoutOrThrow();
 		request.onAdmitted?.(callCount);
-		trace(`[${nowTraceTime()}] depth=${depth}→${childDepth} PID=${process.pid} call=${callCount} trace=${process.env.RLM_TRACE_ID || ""} caller=${request.caller} fork=${request.fork === true} jj=${resources.workspace.mode} prompt: ${request.prompt.slice(0, 120)}`);
+		trace(`[${nowTraceTime()}] depth=${depth}→${childDepth} PID=${process.pid} call=${callCount} trace=${process.env.RLM_TRACE_ID || ""} caller=${request.caller} fork=${request.fork === true} mode=${requestedMode} workspace=${resources.workspace.mode}`);
 		const started = Date.now();
 		const processResult = await runChildProcess({
 			args,
@@ -197,8 +218,10 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 			jsonMode,
 			stdinText: request.prompt,
 			onText: request.onText,
+			onToolActivity: request.onToolActivity,
 			onTextDrain: request.onTextDrain,
 			onSpawn: request.onChildSpawn,
+			quiesceProcessGroup: resources.workspace.quiesceProcessGroup,
 		});
 		const elapsed = Math.max(0, Math.round((Date.now() - started) / 1000));
 		const output = normalizeChildOutput(processResult);
@@ -209,7 +232,8 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 		if (processResult.jsonCostIncomplete) {
 			appendIncompleteCostMarker("child ended without a complete final cost boundary");
 		}
-		trace(`[${new Date().toISOString()}] depth=${depth} child_depth=${childDepth} COMPLETED exit=${processResult.code} elapsed=${elapsed}s caller=${request.caller} call=${callCount} cost=${processResult.jsonCostIncomplete ? "incomplete" : output.cost?.cost ?? "untracked"} tokens=${processResult.jsonCostIncomplete ? "incomplete" : output.cost?.tokens ?? "untracked"} cancelled=${processResult.cancelled} timeout=${processResult.timedOut} truncated=${processResult.textTruncated || processResult.jsonEventTruncated}`);
+		const workspace = resources.workspace.finalize();
+		trace(`[${new Date().toISOString()}] depth=${depth} child_depth=${childDepth} COMPLETED exit=${processResult.code} elapsed=${elapsed}s caller=${request.caller} call=${callCount} cost=${processResult.jsonCostIncomplete ? "incomplete" : output.cost?.cost ?? "untracked"} tokens=${processResult.jsonCostIncomplete ? "incomplete" : output.cost?.tokens ?? "untracked"} cancelled=${processResult.cancelled} timeout=${processResult.timedOut} truncated=${processResult.textTruncated || processResult.jsonEventTruncated} changed_paths=${workspace.changedPaths.length}`);
 		const details: RecursiveChildDetails = {
 			implementation: "canonical",
 			depth,
@@ -219,8 +243,10 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 			caller: request.caller,
 			exitCode: processResult.code,
 			signal: processResult.signal,
-			jj: resources.workspace.mode,
+			jj: resources.workspace.mode === "jj" ? "jj" : resources.workspace.mode === "read-only" ? "off" : "none",
 			readOnly: resources.workspace.readOnly,
+			requestedMode,
+			workspace,
 			stdoutTruncated: processResult.stdoutTruncated,
 			stderrTruncated: processResult.stderrTruncated,
 			textTruncated: processResult.textTruncated,
@@ -235,10 +261,8 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 					? `Child Pi timed out after ${timeoutSeconds}s`
 					: `Child Pi exited with ${processResult.code}`;
 			const childOutput = formatCombinedChildOutput(output);
-			throw new RecursiveChildError(`${reason}${childOutput ? `\n${childOutput}` : ""}`, processResult.code, details);
-		}
-		if (processResult.jsonCostIncomplete && process.env.RLM_BUDGET) {
-			throw new RecursiveChildError("Cannot enforce RLM_BUDGET: an oversized cost-bearing or unclassified Pi JSON event was skipped", 1, details);
+			const workspaceOutput = requestedMode === "implement" ? formatWorkspaceReport(workspace) : "";
+			throw new RecursiveChildError(`${reason}${childOutput ? `\n${childOutput}` : ""}${workspaceOutput ? `\n\n${workspaceOutput}` : ""}`, processResult.code, details);
 		}
 		return { text: output.text, stderr: output.stderr, warnings: output.warnings, details };
 	} finally {
@@ -246,6 +270,25 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 	}
 }
 
+function displayPath(value: string): string {
+	return value.replace(/[\r\n\t\0]/g, "?").slice(0, 240);
+}
+
+function formatWorkspaceReport(report: WorkspaceReport): string {
+	const paths = report.changedPaths.slice(0, 20).map(displayPath);
+	return [
+		`[implementer workspace: ${report.workspaceMode}; report: ${report.reportComplete ? "complete" : "incomplete"}]`,
+		paths.length > 0 ? `Changed paths (${report.changedPaths.length}): ${paths.join(", ")}${report.changedPaths.length > paths.length ? ", …" : ""}` : "Changed paths: none",
+		...(report.baselineHead ? [`Baseline: ${displayPath(report.baselineHead)}`] : []),
+		...(report.finalHead ? [`Final state: ${displayPath(report.finalHead)}`] : []),
+		...(report.jjChangeId ? [`jj change: ${displayPath(report.jjChangeId)}`] : []),
+		...(!report.reportComplete && report.reportError ? [`Workspace report warning: ${report.reportError}`] : []),
+	].join("\n");
+}
+
 export function formatRecursiveResultForTool(result: RecursiveChildResult): string {
-	return formatCombinedChildOutput({ text: result.text, stderr: result.stderr, warnings: result.warnings });
+	const output = formatCombinedChildOutput({ text: result.text, stderr: result.stderr, warnings: result.warnings });
+	if (result.details.requestedMode !== "implement") return output;
+	const suffix = formatWorkspaceReport(result.details.workspace);
+	return `${output}${output ? "\n\n" : ""}${suffix}`;
 }

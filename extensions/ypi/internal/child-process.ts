@@ -7,6 +7,7 @@ import {
 	MAX_CHILD_STREAM_CHARS,
 	MAX_TOOL_OUTPUT_CHARS,
 	type ChildOutputSnapshot,
+	type ChildToolActivity,
 } from "./child-output.ts";
 
 export interface ChildProcessOptions {
@@ -18,8 +19,10 @@ export interface ChildProcessOptions {
 	jsonMode: boolean;
 	stdinText?: string;
 	onText?: (text: string) => boolean | void;
+	onToolActivity?: (activity: ChildToolActivity) => void;
 	onTextDrain?: () => Promise<void>;
 	onSpawn?: (pid: number) => void;
+	quiesceProcessGroup?: boolean;
 }
 
 export interface ChildProcessResult extends ChildOutputSnapshot {
@@ -53,11 +56,12 @@ export function runChildProcess(options: ChildProcessOptions): Promise<ChildProc
 		let stdoutCharacters = 0;
 		const rawStderr = createBoundedCapture(MAX_TOOL_OUTPUT_CHARS);
 		const plainText = createBoundedCapture(MAX_TOOL_OUTPUT_CHARS);
-		const jsonDecoder = createJsonDecoder(options.onText);
+		const jsonDecoder = createJsonDecoder(options.onText, options.onToolActivity);
 		let timedOut = false;
 		let cancelled = false;
 		let terminating = false;
 		let killTimer: NodeJS.Timeout | undefined;
+		let quiesceKillTimer: NodeJS.Timeout | undefined;
 		let timeoutTimer: NodeJS.Timeout | undefined;
 
 		child.stdout.setEncoding("utf8");
@@ -101,18 +105,30 @@ export function runChildProcess(options: ChildProcessOptions): Promise<ChildProc
 		const cleanup = (preserveKillEscalation = false) => {
 			options.signal?.removeEventListener("abort", abortHandler);
 			if (killTimer && !preserveKillEscalation) clearTimeout(killTimer);
+			if (quiesceKillTimer) clearTimeout(quiesceKillTimer);
 			if (timeoutTimer) clearTimeout(timeoutTimer);
 		};
 
 		child.on("error", (error) => { cleanup(); reject(error); });
+		child.on("exit", () => {
+			// `close` waits for inherited stdio descriptors. Start quiescing as soon
+			// as the trusted child leader exits so a background descendant retaining
+			// those descriptors cannot hold the writer lease indefinitely.
+			if (!options.quiesceProcessGroup || !child.pid || process.platform === "win32" || terminating) return;
+			const target = -child.pid;
+			try { process.kill(target, "SIGTERM"); } catch { return; }
+			quiesceKillTimer = setTimeout(() => {
+				try { process.kill(target, "SIGKILL"); } catch { /* group already gone */ }
+			}, 250);
+		});
 		child.on("close", (code, childSignal) => {
 			// The direct child can close its inherited stdio while a descendant in
-			// the detached group ignores SIGTERM. Keep the scheduled group SIGKILL
-			// alive through the grace window instead of clearing it on leader exit.
+			// the detached group survives. A writable shared-checkout lease is not
+			// released until that process group receives a final TERM/KILL sweep.
 			cleanup(terminating);
 			jsonDecoder.finish();
 			const json = jsonDecoder.result();
-			resolve({
+			const settle = () => resolve({
 				code: timedOut ? 124 : cancelled ? 130 : code ?? signalledExitCode(childSignal),
 				signal: childSignal,
 				stderr: rawStderr.text(),
@@ -126,6 +142,17 @@ export function runChildProcess(options: ChildProcessOptions): Promise<ChildProc
 				timedOut,
 				cancelled,
 			});
+			if (!options.quiesceProcessGroup || !child.pid || process.platform === "win32") {
+				settle();
+				return;
+			}
+			const target = -child.pid;
+			try { process.kill(target, "SIGTERM"); } catch { /* no surviving descendants */ }
+			setTimeout(() => {
+				try { process.kill(target, "SIGKILL"); } catch { /* group already gone */ }
+				if (killTimer) clearTimeout(killTimer);
+				settle();
+			}, 250);
 		});
 		if (options.timeoutSeconds !== undefined) timeoutTimer = setTimeout(() => killChild("timeout"), options.timeoutSeconds * 1000);
 		if (options.signal?.aborted) abortHandler();

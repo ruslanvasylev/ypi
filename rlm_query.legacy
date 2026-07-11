@@ -41,12 +41,11 @@
 #   RLM_CHILD_MODELS  — comma-separated child-depth model list (depth 1,2,...)
 #   RLM_CHILD_PROVIDERS — comma-separated child-depth provider list (depth 1,2,...)
 #   RLM_CHILD_THINKING_LEVELS — comma-separated child-depth thinking list (depth 1,2,...)
-#   RLM_JJ            — set to "0" to disable jj workspace isolation
+#   RLM_JJ            — ignored by this retained fallback; children are read-only
 #   RLM_EXTENSIONS    — set to "0" to disable Pi extensions (default: 1)
 #   RLM_CHILD_EXTENSIONS — override extensions for depth > 0 (default: same as parent)
 #   RLM_CHILD_DISCOVERY — set to 0 to disable child non-extension skills/templates/themes/context discovery (default: enabled)
-#   RLM_BUDGET        — max dollar spend for entire recursive tree (e.g. "0.50")
-#   RLM_COST_FILE     — shared file tracking cumulative cost (auto‑created)
+#   RLM_COST_FILE     — shared file tracking cumulative cost (auto-created)
 #   RLM_JSON          — set to "0" to disable JSON mode (plain text, no cost tracking)
 #   RLM_TRACE_ID      — shared ID linking all sessions in a recursive tree
 #   RLM_SESSION_DIR   — Pi session directory for this project
@@ -76,6 +75,13 @@ SCRIPT_DIR="$(resolve_script_dir)"
 
 safe_trace_id() {
     printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'
+}
+
+prepare_telemetry_file() {
+    local file="$1"
+    mkdir -p "$(dirname "$file")" 2>/dev/null \
+        && touch "$file" 2>/dev/null \
+        && chmod 600 "$file" 2>/dev/null
 }
 
 with_counter_lock() {
@@ -149,6 +155,10 @@ append_allowed_env() {
     done
     while IFS='=' read -r key _; do
         case "$key" in
+            YPI_EXPLICIT_*|YPI_ALLOW_LOCAL_REMOTE_FOR_TESTS)
+                ;;
+            RLM_BUDGET)
+                ;;
             RLM_*|YPI_*|CONTEXT|PI_TRACE_FILE)
                 CHILD_ENV+=("$key=${!key:-}")
                 ;;
@@ -198,10 +208,11 @@ case "${RLM_TIMEOUT:-}" in *[!0-9]*)
     rlm_error "Invalid RLM_TIMEOUT" "RLM_TIMEOUT='${RLM_TIMEOUT:-}' is not a non-negative integer" "Unset RLM_TIMEOUT or set it to whole seconds >= 0"
     exit 1 ;;
 esac
-if [ -n "${RLM_BUDGET:-}" ] && ! [[ "$RLM_BUDGET" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-    rlm_error "Invalid RLM_BUDGET" "RLM_BUDGET='$RLM_BUDGET' is not a finite non-negative number" "Unset RLM_BUDGET or set it to a non-negative dollar amount"
-    exit 1
-fi
+# Cost is telemetry only. Ignore inherited dollar caps so recursive work never
+# stops because of spend. The retained adapter has no semantic implement mode,
+# so it is always read-only and cannot bypass the canonical writer policy.
+unset RLM_BUDGET
+export RLM_JJ=0
 
 NEXT_DEPTH=$((DEPTH + 1))
 
@@ -240,6 +251,7 @@ SAFE_TRACE_ID="$(safe_trace_id "$RLM_TRACE_ID")"
 # the path-safe value rather than raw user input.
 export RLM_TRACE_ID="$SAFE_TRACE_ID"
 export RLM_CALL_COUNTER_FILE="${RLM_CALL_COUNTER_FILE:-${TMPDIR:-/tmp}/rlm_calls_${SAFE_TRACE_ID}.counter}"
+export PI_TRACE_FILE="${PI_TRACE_FILE:-${TMPDIR:-/tmp}/rlm_trace_${SAFE_TRACE_ID}.jsonl}"
 
 # ----------------------------------------------------------------------
 # Call counting & max‑calls guard
@@ -247,36 +259,16 @@ export RLM_CALL_COUNTER_FILE="${RLM_CALL_COUNTER_FILE:-${TMPDIR:-/tmp}/rlm_calls
 next_call_count
 # RLM_MAX_CALLS=N permits calls 1..N; only the (N+1)th invocation is rejected.
 if [ -n "${RLM_MAX_CALLS:-}" ] && [ "$RLM_CALL_COUNT" -gt "$RLM_MAX_CALLS" ]; then
-    rlm_error "Max calls exceeded" "$RLM_MAX_CALLS of $RLM_MAX_CALLS calls already used" "Increase RLM_MAX_CALLS or reduce recursion depth"
+    rlm_error "Max calls exceeded" "$RLM_MAX_CALLS of $RLM_MAX_CALLS child calls already used" "Continue the task directly without spawning more children"
     exit 1
 fi
 
-# Initialize cost file if budget is set but no file exists yet
-if [ -n "${RLM_BUDGET:-}" ] && [ -z "${RLM_COST_FILE:-}" ]; then
+# Cost telemetry is always available in JSON mode, independently of any cap.
+if [ -z "${RLM_COST_FILE:-}" ]; then
     export RLM_COST_FILE="${TMPDIR:-/tmp}/rlm_cost_${SAFE_TRACE_ID}.jsonl"
 fi
-
-# ----------------------------------------------------------------------
-# Budget guard — check cumulative cost before proceeding
-# ----------------------------------------------------------------------
-if [ -n "${RLM_BUDGET:-}" ] && [ -n "${RLM_COST_FILE:-}" ] && [ -f "$RLM_COST_FILE" ]; then
-    CURRENT_COST=$(python3 -c "
-import json
-total = 0.0
-with open('$RLM_COST_FILE') as f:
-    for line in f:
-        line = line.strip()
-        if line:
-            try: total += json.loads(line).get('cost', 0)
-            except: pass
-print(f'{total:.6f}')
-" 2>/dev/null || echo "0")
-    OVER=$(python3 -c "print('yes' if $CURRENT_COST >= $RLM_BUDGET else 'no')" 2>/dev/null || echo "no")
-    if [ "$OVER" = "yes" ]; then
-        rlm_error "Budget exceeded" "Spent \$$CURRENT_COST of \$$RLM_BUDGET budget" "Increase RLM_BUDGET or simplify the task"
-        exit 1
-    fi
-fi
+prepare_telemetry_file "$PI_TRACE_FILE" || unset PI_TRACE_FILE
+prepare_telemetry_file "$RLM_COST_FILE" || unset RLM_COST_FILE
 
 CHILD_SESSION_FILE=""
 if [ "${RLM_SHARED_SESSIONS:-1}" != "0" ] && [ -n "${RLM_SESSION_DIR:-}" ]; then
@@ -290,11 +282,9 @@ if [ "${RLM_SHARED_SESSIONS:-1}" != "0" ] && [ -n "${RLM_SESSION_DIR:-}" ]; then
 fi
 
 # ----------------------------------------------------------------------
-# Trace logging (optional)
+# Trace logging (task text stays in the private prompt artifact, not telemetry)
 # ----------------------------------------------------------------------
-if [ -n "${PI_TRACE_FILE:-}" ]; then
-    echo "[$(date +%H:%M:%S.%3N)] depth=$DEPTH→$NEXT_DEPTH PID=$$ PPID=$PPID call=$RLM_CALL_COUNT trace=$RLM_TRACE_ID fork=$FORK prompt: ${PROMPT:0:120}" >> "$PI_TRACE_FILE"
-fi
+[ -z "${PI_TRACE_FILE:-}" ] || echo "[$(date +%H:%M:%S.%3N)] depth=$DEPTH→$NEXT_DEPTH PID=$$ PPID=$PPID call=$RLM_CALL_COUNT trace=$RLM_TRACE_ID fork=$FORK" >> "$PI_TRACE_FILE" 2>/dev/null || unset PI_TRACE_FILE
 
 # ----------------------------------------------------------------------
 # Temporary child context file
@@ -308,7 +298,7 @@ PROMPT_FILE=$(mktemp "${TMPDIR:-/tmp}/rlm_prompt_d${NEXT_DEPTH}.XXXXXX")
 printf '%s' "$PROMPT" > "$PROMPT_FILE"
 
 # ----------------------------------------------------------------------
-# jj workspace isolation — give recursive children their own working copy
+# Retained workspace code is disabled by the read-only fallback policy above.
 # ----------------------------------------------------------------------
 JJ_WORKSPACE=""
 JJ_WS_NAME=""
@@ -418,7 +408,6 @@ export RLM_START_TIME="${RLM_START_TIME}"
 export RLM_TIMEOUT="${RLM_TIMEOUT:-}"
 export RLM_TRACE_ID="${RLM_TRACE_ID}"
 export RLM_SESSION_DIR="${RLM_SESSION_DIR:-}"
-export RLM_BUDGET="${RLM_BUDGET:-}"
 export RLM_COST_FILE="${RLM_COST_FILE:-}"
 export RLM_SHARED_SESSIONS="${RLM_SHARED_SESSIONS:-1}"
 export YPI_EXTENSION_ROOT="${YPI_EXTENSION_ROOT:-}"
@@ -426,8 +415,8 @@ export YPI_EXTENSION_PATH="${YPI_EXTENSION_PATH:-}"
 export YPI_EXTENSION_PROMPT_MODE="${YPI_EXTENSION_PROMPT_MODE:-}"
 
 # At max depth: remove rlm_query from PATH so the child can't recurse.
-# The child still gets full tools (bash, read, write, edit) — it just
-# can't spawn sub-agents. The depth guard above is a safety net.
+# The child keeps its read-only tool profile but cannot spawn sub-agents.
+# The depth guard above is a safety net.
 if [ "$NEXT_DEPTH" -ge "$MAX_DEPTH" ]; then
     export PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "^${SCRIPT_DIR}$" | paste -sd ':' -)
 fi
@@ -445,7 +434,7 @@ CMD_ARGS=(-p)
 [ -n "$MODEL" ] && CMD_ARGS+=(--model "$MODEL")
 [ -n "$THINKING_LEVEL" ] && CMD_ARGS+=(--thinking "$THINKING_LEVEL")
 
-if [ -z "$JJ_WORKSPACE" ] && [ "${RLM_UNSAFE_NO_JJ_WRITE:-0}" != "1" ]; then
+if [ -z "$JJ_WORKSPACE" ]; then
     # Avoid --tools here: Pi treats it as a global allowlist across built-in,
     # extension, and custom tools, which would hide installed package tools.
     # Exclude built-in mutators instead so explicitly loaded canonical extension tools remain
@@ -453,18 +442,13 @@ if [ -z "$JJ_WORKSPACE" ] && [ "${RLM_UNSAFE_NO_JJ_WRITE:-0}" != "1" ]; then
     CMD_ARGS+=(--exclude-tools bash,edit,write)
 fi
 
-# Extensions and skills: on by default so installed Pi packages behave in
-# recursive children the same way they do in the root session. Use
-# RLM_CHILD_EXTENSIONS=0 for package/extension isolation and
-# RLM_CHILD_DISCOVERY=0 for non-extension skill/template/theme/context isolation.
+# Retained review fallback is canonical-only. Ambient extension tools must not
+# silently reintroduce write capability.
+CMD_ARGS+=(--no-extensions)
 CHILD_EXT="${RLM_EXTENSIONS:-1}"
 if [ "$NEXT_DEPTH" -gt 0 ] && [ -n "${RLM_CHILD_EXTENSIONS:-}" ]; then
     CHILD_EXT="${RLM_CHILD_EXTENSIONS}"
 fi
-if [ "$CHILD_EXT" = "0" ]; then
-    CMD_ARGS+=(--no-extensions)
-fi
-
 if [ "${RLM_CHILD_DISCOVERY:-1}" = "0" ]; then
     CMD_ARGS+=(--no-skills --no-prompt-templates --no-themes --no-context-files --no-approve)
 fi
@@ -653,7 +637,7 @@ if [ "${RLM_JSON:-1}" != "0" ]; then
 
     # Record cost if we got data
     if [ -s "$COST_OUT" ] && [ -n "${RLM_COST_FILE:-}" ]; then
-        cat "$COST_OUT" >> "$RLM_COST_FILE"
+        cat "$COST_OUT" >> "$RLM_COST_FILE" 2>/dev/null || unset RLM_COST_FILE
     fi
     if [ "$RC" -ne 0 ] && [ -s "$ERR_OUT" ]; then
         cat "$ERR_OUT" >&2
@@ -663,10 +647,10 @@ if [ "${RLM_JSON:-1}" != "0" ]; then
     if [ -s "$COST_OUT" ] && [ -n "${PI_TRACE_FILE:-}" ]; then
         COST_DATA=$(cat "$COST_OUT")
         ELAPSED=$(( $(date +%s) - RLM_START_TIME ))
-        echo "[$(date +%Y-%m-%dT%H:%M:%S%z)] depth=$DEPTH COMPLETED exit=$RC elapsed=${ELAPSED}s cost=$COST_DATA" >> "$PI_TRACE_FILE"
+        echo "[$(date +%Y-%m-%dT%H:%M:%S%z)] depth=$DEPTH COMPLETED exit=$RC elapsed=${ELAPSED}s cost=$COST_DATA" >> "$PI_TRACE_FILE" 2>/dev/null || unset PI_TRACE_FILE
     elif [ -n "${PI_TRACE_FILE:-}" ]; then
         ELAPSED=$(( $(date +%s) - RLM_START_TIME ))
-        echo "[$(date +%Y-%m-%dT%H:%M:%S%z)] depth=$DEPTH COMPLETED exit=$RC elapsed=${ELAPSED}s" >> "$PI_TRACE_FILE"
+        echo "[$(date +%Y-%m-%dT%H:%M:%S%z)] depth=$DEPTH COMPLETED exit=$RC elapsed=${ELAPSED}s" >> "$PI_TRACE_FILE" 2>/dev/null || unset PI_TRACE_FILE
     fi
 else
     # Plain text mode (RLM_JSON=0): no cost tracking
@@ -677,7 +661,7 @@ else
 
     if [ -n "${PI_TRACE_FILE:-}" ]; then
         ELAPSED=$(( $(date +%s) - RLM_START_TIME ))
-        echo "[$(date +%Y-%m-%dT%H:%M:%S%z)] depth=$DEPTH COMPLETED exit=$RC elapsed=${ELAPSED}s" >> "$PI_TRACE_FILE"
+        echo "[$(date +%Y-%m-%dT%H:%M:%S%z)] depth=$DEPTH COMPLETED exit=$RC elapsed=${ELAPSED}s" >> "$PI_TRACE_FILE" 2>/dev/null || unset PI_TRACE_FILE
     fi
 fi
 

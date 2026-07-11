@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -74,11 +74,22 @@ function ensureCallCounterFile(): void {
 	process.env.RLM_CALL_COUNTER_FILE = path.join(tmpdir(), `rlm_calls_${process.env.RLM_TRACE_ID}.counter`);
 }
 
-function ensureCostFile(): void {
-	if (!process.env.RLM_BUDGET || process.env.RLM_COST_FILE) {
-		return;
+function ensurePrivateTelemetryFile(variable: "PI_TRACE_FILE" | "RLM_COST_FILE", prefix: string): void {
+	if (!process.env[variable]) {
+		process.env[variable] = path.join(tmpdir(), `${prefix}_${process.env.RLM_TRACE_ID}.jsonl`);
 	}
-	process.env.RLM_COST_FILE = path.join(tmpdir(), `rlm_cost_${process.env.RLM_TRACE_ID}.jsonl`);
+	const filePath = process.env[variable];
+	if (!filePath) return;
+	try {
+		mkdirSync(path.dirname(filePath), { recursive: true });
+		const descriptor = openSync(filePath, "a", 0o600);
+		closeSync(descriptor);
+		chmodSync(filePath, 0o600);
+	} catch {
+		// Telemetry is observational. An unwritable or invalid sink must never
+		// prevent product work from starting.
+		delete process.env[variable];
+	}
 }
 
 export function ensureEnvironment(runtime: YpiRuntime, ctx?: ExtensionContext, pi?: ExtensionAPI): void {
@@ -86,18 +97,23 @@ export function ensureEnvironment(runtime: YpiRuntime, ctx?: ExtensionContext, p
 	process.env.RLM_MAX_DEPTH = process.env.RLM_MAX_DEPTH || String(DEFAULT_MAX_DEPTH);
 	process.env.RLM_MAX_CALLS = process.env.RLM_MAX_CALLS || String(DEFAULT_MAX_CALLS);
 	process.env.RLM_SYSTEM_PROMPT = process.env.RLM_SYSTEM_PROMPT || runtime.systemPromptPath;
-	process.env.RLM_JJ = process.env.RLM_JJ || "1";
+	process.env.RLM_JJ = process.env.RLM_JJ || "auto";
 	process.env.RLM_EXTENSIONS = process.env.RLM_EXTENSIONS || "1";
 	process.env.RLM_JSON = process.env.RLM_JSON || "1";
 	process.env.RLM_SHARED_SESSIONS = process.env.RLM_SHARED_SESSIONS || "1";
 	process.env.RLM_TRACE_ID = safeTraceId(process.env.RLM_TRACE_ID || randomBytes(4).toString("hex"));
+	// Dollar caps are deliberately unsupported. Cost remains observable telemetry,
+	// never an admission or termination condition.
+	delete process.env.RLM_BUDGET;
+	delete process.env.RLM_UNSAFE_NO_JJ_WRITE;
 	// RLM_START_TIME anchors the wall-clock timeout budget at the moment a recursion tree
 	// begins, not at extension load. Seeding it here would freeze a long-running root Pi's
 	// budget at session start; the native tool and shell rlm_query set it at the depth-0 call.
 	process.env.YPI_EXTENSION_ROOT = runtime.root;
 	process.env.YPI_EXTENSION_PATH = runtime.extensionPath;
 	ensureCallCounterFile();
-	ensureCostFile();
+	ensurePrivateTelemetryFile("PI_TRACE_FILE", "rlm_trace");
+	ensurePrivateTelemetryFile("RLM_COST_FILE", "rlm_cost");
 
 	if (shouldExposeRecursion() && shellHelperEnabled(runtime)) {
 		prependPath(runtime.root);

@@ -333,19 +333,23 @@ OUTPUT=$(
 assert_file_exists "T10: trace file created" "$TRACE_FILE"
 TRACE_CONTENT=$(cat "$TRACE_FILE")
 assert_contains "T10: trace has depth" "depth=0→1" "$TRACE_CONTENT"
-assert_contains "T10: trace has prompt" "Traced question" "$TRACE_CONTENT"
+assert_not_contains "T10: trace excludes private prompt text" "Traced question" "$TRACE_CONTENT"
 
-# T11: no trace file when PI_TRACE_FILE is unset
-rm -f "$TEST_TMP/no_trace.log"
+# T11: an automatic private trace is created when no path is supplied.
+AUTO_TRACE="$TEST_TMP/rlm_trace_auto-trace.jsonl"
+rm -f "$AUTO_TRACE"
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=0 \
     RLM_MAX_DEPTH=3 \
     RLM_PROVIDER=test-provider \
     RLM_MODEL=test-model \
-    rlm_query "Untraced question?"
+    RLM_TRACE_ID=auto-trace \
+    rlm_query "Automatically traced question?"
 )
-assert_file_not_exists "T11: no trace file when unset" "$TEST_TMP/no_trace.log"
+assert_file_exists "T11: automatic trace file created" "$AUTO_TRACE"
+if [ "$(stat -c '%a' "$AUTO_TRACE")" = "600" ]; then pass "T11: automatic trace is private"; else fail "T11: automatic trace is private" "mode=$(stat -c '%a' "$AUTO_TRACE")"; fi
+assert_not_contains "T11: automatic trace excludes prompt text" "Automatically traced question" "$(cat "$AUTO_TRACE")"
 
 # ─── Test Group: Edge Cases ───────────────────────────────────────────────
 
@@ -407,6 +411,7 @@ OUTPUT=$(
 assert_not_contains "T14e: launcher does not hardcode provider" "--provider" "$OUTPUT"
 assert_not_contains "T14e: launcher does not hardcode model" "--model" "$OUTPUT"
 assert_contains "T14e: launcher loads canonical extension" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
+assert_contains "T14e: launcher explicitly loads packaged skills" "--skill $PROJECT_DIR/skills" "$OUTPUT"
 assert_not_contains "T14e: launcher does not limit tools" "--tools" "$OUTPUT"
 assert_not_contains "T14e: launcher does not build system prompt" "--system-prompt" "$OUTPUT"
 

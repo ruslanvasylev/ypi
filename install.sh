@@ -3,7 +3,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/rawwerks/ypi/master/install.sh | bash
 #
 # Installs ypi + Pi coding agent. Requires: Node.js >= 22.19, bun (or npm), git, bash.
-# Optional: jj (for workspace isolation), sops + age (for encrypted notes)
+# Optional: sops + age (for encrypted notes). Existing jj checkouts are detected,
+# but the installer never adds or initializes VCS tooling.
 
 set -euo pipefail
 
@@ -118,7 +119,7 @@ dim "Required:"
 command -v pi &>/dev/null && dim "  ✓ pi ($(which pi))" || dim "  ✗ pi"
 echo ""
 dim "Optional:"
-command -v jj &>/dev/null && dim "  ✓ jj (workspace isolation)" || dim "  · jj — install for workspace isolation: https://martinvonz.github.io/jj/"
+command -v jj &>/dev/null && dim "  ✓ existing jj executable detected (used only in repositories already configured for jj)" || dim "  · jj not present (normal Git repositories remain fully supported)"
 echo ""
 echo -e "${BOLD}Get started:${RESET}"
 echo "  ypi                    # interactive"

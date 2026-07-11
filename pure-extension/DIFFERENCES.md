@@ -58,8 +58,9 @@ Run on 2026-06-15 with `openrouter/openai/gpt-5.5:xhigh`:
 
 - Minimal pure extension command copied only `extensions/**` into a scratch root,
   then started `pi` directly with `-e`. The scratch root contained no `ypi`
-  launcher, no shell `rlm_query`, and no `SYSTEM_PROMPT.md`; the run also set
-  `RLM_JJ=0`. It returned `EXTENSION_RECURSION_OK`, and the trace showed
+  launcher, no shell `rlm_query`, and no `SYSTEM_PROMPT.md`. It returned
+  `EXTENSION_RECURSION_OK`; current review mode obtains the same no-workspace
+  behavior automatically. The trace showed
   `depth=0→1` and `depth=1→2` with `caller=tool jj=off`.
 - Pure extension command started `pi` directly with `-e ./extensions/recursive.ts`.
   It returned `PURE_COMPARE_OK`, and its trace showed `depth=0→1` and
@@ -73,7 +74,7 @@ Run on 2026-06-15 with `openrouter/openai/gpt-5.5:xhigh`:
 
 ## Remaining Parity Work
 
-- Add CI/live tests for budget/cost JSON mode, timeout, session logs, child
-  extension inheritance, and `--fork`.
+- Add CI/live tests for observational cost JSON telemetry, explicit-timeout
+  compatibility, session logs, canonical child-extension loading, and `--fork`.
 - Decide whether Pi needs a first-class extension API for scoped bash env vars;
   the current prototype relies on process-global env mutation.

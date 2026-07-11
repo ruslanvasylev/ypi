@@ -36,6 +36,10 @@ assert_exit_code() {
     local label="$1" expected="$2" actual="$3"
     if [ "$expected" = "$actual" ]; then pass "$label"; else fail "$label" "expected exit $expected, got $actual"; fi
 }
+assert_file_exists() {
+    local label="$1" path="$2"
+    if [ -f "$path" ]; then pass "$label"; else fail "$label" "file should exist: $path"; fi
+}
 assert_file_not_exists() {
     local label="$1" path="$2"
     if [ ! -f "$path" ]; then pass "$label"; else fail "$label" "file should not exist: $path"; fi
@@ -233,33 +237,26 @@ assert_not_contains "G4b: expired stdin budget spawns no child" "MOCK_PI_CALLED"
 assert_contains "G4b: expired stdin budget is explicit" "Timeout exceeded" "$OUTPUT"
 if [ "$STDIN_TIMEOUT_MS" -lt 1800 ]; then pass "G4b: active deadline interrupts an open stdin pipe"; else fail "G4b: active deadline interrupts an open stdin pipe" "elapsed=${STDIN_TIMEOUT_MS}ms"; fi
 
-# G4c: synchronous jj discovery/setup is bounded by the same invocation deadline.
+# G4c: read-only review never invokes jj setup, so a slow or broken jj binary
+# cannot delay normal recursion or change repository state.
 cat > "$MOCK_BIN/jj" <<'SLOWJJ'
 #!/bin/bash
-if [ "${1:-}" = "root" ]; then exit 0; fi
-if [ "${1:-}" = "workspace" ] && [ "${2:-}" = "forget" ]; then rm -f "$YPI_JJ_REGISTRY_FILE"; exit 0; fi
-if [ "${1:-}" = "workspace" ] && [ "${2:-}" = "add" ]; then printf 'registered\n' > "$YPI_JJ_REGISTRY_FILE"; sleep 30; fi
-exit 0
+printf 'unexpected jj call\n' >> "$YPI_JJ_REGISTRY_FILE"
+sleep 30
 SLOWJJ
 chmod +x "$MOCK_BIN/jj"
 START_NS=$(python3 -c 'import time; print(time.monotonic_ns())')
-set +e
 OUTPUT=$(
-    CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_TIMEOUT=1 \
-    RLM_JJ=1 RLM_CALL_COUNTER_FILE="$TEST_TMP/jj-timeout.counter" YPI_JJ_REGISTRY_FILE="$TEST_TMP/jj-registry" \
-    rlm_query "Bound jj setup" 2>&1
+    CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
+    RLM_JJ=auto RLM_CALL_COUNTER_FILE="$TEST_TMP/jj-review.counter" YPI_JJ_REGISTRY_FILE="$TEST_TMP/jj-registry" \
+    rlm_query "Read-only review skips jj setup" 2>&1
 )
-JJ_TIMEOUT_RC=$?
-set -e
 END_NS=$(python3 -c 'import time; print(time.monotonic_ns())')
-JJ_TIMEOUT_MS=$(( (END_NS - START_NS) / 1000000 ))
+JJ_REVIEW_MS=$(( (END_NS - START_NS) / 1000000 ))
 rm -f "$MOCK_BIN/jj"
-assert_eq "G4c: jj setup timeout exits 124" "124" "$JJ_TIMEOUT_RC"
-assert_not_contains "G4c: expired jj setup spawns no child" "MOCK_PI_CALLED" "$OUTPUT"
-assert_contains "G4c: jj setup timeout is explicit" "RLM_TIMEOUT expired during jj workspace add" "$OUTPUT"
-if find "$TEST_TMP" -maxdepth 1 -type d -name 'ypi_ws_d1_*' -print -quit | grep -q .; then fail "G4c: timed-out jj add cleans provisional workspace" "stale workspace"; else pass "G4c: timed-out jj add cleans provisional workspace"; fi
-if [ -e "$TEST_TMP/jj-registry" ]; then fail "G4c: timed-out jj add forgets provisional registration" "stale registry"; else pass "G4c: timed-out jj add forgets provisional registration"; fi
-if [ "$JJ_TIMEOUT_MS" -lt 3000 ]; then pass "G4c: jj setup obeys the invocation deadline"; else fail "G4c: jj setup obeys the invocation deadline" "elapsed=${JJ_TIMEOUT_MS}ms"; fi
+assert_contains "G4c: read-only review still runs child" "MOCK_PI_CALLED" "$OUTPUT"
+if [ -e "$TEST_TMP/jj-registry" ]; then fail "G4c: read-only review never invokes jj" "jj was called"; else pass "G4c: read-only review never invokes jj"; fi
+if [ "$JJ_REVIEW_MS" -lt 3000 ]; then pass "G4c: unavailable jj adds no setup delay"; else fail "G4c: unavailable jj adds no setup delay" "elapsed=${JJ_REVIEW_MS}ms"; fi
 
 # G4d: the shared call-counter lock cannot outlive the tree deadline.
 COUNTER_FILE="$TEST_TMP/deadline-lock.counter"
@@ -709,7 +706,7 @@ exit 0
 MOCK_JJ
 chmod +x "$MOCK_BIN/jj"
 
-# G12: workspace created for non-leaf depth when jj available
+# G12: review mode does not create a workspace even when jj is available
 rm -f "$JJ_LOG"
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
@@ -718,9 +715,9 @@ OUTPUT=$(
     rlm_query "Check JJ workspace"
 )
 if [ -f "$JJ_LOG" ] && grep -qF -- "workspace add" "$JJ_LOG"; then
-    pass "G12: JJ workspace created for non-leaf depth"
+    fail "G12: review avoids unnecessary JJ workspace" "jj workspace add was called"
 else
-    fail "G12: JJ workspace created for non-leaf depth" "jj workspace add not called"
+    pass "G12: review avoids unnecessary JJ workspace"
 fi
 
 # G13: RLM_JJ=0 disables workspace creation
@@ -740,7 +737,7 @@ fi
 assert_contains "G13: no-jj read-only excludes mutating built-ins" "--exclude-tools bash,edit,write" "$OUTPUT"
 assert_not_contains "G13: no-jj read-only does not allowlist away extension tools" "--tools read,grep,find,ls,rlm_query" "$OUTPUT"
 
-# G14: Max depth nodes still get workspaces (they have tools now)
+# G14: max-depth review nodes remain read-only and avoid workspaces
 rm -f "$JJ_LOG"
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
@@ -749,13 +746,12 @@ OUTPUT=$(
     rlm_query "Max depth"
 )
 if [ -f "$JJ_LOG" ] && grep -qF -- "workspace add" "$JJ_LOG"; then
-    pass "G14: max depth gets JJ workspace"
+    fail "G14: max-depth review avoids JJ workspace" "jj workspace add was called"
 else
-    fail "G14: max depth gets JJ workspace" "jj workspace add not called"
+    pass "G14: max-depth review avoids JJ workspace"
 fi
 
-# G15: automatic jj unavailability requires an explicit mode choice instead of
-# silently downgrading a potentially writable task to read-only.
+# G15: automatic jj unavailability is invisible to read-only review.
 SAVED_PATH="$PATH"
 PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "$MOCK_BIN" | paste -sd ':' -)
 PATH="$PROJECT_DIR:$PATH"  # keep rlm_query on PATH
@@ -766,9 +762,9 @@ OUTPUT=$(
     PATH="$PATH" \
     rlm_query "No jj present" 2>&1 || true
 )
-assert_contains "G15: missing jj requires explicit mode choice" "jj workspace isolation unavailable" "$OUTPUT"
-assert_contains "G15: missing jj explains read-only choice" "RLM_JJ=0" "$OUTPUT"
-assert_not_contains "G15: missing jj spawns no child" "MOCK_PI_CALLED" "$OUTPUT"
+assert_contains "G15: missing jj silently proceeds in review mode" "MOCK_PI_CALLED" "$OUTPUT"
+assert_contains "G15: automatic non-jj review excludes mutators" "--exclude-tools bash,edit,write" "$OUTPUT"
+assert_not_contains "G15: automatic review never recommends jj initialization" "jj git init" "$OUTPUT"
 
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
@@ -785,11 +781,11 @@ OUTPUT=$(
     RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=1 RLM_UNSAFE_NO_JJ_WRITE=1 \
     RLM_PROVIDER=test RLM_MODEL=test \
     PATH="$PATH" \
-    rlm_query "Explicit no-jj writable" 2>&1
+    rlm_query "Legacy unsafe flag is ignored" 2>&1
 )
 PATH="$SAVED_PATH"
-assert_contains "G15: explicit unsafe no-jj write proceeds" "MOCK_PI_CALLED" "$OUTPUT"
-assert_not_contains "G15: explicit unsafe mode keeps mutators" "--exclude-tools bash,edit,write" "$OUTPUT"
+assert_contains "G15: legacy unsafe flag cannot block review" "MOCK_PI_CALLED" "$OUTPUT"
+assert_contains "G15: legacy unsafe flag cannot grant mutators" "--exclude-tools bash,edit,write" "$OUTPUT"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -869,16 +865,18 @@ else
     fail "G18: elapsed in trace" "no elapsed= in trace"
 fi
 
-# G19: No COMPLETED when PI_TRACE_FILE unset
-TRACE_FILE2="$TEST_TMP/no_summary_trace.log"
+# G19: Automatic trace captures lifecycle when no explicit path is supplied.
+TRACE_FILE2="$TEST_TMP/rlm_trace_auto-summary.jsonl"
 rm -f "$TRACE_FILE2"
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
-    RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
+    RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_TRACE_ID=auto-summary \
     RLM_PROVIDER=test RLM_MODEL=test \
-    rlm_query "No trace test"
+    rlm_query "Private auto trace text"
 )
-assert_file_not_exists "G19: no trace file when unset" "$TRACE_FILE2"
+assert_file_exists "G19: automatic lifecycle trace exists" "$TRACE_FILE2"
+assert_contains "G19: automatic trace records completion" "COMPLETED" "$(cat "$TRACE_FILE2")"
+assert_not_contains "G19: automatic trace excludes prompt text" "Private auto trace text" "$(cat "$TRACE_FILE2")"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1234,14 +1232,14 @@ assert_contains "G38c: full isolation prevents package installation" "PI_OFFLINE
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# BUDGET / COST TESTS
+# COST TELEMETRY / DOLLAR-CAP NON-ENFORCEMENT TESTS
 # ═══════════════════════════════════════════════════════════════════════════
 
 echo ""
-echo "=== Budget & Cost ==="
+echo "=== Cost telemetry (dollar caps ignored) ==="
 
 # Restore standard mock; emit Pi JSON events when the canonical runtime requests
-# measurable JSON mode for budget accounting.
+# measurable JSON mode for observational cost accounting.
 cat > "$MOCK_BIN/pi" << 'MOCK_PI'
 #!/bin/bash
 if printf '%s\n' "$*" | grep -q -- '--mode json'; then
@@ -1256,42 +1254,40 @@ fi
 MOCK_PI
 chmod +x "$MOCK_BIN/pi"
 
-# G39: no budget by default — RLM_BUDGET not set, call succeeds
+# G39: an inherited dollar cap is ignored; product work still runs.
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
     RLM_PROVIDER=test RLM_MODEL=test \
-    RLM_JSON=0 \
-    rlm_query "No budget test"
+    RLM_JSON=0 RLM_BUDGET=0 \
+    rlm_query "Cost telemetry only"
 )
-assert_contains "G39: no budget succeeds" "MOCK_PI_CALLED" "$OUTPUT"
+assert_contains "G39: inherited dollar cap never stops work" "MOCK_PI_CALLED" "$OUTPUT"
 
-# G40: budget accounting requires measurable JSON output through every adapter.
-OUTPUT=$(
-    CONTEXT="$TEST_TMP/ctx.txt" \
-    RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
-    RLM_PROVIDER=test RLM_MODEL=test \
-    RLM_JSON=0 RLM_BUDGET=1.00 \
-    rlm_query "Unmeasurable budget" 2>&1 || true
-)
-assert_contains "G40: budget rejects unmeasurable plain mode" "RLM_BUDGET requires RLM_JSON=1" "$OUTPUT"
-
-# G40b: budget set with JSON measurement and no prior spend proceeds.
+# G40: JSON mode records cost telemetry without requiring a cap.
 COST_FILE=$(mktemp "${TMPDIR:-/tmp}/rlm_cost_test.jsonl.XXXXXX")
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
     RLM_PROVIDER=test RLM_MODEL=test \
-    RLM_JSON=1 \
-    RLM_BUDGET=1.00 \
-    RLM_COST_FILE="$COST_FILE" \
-    rlm_query "Budget with no spend"
+    RLM_JSON=1 RLM_COST_FILE="$COST_FILE" \
+    rlm_query "Record telemetry"
 )
-assert_contains "G40b: measurable budget with no spend proceeds" "MOCK_PI_CALLED" "$OUTPUT"
+assert_contains "G40: telemetry child succeeds" "MOCK_PI_CALLED" "$OUTPUT"
+assert_contains "G40: telemetry ledger records cost" '"cost":0.01' "$(cat "$COST_FILE")"
 rm -f "$COST_FILE"
 
-# G40c: a failed measurable child without turn_end poisons the shared ledger
-# rather than recording authoritative zero cost and admitting more spend.
+# G40b: even malformed inherited dollar limits are discarded, not validated.
+OUTPUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" \
+    RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
+    RLM_PROVIDER=test RLM_MODEL=test \
+    RLM_JSON=0 RLM_BUDGET=not-a-number \
+    rlm_query "Ignore malformed cap"
+)
+assert_contains "G40b: malformed dollar cap does not block work" "MOCK_PI_CALLED" "$OUTPUT"
+
+# G40c: incomplete telemetry is recorded honestly but never blocks later work.
 cat > "$MOCK_BIN/pi" << 'NOENDPI'
 #!/bin/bash
 printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"PARTIAL"}}'
@@ -1301,75 +1297,36 @@ chmod +x "$MOCK_BIN/pi"
 COST_FILE=$(mktemp "${TMPDIR:-/tmp}/rlm_cost_incomplete.jsonl.XXXXXX")
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JSON=1 \
-    RLM_BUDGET=1.00 RLM_COST_FILE="$COST_FILE" \
+    RLM_BUDGET=0 RLM_COST_FILE="$COST_FILE" \
     RLM_CALL_COUNTER_FILE="$TEST_TMP/incomplete-cost.counter" \
-    rlm_query "Unknown failed spend" 2>&1 || true
+    rlm_query "Unknown failed telemetry" 2>&1 || true
 )
-assert_contains "G40c: missing turn_end records incomplete budget state" '"incomplete":true' "$(cat "$COST_FILE")"
-OUTPUT=$(
-    CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JSON=1 \
-    RLM_BUDGET=1.00 RLM_COST_FILE="$COST_FILE" \
-    RLM_CALL_COUNTER_FILE="$TEST_TMP/incomplete-cost.counter" \
-    rlm_query "Must not spend again" 2>&1 || true
-)
-assert_contains "G40c: incomplete budget state blocks later admission" "Budget accounting is incomplete" "$OUTPUT"
-rm -f "$COST_FILE"
+assert_contains "G40c: missing turn_end records incomplete telemetry" '"incomplete":true' "$(cat "$COST_FILE")"
 cat > "$MOCK_BIN/pi" << 'MOCK_PI'
 #!/bin/bash
-if printf '%s\n' "$*" | grep -q -- '--mode json'; then
-    printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"MOCK_PI_CALLED"}}'
-    printf '%s\n' '{"type":"turn_end","message":{"usage":{"totalTokens":1,"cost":{"total":0.01}}},"toolResults":[]}'
-else
-    echo "MOCK_PI_CALLED"
-    echo "ARGS: $*"
-    echo "RLM_DEPTH=$RLM_DEPTH"
-    echo "RLM_MODEL=$RLM_MODEL"
-fi
+printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"MOCK_PI_CALLED"}}'
+printf '%s\n' '{"type":"turn_end","message":{"usage":{"totalTokens":1,"cost":{"total":0.01}}},"toolResults":[]}'
 MOCK_PI
 chmod +x "$MOCK_BIN/pi"
-
-# G41: budget exceeded — cost file shows spend over budget
-COST_FILE=$(mktemp "${TMPDIR:-/tmp}/rlm_cost_test.jsonl.XXXXXX")
-echo '{"cost": 0.60, "tokens": 5000}' > "$COST_FILE"
-echo '{"cost": 0.45, "tokens": 4000}' >> "$COST_FILE"
 OUTPUT=$(
-    CONTEXT="$TEST_TMP/ctx.txt" \
-    RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
-    RLM_PROVIDER=test RLM_MODEL=test \
-    RLM_JSON=1 \
-    RLM_BUDGET=1.00 \
-    RLM_COST_FILE="$COST_FILE" \
-    rlm_query "Over budget" 2>&1 || true
+    CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JSON=1 \
+    RLM_BUDGET=0 RLM_COST_FILE="$COST_FILE" \
+    RLM_CALL_COUNTER_FILE="$TEST_TMP/incomplete-cost.counter" \
+    rlm_query "Continue after incomplete telemetry"
 )
-assert_contains "G41: budget exceeded" "Budget exceeded" "$OUTPUT"
+assert_contains "G40c: incomplete telemetry never blocks later admission" "MOCK_PI_CALLED" "$OUTPUT"
 rm -f "$COST_FILE"
 
-# G42: budget not exceeded — cost under limit
+# G41: a pre-existing high cost total is observable, never an admission gate.
 COST_FILE=$(mktemp "${TMPDIR:-/tmp}/rlm_cost_test.jsonl.XXXXXX")
-echo '{"cost": 0.30, "tokens": 3000}' > "$COST_FILE"
+echo '{"cost": 100.00, "tokens": 5000}' > "$COST_FILE"
 OUTPUT=$(
-    CONTEXT="$TEST_TMP/ctx.txt" \
-    RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
-    RLM_PROVIDER=test RLM_MODEL=test \
-    RLM_JSON=1 \
-    RLM_BUDGET=1.00 \
-    RLM_COST_FILE="$COST_FILE" \
-    rlm_query "Under budget"
+    CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JSON=1 \
+    RLM_BUDGET=0 RLM_COST_FILE="$COST_FILE" \
+    rlm_query "Continue product work"
 )
-assert_contains "G42: under budget proceeds" "MOCK_PI_CALLED" "$OUTPUT"
+assert_contains "G41: accumulated cost never stops product work" "MOCK_PI_CALLED" "$OUTPUT"
 rm -f "$COST_FILE"
-
-# G43: RLM_COST_FILE propagated to children
-OUTPUT=$(
-    CONTEXT="$TEST_TMP/ctx.txt" \
-    RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
-    RLM_PROVIDER=test RLM_MODEL=test \
-    RLM_JSON=1 \
-    RLM_BUDGET=5.00 \
-    rlm_query "Budget propagation test"
-)
-# Budget creates a cost file automatically
-assert_contains "G43: budget propagation proceeds" "MOCK_PI_CALLED" "$OUTPUT"
 
 # G44: rlm_cost with no cost file returns $0
 OUTPUT=$(
@@ -1401,6 +1358,21 @@ assert_contains "G46: rlm_cost json has cost" "0.3" "$OUTPUT"
 assert_contains "G46: rlm_cost json has tokens" "3000" "$OUTPUT"
 assert_contains "G46: rlm_cost json has calls" '"calls": 2' "$OUTPUT"
 rm -f "$COST_FILE"
+
+# G46b: retained JSON parser emits one newline-delimited cost record per call.
+PARSER_COST_FILE="$TEST_TMP/parser_cost.jsonl"
+: > "$PARSER_COST_FILE"
+for _ in 1 2; do
+    printf '%s\n' '{"type":"turn_end","message":{"usage":{"totalTokens":2,"cost":{"total":0.1}}}}' \
+        | python3 "$PROJECT_DIR/rlm_parse_json" 3>>"$PARSER_COST_FILE"
+done
+PARSER_COST_LINES="$(python3 - "$PARSER_COST_FILE" <<'PY'
+import json, sys
+rows = [json.loads(line) for line in open(sys.argv[1]) if line.strip()]
+print(len(rows))
+PY
+)"
+assert_eq "G46b: retained cost records stay JSONL across calls" "2" "$PARSER_COST_LINES"
 
 # G47: RLM_JSON=0 disables JSON mode (plain text)
 OUTPUT=$(
@@ -1586,19 +1558,16 @@ FAILPI
         pass "G53c: rejected async job directory is removed"
     fi
 
-    NO_JJ_PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "$MOCK_BIN" | paste -sd ':' -)
-    NO_JJ_PATH="$PROJECT_DIR:$NO_JJ_PATH"
-    set +e
-    NO_JJ_REJECTED=$(
-        CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=1 \
+    NO_JJ_JOB=$(
+        CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=auto \
         RLM_TRACE_ID="async_no_jj_$$" RLM_CALL_COUNTER_FILE="$TEST_TMP/async_no_jj.counter" \
-        PATH="$NO_JJ_PATH" rlm_query --async "Reject unavailable jj before acknowledgement" 2>&1
+        rlm_query --async "Automatic read-only async review" 2>&1
     )
-    NO_JJ_RC=$?
-    set -e
-    if [ "$NO_JJ_RC" -ne 0 ]; then pass "G53c: async unavailable-jj rejection returns nonzero"; else fail "G53c: async unavailable-jj rejection returns nonzero" "$NO_JJ_REJECTED"; fi
-    assert_contains "G53c: async unavailable-jj rejection explains choice" "jj workspace isolation unavailable" "$NO_JJ_REJECTED"
-    assert_not_contains "G53c: async unavailable-jj emits no metadata" '"job_id"' "$NO_JJ_REJECTED"
+    assert_contains "G53c: async review needs no jj choice" '"job_id"' "$NO_JJ_JOB"
+    assert_not_contains "G53c: async review never recommends jj initialization" "jj git init" "$NO_JJ_JOB"
+    NO_JJ_SENTINEL=$(printf '%s' "$NO_JJ_JOB" | python3 -c "import json,sys; print(json.load(sys.stdin).get('sentinel',''))")
+    for _ in $(seq 1 50); do [ -e "$NO_JJ_SENTINEL" ] && break; sleep 0.1; done
+    if [ -e "$NO_JJ_SENTINEL" ]; then pass "G53c: async read-only review reaches terminal state"; else fail "G53c: async read-only review reaches terminal state" "missing sentinel"; fi
 
     # G53d: inherited context is snapshotted at invocation time, not read from a
     # mutable caller path after metadata returns.
@@ -1786,17 +1755,16 @@ else
     skip "G54: depth validation" "RLM_MAX_DEPTH validation not implemented yet"
 fi
 
-# G55: total-call, timeout, start-time, and budget controls fail closed on
-# malformed values in both canonical and retained fallback adapters.
+# G55: structural call and explicit timeout controls fail closed on malformed
+# values in both canonical and retained fallback adapters.
 for SPEC in \
     'RLM_MAX_CALLS=12junk|RLM_MAX_CALLS' \
-    'RLM_TIMEOUT=2junk|RLM_TIMEOUT' \
-    'RLM_BUDGET=free|RLM_BUDGET'; do
+    'RLM_TIMEOUT=2junk|RLM_TIMEOUT'; do
     SETTING="${SPEC%%|*}"
     NAME="${SPEC##*|}"
     OUTPUT=$(
         env "$SETTING" CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
-            RLM_JJ=0 RLM_UNSAFE_NO_JJ_WRITE=1 \
+            RLM_JJ=0 \
             RLM_CALL_COUNTER_FILE="$TEST_TMP/malformed-${NAME}.counter" \
             rlm_query "Malformed guardrail?" 2>&1 || true
     )
@@ -1805,7 +1773,7 @@ for SPEC in \
 
     OUTPUT=$(
         env "$SETTING" YPI_LEGACY_IMPL=1 CONTEXT="$TEST_TMP/ctx.txt" \
-            RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=0 RLM_UNSAFE_NO_JJ_WRITE=1 \
+            RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=0 \
             RLM_CALL_COUNTER_FILE="$TEST_TMP/malformed-legacy-${NAME}.counter" \
             rlm_query "Malformed legacy guardrail?" 2>&1 || true
     )
@@ -1815,13 +1783,15 @@ done
 
 OUTPUT=$(
     env RLM_TIMEOUT=60 RLM_START_TIME=bad CONTEXT="$TEST_TMP/ctx.txt" \
-        RLM_DEPTH=1 RLM_MAX_DEPTH=3 RLM_JJ=0 RLM_UNSAFE_NO_JJ_WRITE=1 \
+        RLM_DEPTH=1 RLM_MAX_DEPTH=3 RLM_JJ=0 \
         RLM_CALL_COUNTER_FILE="$TEST_TMP/malformed-start.counter" \
         rlm_query "Malformed inherited start?" 2>&1 || true
 )
 assert_contains "G55: canonical rejects malformed RLM_START_TIME" "Invalid RLM_START_TIME" "$OUTPUT"
 assert_not_contains "G55: malformed start time spawns no child" "MOCK_PI_CALLED" "$OUTPUT"
 
+OUTPUT=$(RLM_BUDGET=free YPI_LEGACY_IMPL=1 CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JSON=0 rlm_query "Legacy ignores dollar cap")
+assert_contains "G55b: retained fallback ignores inherited dollar cap" "MOCK_PI_CALLED" "$OUTPUT"
 
 # ─── Summary ──────────────────────────────────────────────────────────────
 

@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Release and publication are valid only inside a user-initiated release task.
+set -euo pipefail
+
+if [ "${YPI_EXPLICIT_RELEASE_REQUEST:-0}" != "1" ]; then
+  echo "assert-release-authorized: DENIED: no explicit user-initiated release request is active" >&2
+  echo "Release, tag, and package publication actions are never inferred from landing or release-readiness work." >&2
+  exit 1
+fi
+
+echo "assert-release-authorized: ALLOWED explicit user-initiated release request"

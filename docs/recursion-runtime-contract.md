@@ -17,15 +17,16 @@ Both adapters must resolve the same behavior for:
 
 - recursion depth and terminal-depth admission
 - atomic tree-wide call allocation and maximum-call admission
-- timeout anchoring and remaining wall-clock budget
-- budget preflight and cost-ledger updates
+- optional user-requested timeout anchoring and remaining wall-clock allowance
+- always-on cost-ledger telemetry with no dollar admission or stop policy
 - provider, model, and thinking-level routing by child depth
 - trace identity and path-safe session naming
 - file-backed delegated prompt transport, root-human-request capture, and optional context artifacts, including exact child-visible paths and task-context precedence over unrelated retrieval
 - child session and fork behavior, including immutable async root/context/session snapshots
 - child environment allowlisting
 - exact ypi extension ownership by default, explicit ambient-extension opt-in, and non-extension discovery policy, including a private offline Pi agent/config root when full resource isolation is requested without replacing Pi's shipped assets
-- writable jj workspace or explicit no-jj read-only/current-checkout behavior; automatic jj failure may not silently downgrade capability
+- semantic child mode: read-only review by default; one root-only bounded implementer using a repository-wide lease plus an isolated workspace in existing jj, or an exclusive lease in an existing clean Git checkout; implementers retain edit/write but not process-spawning bash
+- prohibition on installing or initializing VCS state; dirty, contended, nested, or non-VCS implement requests return implementation to the root
 - child process cancellation, exit classification, output bounds, and cleanup
 
 A runtime result must distinguish normal exit, timeout, cancellation, and child
@@ -33,8 +34,8 @@ failure. Output limits must be enforced while reading the child stream, not only
 after the full stream is resident in memory. Incremental JSON parsing must retain
 late answer and cost events even when an earlier diagnostic event exceeds its
 capture bound. If the skipped oversized event itself could own cost—or a failed/cancelled JSON
-child emits no `turn_end`—the shared ledger is marked incomplete and later
-budget admission fails closed rather than treating unknown spend as zero.
+child emits no `turn_end`—the shared ledger is marked incomplete. That marker
+qualifies telemetry but never blocks later product work.
 
 ## Default guardrail posture
 
@@ -47,10 +48,10 @@ budget admission fails closed rather than treating unknown spend as zero.
   `tests/eval/depth-ablation/`.
 - `RLM_MAX_CALLS=128` bounds total fan-out with headroom above the approximately
   52-call evaluation trace that motivated this change.
-- Timeout and dollar budget remain explicit per-run choices because hosted and
-  local models do not share a safe universal value.
-- Deeper overrides require an explicit total-call limit and should use timeout or
-  budget limits when those dimensions are measurable.
+- ypi sets no default timeout. Explicit user-requested timeouts remain supported;
+  normal interactive control is live progress plus manual cancellation.
+- Dollar budgets are unsupported as a control. Cost and tokens remain visible telemetry.
+- Deeper overrides require an explicit total-call limit and visible progress.
 - `$RLM_ROOT_PROMPT_FILE` captures the active root human request before the root
   agent starts; standalone shell calls fall back to their first delegation.
   Child prompts use Pi's non-interactive stdin input while remaining file-backed
@@ -66,7 +67,7 @@ budget admission fails closed rather than treating unknown spend as zero.
 
 - TypeBox request schema and tool registration
 - Pi context/model/session projection into a runtime request
-- progress and cancellation bridging
+- progress and cancellation bridging, including elapsed time, four sanitized recent tool activities, completed cost, and an observe-only stale warning
 - Pi tool-result presentation
 
 ### CLI adapter
@@ -92,7 +93,7 @@ For equivalent requests, both adapters must agree on:
 3. session enabled/disabled state
 4. extension/discovery settings
 5. credential and recursive environment projection
-6. timeout, maximum-call, and budget admission decisions
+6. optional timeout and maximum-call admission decisions plus non-blocking cost telemetry
 7. cleanup and result classification
 
 Adapter-specific argv syntax is allowed only where Pi requires a different
@@ -110,9 +111,12 @@ Resolved stabilization gaps remain part of the evidence history:
   than accepting the `Number.parseInt` prefix
 - extension-isolated children retain the standalone ypi system prompt through
   both adapters
-- explicit `RLM_JJ=0` children exclude built-in mutators through both adapters
-  without a global allowlist that could hide installed package tools;
-  requested-but-unavailable jj fails with explicit read-only/initialize/unsafe-write choices
+- review children exclude built-in mutators through both adapters without a
+  global allowlist that could hide installed package tools; missing jj is silent
+  because reviews need no workspace, and no path recommends VCS initialization
+- one root implementer may acquire a repository-wide existing-jj or clean-Git
+  writer lease; child descendants cannot escalate writable authority, and the
+  implementer cannot spawn shell process trees
 - native answer/stderr retention is bounded while stdout is drained and parsed;
   raw stdout is counted rather than retained, and the result reports threshold crossings
 - command substitution around CLI `--async` now returns job metadata without

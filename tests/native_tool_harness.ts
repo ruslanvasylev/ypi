@@ -1,6 +1,7 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ensureEnvironment } from "../extensions/ypi/env.ts";
 import { registerNativeRlmQueryTool } from "../extensions/ypi/native-tool.ts";
@@ -76,6 +77,9 @@ done
   echo "RLM_SESSION_DIR=\${RLM_SESSION_DIR:-unset}"
   echo "RLM_CALL_COUNTER_FILE=\${RLM_CALL_COUNTER_FILE:-unset}"
   echo "RLM_COST_FILE=\${RLM_COST_FILE:-unset}"
+  echo "RLM_BUDGET=\${RLM_BUDGET:-unset}"
+  echo "YPI_EXPLICIT_RELEASE_REQUEST=\${YPI_EXPLICIT_RELEASE_REQUEST:-unset}"
+  echo "YPI_EXPLICIT_NON_OWNED_REMOTE=\${YPI_EXPLICIT_NON_OWNED_REMOTE:-unset}"
   echo "SECRET_TOKEN=\${SECRET_TOKEN:-unset}"
   echo "PI_CODING_AGENT_DIR=\${PI_CODING_AGENT_DIR:-unset}"
   echo "PI_PACKAGE_DIR=\${PI_PACKAGE_DIR:-unset}"
@@ -105,6 +109,16 @@ for _ in range(100):
 print(json.dumps({"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"END_PROGRESS"}}))
 print(json.dumps({"type":"turn_end","message":{"usage":{"totalTokens":9,"cost":{"total":0.2}}},"toolResults":[]}))
 PY
+elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "json-tools" ]; then
+  printf '%s\n' '{"type":"tool_execution_start","toolCallId":"id-1","toolName":"read","args":{"secret":"ARG_SECRET"}}'
+  printf '%s\n' '{"type":"tool_execution_start","toolCallId":"id-2","toolName":"grep","args":{"secret":"ARG_SECRET"}}'
+  printf '%s\n' '{"type":"tool_execution_start","toolCallId":"id-3","toolName":"SECRET_TOOL_NAME","args":{"secret":"ARG_SECRET"}}'
+  printf '%s\n' '{"type":"tool_execution_start","toolCallId":"id-4","toolName":"ls","args":{"secret":"ARG_SECRET"}}'
+  printf '%s\n' '{"type":"tool_execution_start","toolCallId":"id-5","toolName":"bash","args":{"command":"echo ARG_SECRET"}}'
+  sleep 2.2
+  printf '%s\n' '{"type":"tool_execution_end","toolCallId":"id-5","toolName":"bash","result":{"secret":"RESULT_SECRET"},"isError":false}'
+  printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"TOOLS_DONE"}}'
+  printf '%s\n' '{"type":"turn_end","message":{"usage":{"totalTokens":13,"cost":{"total":0.3}}},"toolResults":[]}'
 elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "json-no-turn-end" ]; then
   printf '%s\\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"PARTIAL_ONLY"}}'
   exit 42
@@ -120,6 +134,19 @@ elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "json-huge-turn-end" ]; then
   printf '%s\\n' '"]}'
 elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "sleep" ]; then
   sleep 30
+elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "write-file" ]; then
+  printf '%s\n' 'implemented by child' > implemented.txt
+  echo "IMPLEMENT_CHILD_OK"
+elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "write-file-fail" ]; then
+  printf '%s\n' 'partial implementation' > partial-implemented.txt
+  echo "IMPLEMENT_CHILD_FAILED" >&2
+  exit 42
+elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "write-background" ]; then
+  (sleep 1; printf '%s\n' 'orphan write' > descendant-write.txt) >/dev/null 2>&1 &
+  echo "BACKGROUND_CHILD_OK"
+elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "write-background-inherited-pipes" ]; then
+  (sleep 10; printf '%s\n' 'late orphan write' > inherited-descendant-write.txt) &
+  echo "BACKGROUND_INHERITED_CHILD_OK"
 else
   echo "FAKE_CHILD_OK"
 fi
@@ -151,9 +178,9 @@ const pi = {
 	},
 } as Pick<ExtensionAPI, "registerTool" | "getThinkingLevel" | "getAllTools"> as ExtensionAPI;
 
-function context(): ExtensionContext {
+function context(cwd = projectRoot): ExtensionContext {
 	return {
-		cwd: projectRoot,
+		cwd,
 		model: { provider: "test-provider", id: "test-root-model" },
 		sessionManager: {
 			getSessionFile: () => path.join(sessionDir, "parent.jsonl"),
@@ -162,9 +189,9 @@ function context(): ExtensionContext {
 	} as ExtensionContext;
 }
 
-async function invoke(prompt = "child prompt", signal?: AbortSignal, onUpdate?: (result: any) => void): Promise<string> {
+async function invoke(prompt = "child prompt", signal?: AbortSignal, onUpdate?: (result: any) => void, mode: "review" | "implement" = "review"): Promise<string> {
 	if (!tool) throw new Error("native tool was not registered");
-	const result = await tool.execute("test-call", { prompt }, signal, onUpdate, context());
+	const result = await tool.execute("test-call", { prompt, mode }, signal, onUpdate, context());
 	const text = result.content.find((item) => item.type === "text")?.text || "";
 	return text;
 }
@@ -187,12 +214,25 @@ async function run(): Promise<void> {
 	ensureEnvironment(runtime, context());
 	registerNativeRlmQueryTool(pi, runtime);
 	record(Boolean(tool), "native tool registered");
+	record(tool?.executionMode === "sequential", "native tool is a root-mutation batch barrier");
 
 	clearYpiEnv();
 	process.env.RLM_DEPTH = "1";
 	process.env.RLM_MAX_DEPTH = "1";
 	ensureEnvironment(runtime, context());
 	await expectThrow("N1: max depth throws", "Max depth exceeded", () => invoke());
+
+	clearYpiEnv();
+	resetLog();
+	process.env.RLM_DEPTH = "1";
+	process.env.RLM_MAX_DEPTH = "3";
+	process.env.RLM_WRITE_MODE_CEILING = "review";
+	ensureEnvironment(runtime, context());
+	await expectThrow("N1a: child cannot escalate to writable recursion", "cannot be escalated", () => invoke("nested writer", undefined, undefined, "implement"));
+	assertNotContains("N1a: rejected writable escalation spawns no child", readLog(), "ARGS:");
+	delete process.env.RLM_WRITE_MODE_CEILING;
+	await expectThrow("N1a: depth alone prevents writable escalation", "root-only", () => invoke("nested writer without ceiling", undefined, undefined, "implement"));
+	assertNotContains("N1a: missing ceiling cannot spawn writable child", readLog(), "ARGS:");
 
 	// N1b: a non-integer depth config fails closed instead of bypassing the limiter.
 	clearYpiEnv();
@@ -210,6 +250,17 @@ async function run(): Promise<void> {
 	ensureEnvironment(runtime, context());
 	await expectThrow("N1c: integer-prefix RLM_DEPTH fails closed", "Invalid recursion depth config", () => invoke());
 	assertNotContains("N1c: integer-prefix depth did not spawn child", readLog(), "ARGS:");
+
+	clearYpiEnv();
+	resetLog();
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	ensureEnvironment(runtime, context());
+	const preAborted = new AbortController();
+	preAborted.abort();
+	await expectThrow("N1d: pre-aborted request stops before admission", "cancelled before admission", () => invoke("cancel before admission", preAborted.signal));
+	assertNotContains("N1d: pre-aborted request spawns no child", readLog(), "ARGS:");
+	record(!existsSync(process.env.RLM_CALL_COUNTER_FILE || ""), "N1d: pre-aborted request allocates no call slot");
 
 	// N2: RLM_MAX_CALLS=N permits exactly N calls; the (N+1)th is blocked before spawning.
 	clearYpiEnv();
@@ -277,6 +328,72 @@ async function run(): Promise<void> {
 	assertContains("N5: no-jj child excludes built-in mutators", readLog(), "--exclude-tools bash,edit,write");
 	assertNotContains("N5: no-jj child avoids a global tool allowlist", readLog(), "--tools ");
 
+	const implementRoot = mkdtempSync(path.join(scratch, "implement-git."));
+	spawnSync("git", ["init", "-q"], { cwd: implementRoot });
+	writeFileSync(path.join(implementRoot, "base.txt"), "base\n");
+	spawnSync("git", ["add", "base.txt"], { cwd: implementRoot });
+	spawnSync("git", ["-c", "user.name=ypi-test", "-c", "user.email=ypi@example.invalid", "commit", "-qm", "base"], { cwd: implementRoot });
+	clearYpiEnv();
+	resetLog();
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	process.env.RLM_JSON = "0";
+	process.env.YPI_FAKE_PI_MODE = "write-file";
+	ensureEnvironment(runtime, context(implementRoot));
+	if (!tool) throw new Error("native tool was not registered");
+	const implementResult = await tool.execute("implement-call", { prompt: "bounded implementation", mode: "implement" }, undefined, undefined, context(implementRoot));
+	const implementText = implementResult.content.find((item) => item.type === "text")?.text || "";
+	assertContains("N5a: one clean-Git implementer executes", implementText, "IMPLEMENT_CHILD_OK");
+	assertContains("N5a: implementer result reports changed path", implementText, "implemented.txt");
+	record(implementResult.details?.workspace?.workspaceMode === "git-shared" && implementResult.details?.workspace?.reportComplete === true, "N5a: implementer returns complete structured workspace report", JSON.stringify(implementResult.details));
+	assertContains("N5a: implementer excludes process-spawning bash", readLog(), "--exclude-tools bash");
+	assertNotContains("N5a: implementer retains edit/write built-ins", readLog(), "--exclude-tools bash,edit,write");
+	const implementLock = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-path", "ypi-shared-writer.lock"], { cwd: implementRoot, encoding: "utf8" }).stdout.trim();
+	record(!existsSync(implementLock), "N5a: implementer releases writer lease after reporting");
+
+	const failingImplementRoot = mkdtempSync(path.join(scratch, "implement-failure."));
+	spawnSync("git", ["init", "-q"], { cwd: failingImplementRoot });
+	writeFileSync(path.join(failingImplementRoot, "base.txt"), "base\n");
+	spawnSync("git", ["add", "base.txt"], { cwd: failingImplementRoot });
+	spawnSync("git", ["-c", "user.name=ypi-test", "-c", "user.email=ypi@example.invalid", "commit", "-qm", "base"], { cwd: failingImplementRoot });
+	clearYpiEnv();
+	resetLog();
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	process.env.RLM_JSON = "0";
+	process.env.YPI_FAKE_PI_MODE = "write-file-fail";
+	ensureEnvironment(runtime, context(failingImplementRoot));
+	try {
+		await tool.execute("implement-failure", { prompt: "bounded failing implementation", mode: "implement" }, undefined, undefined, context(failingImplementRoot));
+		record(false, "N5a: failed implementer returns its changed-path report", "expected failure");
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		record(message.includes("partial-implemented.txt") && message.includes("report: complete"), "N5a: failed implementer returns its changed-path report", message);
+	}
+
+	const descendantRoot = mkdtempSync(path.join(scratch, "implement-descendant."));
+	spawnSync("git", ["init", "-q"], { cwd: descendantRoot });
+	writeFileSync(path.join(descendantRoot, "base.txt"), "base\n");
+	spawnSync("git", ["add", "base.txt"], { cwd: descendantRoot });
+	spawnSync("git", ["-c", "user.name=ypi-test", "-c", "user.email=ypi@example.invalid", "commit", "-qm", "base"], { cwd: descendantRoot });
+	clearYpiEnv();
+	resetLog();
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	process.env.RLM_JSON = "0";
+	process.env.YPI_FAKE_PI_MODE = "write-background";
+	ensureEnvironment(runtime, context(descendantRoot));
+	if (!tool) throw new Error("native tool was not registered");
+	await tool.execute("implement-descendant", { prompt: "bounded descendant cleanup", mode: "implement" }, undefined, undefined, context(descendantRoot));
+	await new Promise((resolve) => setTimeout(resolve, 1_200));
+	record(!existsSync(path.join(descendantRoot, "descendant-write.txt")), "N5a: writer lease cleanup terminates surviving child process-group descendants");
+	process.env.YPI_FAKE_PI_MODE = "write-background-inherited-pipes";
+	ensureEnvironment(runtime, context(descendantRoot));
+	const inheritedStarted = Date.now();
+	await tool.execute("implement-descendant-inherited", { prompt: "bounded inherited-pipe cleanup", mode: "implement" }, undefined, undefined, context(descendantRoot));
+	record(Date.now() - inheritedStarted < 5_000, "N5a: inherited descendant pipes cannot hold writer completion open");
+	record(!existsSync(path.join(descendantRoot, "inherited-descendant-write.txt")), "N5a: early process-group sweep prevents inherited-pipe descendant writes");
+
 	// N5b: an oversized child stream is drained but retained only to the bounded
 	// capture limit. This protects the parent from V8's maximum string length.
 	clearYpiEnv();
@@ -284,7 +401,6 @@ async function run(): Promise<void> {
 	process.env.RLM_DEPTH = "0";
 	process.env.RLM_MAX_DEPTH = "2";
 	process.env.RLM_JJ = "0";
-	process.env.RLM_UNSAFE_NO_JJ_WRITE = "1";
 	process.env.RLM_JSON = "0";
 	process.env.YPI_FAKE_PI_MODE = "huge";
 	ensureEnvironment(runtime, context());
@@ -406,31 +522,67 @@ async function run(): Promise<void> {
 	process.env.RLM_MAX_DEPTH = "2";
 	process.env.RLM_JSON = "0";
 	process.env.SECRET_TOKEN = "must-not-leak";
+	process.env.YPI_EXPLICIT_RELEASE_REQUEST = "1";
+	process.env.YPI_EXPLICIT_NON_OWNED_REMOTE = "github.com/rawwerks/ypi";
 	ensureEnvironment(runtime, context());
 	await invoke();
 	assertContains("N9: child env drops ambient secret", readLog(), "SECRET_TOKEN=unset");
+	assertContains("N9: child cannot inherit release authority", readLog(), "YPI_EXPLICIT_RELEASE_REQUEST=unset");
+	assertContains("N9: child cannot inherit remote override authority", readLog(), "YPI_EXPLICIT_NON_OWNED_REMOTE=unset");
 
 	clearYpiEnv();
 	resetLog();
 	process.env.RLM_DEPTH = "0";
 	process.env.RLM_MAX_DEPTH = "2";
-	process.env.RLM_BUDGET = "1";
+	process.env.RLM_BUDGET = "0";
 	process.env.YPI_FAKE_PI_MODE = "json";
 	ensureEnvironment(runtime, context());
+	record(process.env.RLM_BUDGET === undefined, "N10: inherited dollar cap is discarded");
 	const progressUpdates: string[] = [];
-	const jsonText = await invoke("child prompt", undefined, (update) => {
+	const jsonText = await invoke("PRIVATE_PROMPT_MUST_NOT_ENTER_TRACE", undefined, (update) => {
 		progressUpdates.push(update.content?.find((item: any) => item.type === "text")?.text || "");
 	});
 	assertContains("N10: JSON child text parsed", jsonText, "JSON_CHILD_OK");
 	assertContains("N10: native onUpdate receives bounded child progress", progressUpdates.join("\n"), "JSON_CHILD_OK");
 	const costFile = process.env.RLM_COST_FILE || "";
-	assertContains("N10: JSON child cost recorded", existsSync(costFile) ? readFileSync(costFile, "utf8") : "", '"cost":0.123');
+	const traceFile = process.env.PI_TRACE_FILE || "";
+	assertContains("N10: JSON child cost recorded without a budget", existsSync(costFile) ? readFileSync(costFile, "utf8") : "", '"cost":0.123');
+	record((statSync(costFile).mode & 0o777) === 0o600 && (statSync(traceFile).mode & 0o777) === 0o600, "N10: automatic telemetry files are private");
+	assertNotContains("N10: lifecycle trace excludes delegated prompt text", readFileSync(traceFile, "utf8"), "PRIVATE_PROMPT_MUST_NOT_ENTER_TRACE");
+	assertContains("N10: child never receives dollar cap", readLog(), "RLM_BUDGET=unset");
+
+	clearYpiEnv();
+	resetLog();
+	const permissiveTrace = path.join(scratch, "permissive-trace.jsonl");
+	const permissiveCost = path.join(scratch, "permissive-cost.jsonl");
+	writeFileSync(permissiveTrace, "");
+	writeFileSync(permissiveCost, "");
+	chmodSync(permissiveTrace, 0o644);
+	chmodSync(permissiveCost, 0o644);
+	process.env.PI_TRACE_FILE = permissiveTrace;
+	process.env.RLM_COST_FILE = permissiveCost;
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	process.env.RLM_JSON = "0";
+	ensureEnvironment(runtime, context());
+	await invoke("private telemetry permissions");
+	record((statSync(permissiveTrace).mode & 0o777) === 0o600 && (statSync(permissiveCost).mode & 0o777) === 0o600, "N10: existing telemetry sinks are tightened to private permissions");
+
+	clearYpiEnv();
+	resetLog();
+	process.env.PI_TRACE_FILE = "/dev/full";
+	process.env.RLM_COST_FILE = "/dev/full";
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	process.env.RLM_JSON = "0";
+	ensureEnvironment(runtime, context());
+	const telemetryFailureText = await invoke("telemetry failure must be observational");
+	assertContains("N10: unusable telemetry sink cannot stop child work", telemetryFailureText, "FAKE_CHILD_OK");
 
 	clearYpiEnv();
 	resetLog();
 	process.env.RLM_DEPTH = "0";
 	process.env.RLM_MAX_DEPTH = "2";
-	process.env.RLM_BUDGET = "1";
 	process.env.YPI_FAKE_PI_MODE = "json-long-text";
 	ensureEnvironment(runtime, context());
 	const longProgressUpdates: string[] = [];
@@ -446,7 +598,6 @@ async function run(): Promise<void> {
 	resetLog();
 	process.env.RLM_DEPTH = "0";
 	process.env.RLM_MAX_DEPTH = "2";
-	process.env.RLM_BUDGET = "1";
 	process.env.YPI_FAKE_PI_MODE = "json-huge-tail";
 	ensureEnvironment(runtime, context());
 	const lateJsonText = await invoke();
@@ -454,33 +605,51 @@ async function run(): Promise<void> {
 	const lateCostFile = process.env.RLM_COST_FILE || "";
 	assertContains("N10b: late JSON cost survives oversized prior event", existsSync(lateCostFile) ? readFileSync(lateCostFile, "utf8") : "", '"cost":0.456');
 
-	// N10c: if the oversized event itself could contain turn-end usage, a hard
-	// budget must fail closed rather than record a misleading partial/zero cost.
 	clearYpiEnv();
 	resetLog();
 	process.env.RLM_DEPTH = "0";
 	process.env.RLM_MAX_DEPTH = "2";
-	process.env.RLM_BUDGET = "20";
 	process.env.YPI_FAKE_PI_MODE = "json-huge-turn-end";
 	ensureEnvironment(runtime, context());
-	await expectThrow("N10c: oversized cost-bearing event fails budget closed", "Cannot enforce RLM_BUDGET", () => invoke());
+	await invoke();
 	const incompleteCostFile = process.env.RLM_COST_FILE || "";
-	assertNotContains("N10c: incomplete cost is not recorded as authoritative", existsSync(incompleteCostFile) ? readFileSync(incompleteCostFile, "utf8") : "", '"cost":0');
+	assertContains("N10c: oversized cost boundary records incomplete telemetry without stopping work", readFileSync(incompleteCostFile, "utf8"), '"incomplete":true');
+	assertNotContains("N10c: incomplete cost is not recorded as authoritative zero", readFileSync(incompleteCostFile, "utf8"), '"cost":0');
 
 	clearYpiEnv();
 	resetLog();
 	process.env.RLM_DEPTH = "0";
 	process.env.RLM_MAX_DEPTH = "2";
-	process.env.RLM_BUDGET = "20";
 	process.env.YPI_FAKE_PI_MODE = "json-no-turn-end";
 	ensureEnvironment(runtime, context());
 	await expectThrow("N10d: failed JSON child reports its nonzero exit", "exited with 42", () => invoke());
 	const missingTurnEndCostFile = process.env.RLM_COST_FILE || "";
-	assertContains("N10d: missing turn_end writes an incomplete cost marker", readFileSync(missingTurnEndCostFile, "utf8"), '"incomplete":true');
+	assertContains("N10d: missing turn_end writes an incomplete telemetry marker", readFileSync(missingTurnEndCostFile, "utf8"), '"incomplete":true');
 	process.env.YPI_FAKE_PI_MODE = "json";
 	resetLog();
-	await expectThrow("N10d: later budget admission fails closed after unknown spend", "Budget accounting is incomplete", () => invoke());
-	assertNotContains("N10d: incomplete ledger blocks before another child spawn", readLog(), "ARGS:");
+	const afterIncomplete = await invoke();
+	assertContains("N10d: incomplete telemetry never blocks later work", afterIncomplete, "JSON_CHILD_OK");
+	assertContains("N10d: later child was spawned", readLog(), "ARGS:");
+
+	clearYpiEnv();
+	resetLog();
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	process.env.YPI_FAKE_PI_MODE = "json-tools";
+	process.env.YPI_STALL_WARNING_SECONDS = "1";
+	ensureEnvironment(runtime, context());
+	const toolProgress: any[] = [];
+	const toolText = await invoke("tool progress", undefined, (update) => toolProgress.push(update));
+	const renderedProgress = toolProgress.map((update) => update.content?.find((item: any) => item.type === "text")?.text || "").join("\n");
+	assertContains("N10e: tool-only work produces activity before final text", renderedProgress, "… bash");
+	assertContains("N10e: elapsed heartbeat advances without assistant prose", renderedProgress, "elapsed 0m01s");
+	assertContains("N10e: stale watchdog warns without terminating", renderedProgress, "still running — cancel manually if desired");
+	assertContains("N10e: child completes after stale warning", toolText, "TOOLS_DONE");
+	assertNotContains("N10e: progress never exposes tool args", renderedProgress, "ARG_SECRET");
+	assertNotContains("N10e: progress never exposes tool results", renderedProgress, "RESULT_SECRET");
+	assertNotContains("N10e: progress allowlists tool labels", renderedProgress, "SECRET_TOOL_NAME");
+	const lastActivities = toolProgress.findLast((update) => update.details?.activities?.length === 4)?.details.activities || [];
+	record(lastActivities.length === 4 && lastActivities.every((item: any) => !Object.hasOwn(item, "key")), "N10e: progress retains four sanitized activities without call ids", JSON.stringify(lastActivities));
 
 	clearYpiEnv();
 	resetLog();
@@ -519,7 +688,6 @@ async function run(): Promise<void> {
 	process.env.RLM_MAX_DEPTH = "2";
 	process.env.RLM_JSON = "0";
 	process.env.RLM_JJ = "0";
-	process.env.RLM_UNSAFE_NO_JJ_WRITE = "1";
 	process.env.YPI_FAKE_PI_MODE = "sleep";
 	ensureEnvironment(runtime, context());
 	const controller = new AbortController();
@@ -539,7 +707,6 @@ async function run(): Promise<void> {
 	resetLog();
 	process.env.RLM_DEPTH = "0";
 	process.env.RLM_MAX_DEPTH = "2";
-	process.env.RLM_BUDGET = "20";
 	process.env.YPI_FAKE_PI_MODE = "json-cost-then-sleep";
 	process.env.YPI_FAKE_PID_FILE = path.join(scratch, "cost-cancel.pid");
 	ensureEnvironment(runtime, context());
@@ -562,7 +729,6 @@ async function run(): Promise<void> {
 	process.env.RLM_MAX_DEPTH = "2";
 	process.env.RLM_JSON = "0";
 	process.env.RLM_JJ = "0";
-	process.env.RLM_UNSAFE_NO_JJ_WRITE = "1";
 	process.env.YPI_LEGACY_IMPL = "1";
 	let legacyTool: Tool | undefined;
 	const legacyPi = {

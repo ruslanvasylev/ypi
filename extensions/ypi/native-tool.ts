@@ -1,8 +1,8 @@
 import { Type } from "typebox";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { canExecute } from "./guardrails.ts";
+import { canExecute, readCostSummary } from "./guardrails.ts";
 import { registerLegacyNativeRlmQueryTool } from "./legacy-native-tool.ts";
-import { formatRecursiveResultForTool, runRecursiveChild } from "./runtime-core.ts";
+import { appendRuntimeTrace, formatRecursiveResultForTool, runRecursiveChild, type ChildToolActivity } from "./runtime-core.ts";
 import type { YpiRuntime } from "./runtime.ts";
 import { debug } from "./runtime.ts";
 
@@ -15,6 +15,10 @@ const RlmQueryParams = Type.Object({
 	})),
 	fork: Type.Optional(Type.Boolean({
 		description: "Copy the current session file into the child session before running.",
+	})),
+	mode: Type.Optional(Type.String({
+		description: "review (default, read-only) or implement (one exclusive writer in an existing clean Git/jj checkout).",
+		pattern: "^(review|implement)$",
 	})),
 });
 
@@ -32,40 +36,126 @@ export function registerNativeRlmQueryTool(pi: ExtensionAPI, runtime: YpiRuntime
 		promptGuidelines: [
 			"Use rlm_query for clear subtasks that benefit from an extra context window.",
 			"Pass exact source text through the context parameter when the child must inspect specific data.",
+			"Use rlm_query mode=review for audits, research, and probes; review is read-only and is the default.",
+			"Use root-only mode=implement for one bounded edit/write unit after scope and verification gates are explicit; the parent runs commands and tests, and parallel implementers are forbidden.",
 			"Do not recurse past the active RLM_MAX_DEPTH limit.",
 		],
 		parameters: RlmQueryParams,
-		executionMode: "parallel" as const,
+		// A sequential batch barrier prevents root edit/write/bash calls from
+		// overlapping a shared-checkout implementer. Parallel read-only fan-out
+		// remains available through shell `rlm_query --async`.
+		executionMode: "sequential" as const,
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
-			let progress = "";
-			const result = await runRecursiveChild(runtime, {
-				prompt: params.prompt,
-				context: params.context,
-				fork: params.fork,
-				caller: "tool",
-				signal,
-				onText(text) {
-					progress = `${progress}${text}`.slice(-8_192);
-					onUpdate?.({
-						content: [{ type: "text" as const, text: progress }],
-						details: { phase: "streaming" },
-					});
-				},
-				parent: {
-					cwd: ctx.cwd,
-					provider: ctx.model?.provider,
-					model: ctx.model?.id,
-					thinkingLevel: pi.getThinkingLevel(),
-					sessionFile: ctx.sessionManager.getSessionFile() || undefined,
-					sessionDir: ctx.sessionManager.getSessionFile() ? ctx.sessionManager.getSessionDir() : undefined,
-				},
-			});
+			const started = Date.now();
+			const activities = new Map<string, ChildToolActivity>();
+			let assistantTail = "";
+			let admittedCall: number | undefined;
+			let lastEventAt = started;
+			let staleTraced = false;
+			const configuredStale = Number.parseInt(process.env.YPI_STALL_WARNING_SECONDS || "600", 10);
+			const staleAfterSeconds = Number.isSafeInteger(configuredStale) && configuredStale > 0 ? configuredStale : 600;
 
-			return {
-				content: [{ type: "text" as const, text: formatRecursiveResultForTool(result) }],
-				details: result.details,
+			const formatElapsed = (seconds: number) => {
+				const hours = Math.floor(seconds / 3600);
+				const minutes = Math.floor((seconds % 3600) / 60);
+				const rest = seconds % 60;
+				return hours > 0 ? `${hours}h${String(minutes).padStart(2, "0")}m${String(rest).padStart(2, "0")}s` : `${minutes}m${String(rest).padStart(2, "0")}s`;
 			};
+			const publishProgress = () => {
+				if (!onUpdate) return;
+				const now = Date.now();
+				const elapsedSeconds = Math.max(0, Math.floor((now - started) / 1000));
+				const idleSeconds = Math.max(0, Math.floor((now - lastEventAt) / 1000));
+				const stale = idleSeconds >= staleAfterSeconds;
+				if (stale && !staleTraced) {
+					appendRuntimeTrace(`STALE_WARNING caller=tool idle=${idleSeconds}s action=observe_only`);
+					if (ctx.hasUI) ctx.ui.notify(`Recursive child has emitted no new event for ${formatElapsed(idleSeconds)}; it is still running.`, "warning");
+					staleTraced = true;
+				}
+				const spent = readCostSummary();
+				const activityLines = [...activities.values()].map((activity) => {
+					const marker = activity.status === "succeeded" ? "✓" : activity.status === "failed" ? "✗" : "…";
+					return `${marker} ${activity.label}`;
+				});
+				const header = [
+					stale ? `No new child events for ${formatElapsed(idleSeconds)}; still running — cancel manually if desired` : "Child running",
+					`elapsed ${formatElapsed(elapsedSeconds)}`,
+					`call ${admittedCall ?? "pending"}/${process.env.RLM_MAX_CALLS || "∞"}`,
+					`completed cost ${spent.incomplete ? "at least " : ""}$${spent.cost.toFixed(4)}`,
+				].join(" · ");
+				const statusBlock = [header, ...activityLines].join("\n");
+				const remaining = Math.max(0, 8_192 - statusBlock.length - 1);
+				const body = `${statusBlock}${assistantTail ? `\n${assistantTail.slice(-remaining)}` : ""}`;
+				onUpdate({
+					content: [{ type: "text" as const, text: body }],
+					details: {
+						phase: stale ? "stale-warning" : "streaming",
+						elapsedSeconds,
+						idleSeconds,
+						callCount: admittedCall,
+						activities: [...activities.values()].map(({ label, status }) => ({ label, status })),
+					},
+				});
+			};
+			const noteEvent = () => {
+				lastEventAt = Date.now();
+				staleTraced = false;
+			};
+			let timer: NodeJS.Timeout | undefined;
+			const scheduleProgress = () => {
+				if (!onUpdate) return;
+				const elapsed = Date.now() - started;
+				const delay = elapsed < 60_000 ? 1_000 : elapsed < 600_000 ? 5_000 : 30_000;
+				timer = setTimeout(() => {
+					publishProgress();
+					scheduleProgress();
+				}, delay);
+				timer.unref?.();
+			};
+			publishProgress();
+			scheduleProgress();
+
+			try {
+				const result = await runRecursiveChild(runtime, {
+					prompt: params.prompt,
+					context: params.context,
+					fork: params.fork,
+					mode: params.mode === "implement" ? "implement" : "review",
+					caller: "tool",
+					signal,
+					onAdmitted(callCount) {
+						admittedCall = callCount;
+						noteEvent();
+					},
+					onText(text) {
+						assistantTail = `${assistantTail}${text}`.slice(-4_096);
+						noteEvent();
+					},
+					onToolActivity(activity) {
+						activities.delete(activity.key);
+						activities.set(activity.key, activity);
+						while (activities.size > 4) activities.delete(activities.keys().next().value!);
+						noteEvent();
+					},
+					parent: {
+						cwd: ctx.cwd,
+						provider: ctx.model?.provider,
+						model: ctx.model?.id,
+						thinkingLevel: pi.getThinkingLevel(),
+						sessionFile: ctx.sessionManager.getSessionFile() || undefined,
+						sessionDir: ctx.sessionManager.getSessionFile() ? ctx.sessionManager.getSessionDir() : undefined,
+					},
+				});
+				publishProgress();
+
+				return {
+					content: [{ type: "text" as const, text: formatRecursiveResultForTool(result) }],
+					details: result.details,
+				};
+			} finally {
+				if (timer) clearTimeout(timer);
+			}
 		},
 	});
 

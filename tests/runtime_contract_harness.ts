@@ -155,8 +155,7 @@ function baseEnv(label: string): Record<string, string> {
 		RLM_DEPTH: "0",
 		RLM_MAX_DEPTH: "2",
 		RLM_JSON: "0",
-		RLM_JJ: "0",
-		RLM_UNSAFE_NO_JJ_WRITE: "1",
+		RLM_JJ: "auto",
 		RLM_SHARED_SESSIONS: "0",
 		RLM_PROVIDER: "contract-provider",
 		RLM_MODEL: "contract-model",
@@ -322,14 +321,14 @@ async function run(): Promise<void> {
 		`native=${JSON.stringify(malformedNative.error)} CLI code=${malformedCli.code}`,
 	);
 
-	const noJjNative = await invokeNative({ ...baseEnv("native-no-jj-choice"), RLM_JJ: "1", RLM_UNSAFE_NO_JJ_WRITE: "0" }, prompt);
-	const noJjCli = await invokeCli({ ...baseEnv("cli-no-jj-choice"), RLM_JJ: "1", RLM_UNSAFE_NO_JJ_WRITE: "0" }, prompt);
+	const noJjNative = await invokeNative({ ...baseEnv("native-no-jj-choice"), RLM_JJ: "auto" }, prompt);
+	const noJjCli = await invokeCli({ ...baseEnv("cli-no-jj-choice"), RLM_JJ: "auto" }, prompt);
 	record(
-		Boolean(noJjNative.error?.includes("Choose explicitly"))
-			&& Boolean(noJjCli.error?.includes("Choose explicitly"))
-			&& !noJjNative.observation
-			&& !noJjCli.observation,
-		"both adapters reject automatic no-jj capability downgrade",
+		!noJjNative.error
+			&& noJjCli.code === 0
+			&& noJjNative.observation?.ARGS.includes("<--exclude-tools><bash,edit,write>") === true
+			&& noJjCli.observation?.ARGS.includes("<--exclude-tools><bash,edit,write>") === true,
+		"both adapters silently choose read-only review in a non-jj checkout",
 		`native=${JSON.stringify(noJjNative.error)} CLI=${JSON.stringify(noJjCli.error)}`,
 	);
 
@@ -354,8 +353,8 @@ async function run(): Promise<void> {
 		record(false, "both adapters emitted extensions-off observations");
 	}
 
-	const readOnlyNative = await invokeNative({ ...baseEnv("native-readonly"), RLM_UNSAFE_NO_JJ_WRITE: "0" }, prompt);
-	const readOnlyCli = await invokeCli({ ...baseEnv("cli-readonly"), RLM_UNSAFE_NO_JJ_WRITE: "0" }, prompt);
+	const readOnlyNative = await invokeNative(baseEnv("native-readonly"), prompt);
+	const readOnlyCli = await invokeCli(baseEnv("cli-readonly"), prompt);
 	if (readOnlyNative.observation && readOnlyCli.observation) {
 		record(
 			readOnlyNative.observation.ARGS.includes("<--exclude-tools><bash,edit,write>")

@@ -17,13 +17,6 @@ function exactNonNegativeInteger(name: string, value: string): number {
 	return parsed;
 }
 
-function configuredNonNegativeNumber(name: string, value: string | undefined): number | undefined {
-	if (value === undefined || value === "") return undefined;
-	const parsed = Number(value);
-	if (!Number.isFinite(parsed) || parsed < 0) throw new Error(`Invalid ${name}: ${JSON.stringify(value)} must be a finite non-negative number.`);
-	return parsed;
-}
-
 function readCounter(filePath: string): number {
 	const raw = existsSync(filePath)
 		? readFileSync(filePath, "utf8").trim() || "0"
@@ -72,7 +65,7 @@ export function assertWithinMaxCalls(callCount: number): void {
 	// callCount is the 1-based number of the call being allocated, so RLM_MAX_CALLS=N
 	// must permit calls 1..N and only reject call N+1.
 	if (callCount > maxCalls) {
-		throw new Error(`Max calls exceeded: ${maxCalls} of ${maxCalls} calls already used. Increase RLM_MAX_CALLS or reduce recursion depth.`);
+		throw new Error(`Max calls exceeded: ${maxCalls} of ${maxCalls} child calls already used. Continue the task directly without spawning more children.`);
 	}
 }
 
@@ -108,10 +101,16 @@ export function readCostSummary(costFile = process.env.RLM_COST_FILE): CostLedge
 		return { cost: 0, tokens: 0, incomplete: false };
 	}
 
+	let raw: string;
+	try {
+		raw = readFileSync(costFile, "utf8");
+	} catch {
+		return { cost: 0, tokens: 0, incomplete: true };
+	}
 	let cost = 0;
 	let tokens = 0;
 	let incomplete = false;
-	for (const line of readFileSync(costFile, "utf8").split(/\r?\n/)) {
+	for (const line of raw.split(/\r?\n/)) {
 		if (!line.trim()) continue;
 		try {
 			const parsed = JSON.parse(line);
@@ -125,34 +124,21 @@ export function readCostSummary(costFile = process.env.RLM_COST_FILE): CostLedge
 	return { cost, tokens, incomplete };
 }
 
-// Best-effort: the tool runs in parallel executionMode and cost is recorded only after a
-// child finishes, so concurrent calls can each pass this check before any cost lands and a
-// tree may slightly overshoot RLM_BUDGET. The race-free hard ceiling is RLM_MAX_CALLS.
-export function assertBudgetAvailable(): void {
-	const budget = configuredNonNegativeNumber("RLM_BUDGET", process.env.RLM_BUDGET);
-	if (budget === undefined) {
-		return;
-	}
-	if (process.env.RLM_JSON === "0") {
-		throw new Error("RLM_BUDGET requires RLM_JSON=1 in native extension mode so child Pi cost can be measured.");
-	}
-	const current = readCostSummary();
-	if (current.incomplete) {
-		throw new Error("Budget accounting is incomplete from an earlier child; start a new isolated cost ledger before spending more.");
-	}
-	if (current.cost >= budget) {
-		throw new Error(`Budget exceeded: spent $${current.cost.toFixed(6)} of $${budget.toFixed(6)} budget. Increase RLM_BUDGET or simplify the task.`);
+function appendTelemetryLine(line: string): void {
+	if (!process.env.RLM_COST_FILE) return;
+	try {
+		writeFileSync(process.env.RLM_COST_FILE, `${line}\n`, { flag: "a" });
+	} catch {
+		delete process.env.RLM_COST_FILE;
 	}
 }
 
 export function appendCostSummary(summary: CostSummary): void {
-	if (!process.env.RLM_COST_FILE) return;
-	writeFileSync(process.env.RLM_COST_FILE, `${JSON.stringify(summary)}\n`, { flag: "a" });
+	appendTelemetryLine(JSON.stringify(summary));
 }
 
 export function appendIncompleteCostMarker(reason: string): void {
-	if (!process.env.RLM_COST_FILE) return;
-	writeFileSync(process.env.RLM_COST_FILE, `${JSON.stringify({ incomplete: true, reason })}\n`, { flag: "a" });
+	appendTelemetryLine(JSON.stringify({ incomplete: true, reason }));
 }
 
 export function canExecute(filePath: string): boolean {

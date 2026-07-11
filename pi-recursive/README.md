@@ -20,9 +20,9 @@ pi -e npm:pi-recursive "Use rlm_query to ask a child what 2 + 2 is."
 ## What you get
 
 - A native `rlm_query` Pi tool — no shell helper, no launcher, no `jj` required.
-- Recursive children share the active provider/model, bounded by depth, call count, timeout,
-  and budget guardrails.
-- `jj` workspace isolation is used automatically when available; recursion still works without it.
+- Recursive children share the active provider/model, bounded by depth and total child-call admission. Cost is recorded as telemetry and never stops work.
+- Review mode is read-only without any workspace. One explicit implementer may use an existing jj checkout or an exclusive lease in an existing clean Git checkout. The extension never installs or initializes VCS tooling.
+- Native progress shows elapsed time, four recent sanitized tool activities, completed cost, and observe-only stale warnings.
 
 The shell-compatible `rlm_query` command, async jobs, and CLI ergonomics live in the `ypi`
 wrapper package and are opt-in via `YPI_SHELL_HELPER=1`.
@@ -40,10 +40,11 @@ Behavior is controlled through `RLM_*` environment variables. The pure extension
 | `RLM_CHILD_MODELS` | `RLM_CHILD_MODELS=big:high,small:medium` | Comma-separated model route for child depths 1, 2, ... |
 | `RLM_CHILD_PROVIDERS` | `RLM_CHILD_PROVIDERS=openai,openai` | Comma-separated provider route for child depths 1, 2, ... |
 | `RLM_CHILD_THINKING_LEVELS` | `RLM_CHILD_THINKING_LEVELS=high,medium` | Comma-separated thinking route for child depths 1, 2, ... |
-| `RLM_BUDGET` | `RLM_BUDGET=0.50` | Max dollar spend for the recursive tree (requires `RLM_JSON=1`, the default). |
-| `RLM_TIMEOUT` | `RLM_TIMEOUT=60` | Wall-clock limit (seconds) for the entire recursive tree. |
-| `RLM_MAX_CALLS` | `RLM_MAX_CALLS=128` | Max total `rlm_query` invocations (default `128`). |
-| `RLM_JJ` | `RLM_JJ=0` | Explicitly choose read-only children without jj; requested-but-unavailable jj otherwise stops with guidance. |
+| `RLM_COST_FILE` | automatic private path | Append-only cost/token telemetry; never an admission gate. |
+| `PI_TRACE_FILE` | automatic private path | Lifecycle trace without prompt or tool arguments. |
+| `RLM_TIMEOUT` | `RLM_TIMEOUT=60` | Optional explicitly requested wall-clock limit; unset by default. |
+| `RLM_MAX_CALLS` | `RLM_MAX_CALLS=128` | Max child-call admissions (default `128`); the root continues directly at the cap. |
+| native tool `mode` | `review` or `implement` | Read-only by default; at most one bounded clean-checkout implementer. |
 
 The shell-helper guardrails and cost/session CLI commands (e.g. `rlm_cost`) documented in the
 [ypi README](https://github.com/rawwerks/ypi#readme) apply only to the `ypi` wrapper package, not
