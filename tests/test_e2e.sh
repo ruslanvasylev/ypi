@@ -309,11 +309,13 @@ if should_run "E9"; then
         STDERR_E9="$TEST_TMP/e9_stderr.txt"
         PROMPT_E9="Use the rlm_query tool exactly once with this exact prompt: Reply with exactly CHILD_OK. Then reply with exactly the child answer and no other text."
 
+        # JSON mode keeps configured cost budgets measurable while the runtime
+        # still projects parsed child text back to the root agent.
         START=$(date +%s)
         set +e
         RLM_DEPTH=0 \
         RLM_MAX_DEPTH=1 \
-        RLM_JSON=0 \
+        RLM_JSON=1 \
         PI_TRACE_FILE="$TRACE_E9" \
         timeout 90 "$PROJECT_DIR/ypi" -p --no-session \
             --provider "$RLM_PROVIDER" \
