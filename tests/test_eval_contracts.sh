@@ -181,6 +181,10 @@ PY
 then pass "CLI parity replaces poisoned parent namespace with private lane state"; else fail "CLI parity replaces poisoned parent namespace with private lane state" "$(cat "$TEST_TMP/parity-env.txt")"; fi
 
 RUNBOOK_TMP="$TEST_TMP/runbook"
+CLEAN_GIT_ENV=(env)
+while IFS='=' read -r key _; do
+  case "$key" in GIT_*) CLEAN_GIT_ENV+=(-u "$key") ;; esac
+done < <(env)
 mkdir -p "$RUNBOOK_TMP/repo"
 python3 - "$PROJECT_DIR/docs/bounded-recursive-development.md" "$RUNBOOK_TMP/init.sh" "$RUNBOOK_TMP/resume.sh" <<'PY'
 import re, sys
@@ -191,9 +195,9 @@ open(sys.argv[3], "w").write(blocks[1])
 PY
 (
   cd "$RUNBOOK_TMP/repo"
-  git init -q
-  git switch -q -c feature/test
-  YPI_RUN_BUDGET=2 YPI_RUN_DEADLINE_EPOCH=$(( $(date +%s) + 3600 )) bash "$RUNBOOK_TMP/init.sh"
+  "${CLEAN_GIT_ENV[@]}" git init -q
+  "${CLEAN_GIT_ENV[@]}" git switch -q -c feature/test
+  "${CLEAN_GIT_ENV[@]}" YPI_RUN_BUDGET=2 YPI_RUN_DEADLINE_EPOCH=$(( $(date +%s) + 3600 )) bash "$RUNBOOK_TMP/init.sh"
 )
 RUNBOOK_ENVELOPE="$(find "$RUNBOOK_TMP/repo/tmp" -name envelope.sh -print)"
 RUNBOOK_RUN_DIR="${RUNBOOK_ENVELOPE%/envelope.sh}"
@@ -211,8 +215,8 @@ if [ "$RUNBOOK_RESUME" = "RESUMED_COUNT=7" ] && [ "$(cat "$RUNBOOK_RUN_DIR/calls
 set +e
 (
   cd "$RUNBOOK_TMP/repo"
-  git branch -m master
-  YPI_RUN_BUDGET=2 YPI_RUN_DEADLINE_EPOCH=$(( $(date +%s) + 3600 )) bash "$RUNBOOK_TMP/init.sh"
+  "${CLEAN_GIT_ENV[@]}" git branch -m master
+  "${CLEAN_GIT_ENV[@]}" YPI_RUN_BUDGET=2 YPI_RUN_DEADLINE_EPOCH=$(( $(date +%s) + 3600 )) bash "$RUNBOOK_TMP/init.sh"
 ) >/dev/null 2>&1
 RUNBOOK_TRUNK_RC=$?
 set -e
