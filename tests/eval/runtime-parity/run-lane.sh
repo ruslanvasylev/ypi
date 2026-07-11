@@ -82,8 +82,9 @@ recursive_transition_present=(
   if lane.endswith('-native')
   else ('depth=0→1' in trace and re.search(r'depth=1→2.*caller=tool',trace) is not None and spawned_transitions >= 2)
 )
-contract_pass=rc == 0 and expected_present and recursive_transition_present
-meta={'lane':lane,'exit_code':rc,'expected_output_present':expected_present,'recursive_transition_present':recursive_transition_present,'contract_pass':contract_pass,'elapsed_seconds':round(elapsed,3),'allocated_call_attempts':calls,'spawned_trace_transitions':spawned_transitions,'cost':round(cost,6),'tokens':tokens,'max_rss_kib':rss}
+call_count_contract_pass=lane.endswith('-native') or calls == 2
+contract_pass=rc == 0 and expected_present and recursive_transition_present and call_count_contract_pass
+meta={'lane':lane,'exit_code':rc,'expected_output_present':expected_present,'recursive_transition_present':recursive_transition_present,'call_count_contract_pass':call_count_contract_pass,'contract_pass':contract_pass,'elapsed_seconds':round(elapsed,3),'allocated_call_attempts':calls,'spawned_trace_transitions':spawned_transitions,'cost':round(cost,6),'tokens':tokens,'max_rss_kib':rss}
 (out/'meta.json').write_text(json.dumps(meta,indent=2)+'\n')
 print(json.dumps(meta))
 PY

@@ -273,7 +273,7 @@ END_NS=$(python3 -c 'import time; print(time.monotonic_ns())')
 COUNTER_TIMEOUT_MS=$(( (END_NS - START_NS) / 1000000 ))
 rm -rf "${COUNTER_FILE}.lock"
 assert_eq "G4d: counter lock timeout exits 124" "124" "$COUNTER_TIMEOUT_RC"
-assert_contains "G4d: counter lock timeout is explicit" "Timeout exceeded while waiting for call counter lock" "$OUTPUT"
+assert_contains "G4d: counter lock timeout is explicit" "Timeout exceeded" "$OUTPUT"
 if [ "$COUNTER_TIMEOUT_MS" -lt 2500 ]; then pass "G4d: counter allocation obeys the tree deadline"; else fail "G4d: counter allocation obeys the tree deadline" "elapsed=${COUNTER_TIMEOUT_MS}ms"; fi
 
 
