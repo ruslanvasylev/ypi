@@ -12,6 +12,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - A bounded recursive-development runbook now defines a persisted non-secret trace/counter/cost envelope, continuation without reset, three disjoint review charters, one implementation head, parent adjudication, and freeze-before-live-model evidence.
 - The packaged `bounded-recursive-delegation` skill teaches review-versus-implement selection, one-writer topology, parent diff absorption, deduplication, and publication authority without per-repository instruction copies.
 - Automatic private trace and cost ledgers plus native live progress show elapsed time, the four most recent sanitized tool activities, completed cost, and observe-only stale warnings.
+- The root launcher now auto-detects ambient extension safety: the user's ambient Pi packages stay loaded unless `scripts/detect-ambient-recursion-conflict` finds another recursion-extension copy, in which case the launch isolates fail-closed and `ypi-doctor` reports the conflicting entries. `RLM_AMBIENT_EXTENSIONS=1`/`0` force either mode; children remain canonical-only by default.
 - Publication helpers and the pre-push hook validate every actual push URL and fail closed on non-owned targets; ambient environment markers cannot grant a non-owned exception, and release/package publication paths require a user-initiated root-session marker that is stripped from children.
 
 ### Changed

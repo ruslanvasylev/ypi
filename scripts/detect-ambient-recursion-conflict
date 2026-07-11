@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# detect-ambient-recursion-conflict — decide whether Pi's ambient extension
+# surface contains another recursion-extension copy that would conflict with
+# the canonical ypi extension the launcher loads explicitly.
+#
+# Pi has no API for unregistering an extension, so a second ypi/pi-recursive
+# copy loaded ambiently can register a conflicting `rlm_query` handler with
+# version skew and stale roots. Unrelated ambient packages (memory, browser,
+# protocol adapters, ...) are safe and should not cost the user their tools.
+#
+# Detection is deliberately conservative in both directions:
+#   * packages are matched by NAME only (`ypi`, `pi-recursive*`), never by
+#     content, so a protocol adapter whose docs merely mention rlm_query is
+#     not a false positive;
+#   * loose files in the Pi extensions directory are matched by canonical
+#     filename or by a strong content fingerprint (both `rlm_query` and
+#     `RLM_MAX_DEPTH` present), so a renamed copy is still caught.
+#
+# Exit codes:
+#   0 = no conflict found; ambient extensions are safe alongside canonical ypi
+#   1 = conflict found; conflicting entries are listed on stdout
+#   2 = undetermined (unreadable settings, missing python3, ...); callers
+#       must treat this as a conflict and isolate (fail closed)
+
+set -uo pipefail
+
+PI_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+
+# No Pi agent directory means no ambient surface at all.
+[ -d "$PI_DIR" ] || exit 0
+
+CONFLICTS=()
+
+# 1. Loose extensions dropped into the Pi extensions directory.
+if [ -d "$PI_DIR/extensions" ]; then
+    while IFS= read -r file; do
+        [ -n "$file" ] && CONFLICTS+=("extension-file:$file")
+    done < <(
+        find "$PI_DIR/extensions" -maxdepth 3 -type f \
+            \( -name 'recursive.ts' -o -name 'ypi.ts' \) 2>/dev/null
+        find "$PI_DIR/extensions" -maxdepth 3 -type f \
+            \( -name '*.ts' -o -name '*.js' -o -name '*.mjs' -o -name '*.cjs' \) 2>/dev/null \
+            | while IFS= read -r candidate; do
+                if grep -lqs -m1 'rlm_query' "$candidate" 2>/dev/null \
+                    && grep -lqs -m1 'RLM_MAX_DEPTH' "$candidate" 2>/dev/null; then
+                    printf '%s\n' "$candidate"
+                fi
+            done
+    )
+fi
+
+# 2. Installed Pi packages, matched by name only.
+SETTINGS="$PI_DIR/settings.json"
+if [ -f "$SETTINGS" ]; then
+    if ! command -v python3 >/dev/null 2>&1; then
+        exit 2
+    fi
+    PKG_HITS="$(python3 - "$SETTINGS" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1]) as handle:
+        settings = json.load(handle)
+except (OSError, ValueError):
+    sys.exit(2)
+
+packages = settings.get("packages", []) if isinstance(settings, dict) else settings
+if not isinstance(packages, list):
+    sys.exit(2)
+
+def is_recursion_name(segment: str) -> bool:
+    return segment == "ypi" or segment.startswith("pi-recursive")
+
+for entry in packages:
+    if not isinstance(entry, str):
+        continue
+    if entry.startswith("npm:"):
+        # npm:@scope/name or npm:name (optionally with a version suffix)
+        raw = entry[len("npm:"):]
+        segment = raw.rsplit("/", 1)[-1].split("@", 1)[0]
+        if is_recursion_name(segment):
+            print(f"package:{entry}")
+    else:
+        segment = entry.rstrip("/").rsplit("/", 1)[-1]
+        if is_recursion_name(segment):
+            print(f"package:{entry}")
+PY
+)" || exit 2
+    while IFS= read -r hit; do
+        [ -n "$hit" ] && CONFLICTS+=("$hit")
+    done <<< "$PKG_HITS"
+fi
+
+# 3. npm-installed package trees under the Pi agent directory.
+if [ -d "$PI_DIR/npm" ]; then
+    while IFS= read -r dir; do
+        [ -n "$dir" ] && CONFLICTS+=("npm-install:$dir")
+    done < <(
+        find "$PI_DIR/npm" -maxdepth 4 -type d \
+            \( -name 'ypi' -o -name 'pi-recursive*' \) 2>/dev/null
+    )
+fi
+
+if [ "${#CONFLICTS[@]}" -gt 0 ]; then
+    printf '%s\n' "${CONFLICTS[@]}"
+    exit 1
+fi
+exit 0

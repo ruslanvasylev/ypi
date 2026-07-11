@@ -112,5 +112,29 @@ else
     [ "$INSTALLED" != "$PINNED" ] && note "installed $INSTALLED is ahead of pinned $PINNED (.pi-version may be due for a re-pin)"
 fi
 
+# Ambient extension policy — report what a bare `ypi` launch will do.
+DETECT="$PROJECT_DIR/scripts/detect-ambient-recursion-conflict"
+if [ -x "$DETECT" ]; then
+    case "${RLM_AMBIENT_EXTENSIONS:-auto}" in
+        1) note "ambient extensions: forced ON (RLM_AMBIENT_EXTENSIONS=1)" ;;
+        0) note "ambient extensions: forced OFF (RLM_AMBIENT_EXTENSIONS=0)" ;;
+        *)
+            CONFLICT_OUTPUT="$("$DETECT" 2>/dev/null)"
+            DETECT_STATUS=$?
+            if [ "$DETECT_STATUS" -eq 0 ]; then
+                ok "ambient extensions: allowed (no conflicting recursion extension detected)"
+            elif [ "$DETECT_STATUS" -eq 1 ]; then
+                note "ambient extensions: isolated; conflicting recursion extension detected:"
+                printf '%s\n' "$CONFLICT_OUTPUT" | while IFS= read -r line; do
+                    [ -n "$line" ] && echo "    $line"
+                done
+                fixln "remove the duplicate copy, or set RLM_AMBIENT_EXTENSIONS=1 to accept the conflict"
+            else
+                note "ambient extensions: isolated (detection undetermined; fail closed)"
+            fi
+            ;;
+    esac
+fi
+
 echo -e "${GREEN}doctor: pi runtime OK${RESET}"
 exit 0
