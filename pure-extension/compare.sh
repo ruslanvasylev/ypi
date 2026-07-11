@@ -59,8 +59,10 @@ check_case() {
 		echo "FAIL: $label exited $status" >&2
 		COMPARE_FAIL=1
 	fi
-	if ! grep -q "$marker" "$RUN_DIR/$label.stdout"; then
-		echo "FAIL: $label did not return $marker" >&2
+	local actual
+	actual=$(cat "$RUN_DIR/$label.stdout")
+	if [ "$actual" != "$marker" ]; then
+		echo "FAIL: $label did not return exactly $marker (got: $actual)" >&2
 		COMPARE_FAIL=1
 	fi
 	if [ "$(count_pattern "depth=0→1" "$RUN_DIR/$label.trace")" -ne 1 ]; then
@@ -88,7 +90,8 @@ echo "artifacts=$RUN_DIR"
 run_case "pure-extension" "PURE_COMPARE_OK" \
 	env -u RLM_PROVIDER -u RLM_MODEL \
 		YPI_EXTENSION_ROOT="$PROJECT_DIR" \
-		YPI_EXTENSION_DEBUG=1 \
+		YPI_EXTENSION_PATH="$EXTENSION" \
+		YPI_EXTENSION_DEBUG=0 \
 		YPI_SHELL_HELPER=1 \
 		timeout 120 pi -p --no-session \
 		--provider "$PI_E2E_PROVIDER" --model "$PI_E2E_MODEL" \

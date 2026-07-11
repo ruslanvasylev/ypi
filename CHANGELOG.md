@@ -26,7 +26,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - Incremental JSON decoding now preserves late answer and cost events after oversized diagnostic events, fails configured budgets closed when a skipped event could own cost, while CLI stdout streams incrementally and successful child stderr remains on stderr.
 - SIGINT/SIGTERM cancellation reaches detached child process groups; preflight timeout exits 124 and includes stdin/setup time; malformed call, timeout, start-time, and budget controls fail closed.
 - Async calls are admitted before metadata acknowledgement, snapshot inherited context/fork state, and publish through private exclusive job directories. Broad automatic `/tmp/rlm_*` deletion was removed in favor of lease cleanup plus explicit `rlm_cleanup`.
-- Installed-package and publication checks now cover generated-runtime freshness, package-local Pi resolution, direct bundle root resolution, clean extension registration exits, and packaged doctor availability.
+- Installed-package and publication checks now cover generated-runtime freshness, package-local Pi resolution, direct bundle root resolution, clean extension registration exits, and packaged doctor availability. An explicitly loaded extension now ignores mismatched ambient `YPI_EXTENSION_ROOT`/`YPI_EXTENSION_PATH` hints from a different long-lived ypi session.
 - Recursive system prompts now expose the exact active `$CONTEXT` path and prioritize task-scoped context over Honcho or unrelated retrieval, so explicit no-jj read-only children can use `read` without guessing an environment-variable expansion.
 
 ## [0.6.1] - 2026-06-22

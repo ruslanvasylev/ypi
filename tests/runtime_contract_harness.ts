@@ -85,6 +85,16 @@ chmodSync(fakePi, 0o755);
 // away from the worktree under test.
 process.env.YPI_EXTENSION_ROOT = projectRoot;
 const runtime = resolveRuntime(new URL("../extensions/recursive.ts", import.meta.url).href);
+const configuredRoot = process.env.YPI_EXTENSION_ROOT;
+const configuredPath = process.env.YPI_EXTENSION_PATH;
+process.env.YPI_EXTENSION_ROOT = path.join(scratch, "stale-package");
+process.env.YPI_EXTENSION_PATH = path.join(scratch, "stale-package", "extensions", "recursive.ts");
+const explicitExtensionRuntime = resolveRuntime(new URL("../extensions/recursive.ts", import.meta.url).href);
+equal("explicit extension ignores mismatched ambient package root", explicitExtensionRuntime.root, projectRoot);
+if (configuredRoot === undefined) delete process.env.YPI_EXTENSION_ROOT;
+else process.env.YPI_EXTENSION_ROOT = configuredRoot;
+if (configuredPath === undefined) delete process.env.YPI_EXTENSION_PATH;
+else process.env.YPI_EXTENSION_PATH = configuredPath;
 let nativeTool: Tool | undefined;
 const pi = {
 	registerTool(tool: Tool) {
