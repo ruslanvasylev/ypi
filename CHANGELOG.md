@@ -15,6 +15,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - Agent-facing guidance now describes ypi as an RLM-inspired recursive coding-agent runtime rather than an Algorithm 1 reproduction, distinguishes the root prompt from delegated prompt files, and states which configured guardrails actually enforce bounds.
 - The bounded-recursion default remains depth 3 and now adds a 128-call session/tree cap. A controlled depth-3/depth-4 audit kept depth 3 after it found all 12 planted defects while depth 4 used 1.82× the tokens and timed out without an answer. `$RLM_ROOT_PROMPT_FILE` and goal/scope/acceptance echo guidance make deeper per-run experiments directly checkable for drift.
 - `ypi`, `rlm_query`, and `ypi-doctor` prefer the package-local exact Pi dependency over a stale PATH binary. The pure `pi-recursive` package follows Pi's package contract by declaring host-provided Pi and `typebox` as `"*"` peers.
+- After deterministic and isolated real-model parity gates, both incumbent engines are marked for deletion but remain shipped, selectable with `YPI_LEGACY_IMPL=1`, and tested for at least one release window. Removal requires a separate maintainer decision; the CLI ledger preserves the Node startup/RSS tradeoff.
 
 ### Fixed
 - Native child answers and stderr are retained through bounded streaming capture while raw stdout is counted but not retained; incremental JSON events are parsed as they arrive, preventing large Pi streams from reaching V8's maximum string length before final tool-output truncation.
