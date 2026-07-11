@@ -28,6 +28,7 @@ The file is deleted after consumption.
 - `rp ypi .prose/release.prose confirm_release='Approved.'` — cut an npm release
 - `rp ypi .prose/check-upstream.prose` — verify Pi compatibility
 - `rp ypi .prose/incorporate-insight.prose insight='...'` — propagate an insight across the repo
+- `docs/bounded-recursive-development.md` — mandatory run contract for large, proof-bound, or self-hosting recursive work
 
 ## Version Control: Use jj, not git
 
@@ -42,7 +43,7 @@ jj new                       # Start a new change on top
 
 # Pushing to GitHub
 jj bookmark set master       # Point master at current change
-jj git push                  # Push to GitHub
+jj git push --remote origin  # Push to the contributor fork
 
 # Reviewing sub-agent work
 jj log                       # See all changes including sub-agent workspaces
@@ -53,6 +54,9 @@ jj abandon <change-id>       # Discard a sub-agent's work
 
 **Never use `git add`, `git commit`, or `git push` directly.** jj manages git
 under the hood. Using git directly creates confusion and potential conflicts.
+Feature work pushes to `origin`; never direct-push `upstream` unless the user
+explicitly authorizes that exact remote operation. An upstream PR is a separate
+explicit action.
 
 Sub-agents get their own jj workspaces automatically (via `rlm_query`). Their
 edits appear as separate changes in `jj log` that you can review and absorb.
@@ -200,6 +204,16 @@ echo "2+2=" | rlm_query "What is the answer? Just the number."
 ```
 
 If that breaks, you broke yourself. Revert.
+
+### Bounded recursive development
+
+For large, proof-bound, or self-hosting changes, follow
+`docs/bounded-recursive-development.md` before the first child call. Use its
+single persisted trace/counter/cost envelope, three disjoint reviewers, serial
+root implementation, continuation-without-reset rule, and freeze-before-paid
+gate. Do not improvise extra review waves or hand-roll paid lane environments.
+The existing `.prose/recursive-development.prose` workflow is lightweight and
+does not own proof-bound recursion.
 
 ### Running experiments and evals
 **NEVER block the main conversation waiting for a script to finish.**

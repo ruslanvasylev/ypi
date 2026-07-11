@@ -1,5 +1,10 @@
 # recursive-development.prose
-# Use ypi to develop, test, and validate a ypi feature.
+# Use ypi to develop, test, and validate a small ypi feature.
+#
+# This is a lightweight workflow, not the owner for large, proof-bound, or
+# self-hosting refactors. Use docs/bounded-recursive-development.md for those
+# runs; it preserves one budget envelope across continuations and freezes the
+# tree before paid evidence.
 #
 # The recursion is literal: ypi spawns sub-agents that modify ypi's own source,
 # then ypi tests itself with the changes. The repo IS the test environment.
@@ -138,22 +143,22 @@ gate **all tests pass including new ones**:
   evidence: tests_final
   on-reject: "New tests are failing. Fix them."
 
-# --- Clean up and land ---
+# --- Clean up and prepare handoff ---
 
 exec "rm -f rlm_query.bak"
   on-fail: "ignore"
 
-session "Describe the change and land"
+session "Describe the change and prepare handoff"
   prompt: """
-    Feature complete. Finalize with jj:
+    Feature implementation is complete. Prepare a review handoff with jj:
 
     1. jj diff --stat (review what changed)
     2. jj describe -m "feat: <concise description based on {feature}>"
-    3. jj bookmark set master
-    4. jj git push
-    5. jj new (start fresh change for next work)
+    3. Report the current change ID, validation, and residual risks
+    4. Do not move master, push, land, or publish
 
-    Summarize what was built, what was tested, and any follow-up work needed.
+    Remote promotion is a separate explicitly authorized action. Feature work
+    pushes only to origin; never direct-push upstream from this workflow.
   """
 
 output summary = session "Final summary"

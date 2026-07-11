@@ -9,6 +9,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - A canonical TypeScript recursion runtime core now owns child planning, guardrails, routing, resources, environment projection, bounded spawning, result classification, and cleanup for both native and CLI calls. The Pi tool and Node CLI are thin adapters; the incumbent native and shell engines remain available through `YPI_LEGACY_IMPL=1` during convergence.
 - An executable native/CLI runtime contract freezes shared behavior and names any intentional divergence; the initial stabilized contract passes with no known deterministic divergences.
 - A strict TypeScript runtime typecheck and deterministic generated-CLI freshness check now run in `test-fast`.
+- A bounded recursive-development runbook now defines a persisted non-secret envelope, continuation without budget reset, three disjoint review charters, serial parent adjudication, and freeze-before-paid evidence.
 
 ### Changed
 - Bare `ypi` now explicitly preserves Pi-native root model selection: root provider/model/thinking come from Pi settings (`defaultProvider`, `defaultModel`, `defaultThinkingLevel`), `/model`, or CLI flags, while children inherit the active root route by default. Recursive child routing can now be lowered by depth with `RLM_CHILD_MODELS`, `RLM_CHILD_PROVIDERS`, and `RLM_CHILD_THINKING_LEVELS` without narrowing the root default, toolset, timeout, or call-limit behavior.
@@ -30,6 +31,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - Recursive system prompts now expose exact `$CONTEXT`, delegated-charter, and root-human-request paths and prioritize task-scoped context over unrelated retrieval. Pi receives delegated charters through non-interactive stdin while retaining byte-exact `$RLM_PROMPT_FILE` as authoritative because Pi normalizes outer stdin whitespace; this avoids option parsing, file-wrapper markup, and argv-size failures. Wrapper and child processes load only their exact ypi extension by default; `RLM_AMBIENT_EXTENSIONS=1` explicitly opts back into potentially conflicting ambient copies.
 - Full child isolation now uses a private Pi agent/config root plus offline mode while preserving Pi's own shipped package assets. Missing JSON `turn_end` cost marks the shared ledger incomplete, and installed-consumer gates execute canonical and retained CLI/native paths with strict exit statuses.
 - Release consistency now distinguishes ypi's tested pinned Pi dependency from `pi-recursive`'s intentionally unrestricted host-runtime peers, matching the packed extension contract instead of making release preflight fail on the valid manifest.
+- Runtime-parity lanes now remove every ambient `RLM_*`/`YPI_*` namespace before applying private lane state, and the lightweight recursive-development Prose workflow stops at handoff instead of pushing automatically.
 
 ## [0.6.1] - 2026-06-22
 

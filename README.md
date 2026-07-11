@@ -273,6 +273,13 @@ make test-parity-e2e   # wrapper vs direct-extension parity proof
 make test              # all of the above
 ```
 
+For a large, proof-bound, or self-hosting change, follow
+[`docs/bounded-recursive-development.md`](docs/bounded-recursive-development.md).
+It defines the single persisted run envelope, three-review topology,
+continuation semantics, and freeze-before-paid gate. The lightweight
+`.prose/recursive-development.prose` workflow is not a substitute for that
+contract.
+
 Install hooks once per clone to run checks automatically on git push:
 ```bash
 make install-hooks
