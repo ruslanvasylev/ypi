@@ -52,12 +52,30 @@ function remainingSetupMilliseconds(input: WorkspacePolicyInput): number {
 	return Math.max(1, Math.min(WORKSPACE_ADMISSION_TIMEOUT_MS, remaining));
 }
 
+// Git hooks (pre-push and friends) export GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE
+// into the environment. Inherited values would silently point every VCS check
+// below at a *different* repository than the checkout being leased, making a
+// clean fixture look dirty or a dirty parent look clean. All VCS subprocesses
+// here are read-only queries or workspace-scoped cleanup, so scrubbing GIT_*
+// is always safe. The environment is always passed explicitly: under Bun,
+// deletions from process.env are not reflected in implicitly inherited child
+// environments.
+function vcsEnvironment(): NodeJS.ProcessEnv {
+	const env: NodeJS.ProcessEnv = {};
+	for (const [key, value] of Object.entries(process.env)) {
+		if (key.startsWith("GIT_")) continue;
+		env[key] = value;
+	}
+	return env;
+}
+
 function run(input: WorkspacePolicyInput, command: string, args: string[], cwd = input.cwd) {
 	return spawnSync(command, args, {
 		cwd,
 		encoding: "utf8",
 		stdio: ["ignore", "pipe", "pipe"],
 		timeout: remainingSetupMilliseconds(input),
+		env: vcsEnvironment(),
 	});
 }
 
@@ -154,8 +172,8 @@ function createJjLease(input: WorkspacePolicyInput, jjRoot: string): WorkspaceLe
 			quiesceProcessGroup: true,
 			finalize() {
 				if (finalized) return finalized;
-				const summary = spawnSync(jjCommand(), ["diff", "--summary", "--from", baselineHead, "--to", "@"], { cwd: workspacePath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: WORKSPACE_CLEANUP_TIMEOUT_MS });
-				const change = spawnSync(jjCommand(), ["log", "-r", "@", "--no-graph", "-T", "change_id"], { cwd: workspacePath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: WORKSPACE_CLEANUP_TIMEOUT_MS });
+				const summary = spawnSync(jjCommand(), ["diff", "--summary", "--from", baselineHead, "--to", "@"], { cwd: workspacePath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: WORKSPACE_CLEANUP_TIMEOUT_MS, env: vcsEnvironment() });
+				const change = spawnSync(jjCommand(), ["log", "-r", "@", "--no-graph", "-T", "change_id"], { cwd: workspacePath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: WORKSPACE_CLEANUP_TIMEOUT_MS, env: vcsEnvironment() });
 				const changedPaths = summary.status === 0
 					? String(summary.stdout || "").split(/\r?\n/).map((line) => line.replace(/^\S+\s+/, "").trim()).filter(Boolean)
 					: [];
@@ -176,7 +194,7 @@ function createJjLease(input: WorkspacePolicyInput, jjRoot: string): WorkspaceLe
 				return finalized;
 			},
 			cleanup() {
-				spawnSync(jjCommand(), ["workspace", "forget", name], { cwd: jjRoot, stdio: "ignore", timeout: WORKSPACE_CLEANUP_TIMEOUT_MS });
+				spawnSync(jjCommand(), ["workspace", "forget", name], { cwd: jjRoot, stdio: "ignore", timeout: WORKSPACE_CLEANUP_TIMEOUT_MS, env: vcsEnvironment() });
 				rmSync(workspacePath, { recursive: true, force: true });
 				writer.release();
 			},
@@ -184,7 +202,7 @@ function createJjLease(input: WorkspacePolicyInput, jjRoot: string): WorkspaceLe
 	} catch (error) {
 		// `jj workspace add` can register metadata before timing out. Forget is
 		// idempotent enough for both provisional and confirmed registrations.
-		spawnSync(jjCommand(), ["workspace", "forget", name], { cwd: jjRoot, stdio: "ignore", timeout: WORKSPACE_CLEANUP_TIMEOUT_MS });
+		spawnSync(jjCommand(), ["workspace", "forget", name], { cwd: jjRoot, stdio: "ignore", timeout: WORKSPACE_CLEANUP_TIMEOUT_MS, env: vcsEnvironment() });
 		rmSync(workspacePath, { recursive: true, force: true });
 		writer.release();
 		throw error;
@@ -198,7 +216,7 @@ function gitPath(input: WorkspacePolicyInput, root: string, name: string): strin
 }
 
 function gitChangedPaths(root: string, baselineHead: string): { paths: string[]; finalHead?: string; error?: string } {
-	const command = (args: string[]) => spawnSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: WORKSPACE_CLEANUP_TIMEOUT_MS });
+	const command = (args: string[]) => spawnSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: WORKSPACE_CLEANUP_TIMEOUT_MS, env: vcsEnvironment() });
 	const head = command(["rev-parse", "HEAD"]);
 	const finalHead = head.status === 0 ? String(head.stdout || "").trim() : undefined;
 	const committed = finalHead ? command(["diff", "--name-only", "-z", baselineHead, finalHead]) : undefined;

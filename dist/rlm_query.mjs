@@ -1047,12 +1047,22 @@ function remainingSetupMilliseconds(input) {
   }
   return Math.max(1, Math.min(WORKSPACE_ADMISSION_TIMEOUT_MS, remaining));
 }
+function vcsEnvironment() {
+  const env = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.startsWith("GIT_"))
+      continue;
+    env[key] = value;
+  }
+  return env;
+}
 function run(input, command, args, cwd = input.cwd) {
   return spawnSync(command, args, {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
-    timeout: remainingSetupMilliseconds(input)
+    timeout: remainingSetupMilliseconds(input),
+    env: vcsEnvironment()
   });
 }
 function assertWithinDeadline(input, result, operation) {
@@ -1142,8 +1152,8 @@ function createJjLease(input, jjRoot) {
       finalize() {
         if (finalized)
           return finalized;
-        const summary = spawnSync(jjCommand(), ["diff", "--summary", "--from", baselineHead, "--to", "@"], { cwd: workspacePath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: WORKSPACE_CLEANUP_TIMEOUT_MS });
-        const change = spawnSync(jjCommand(), ["log", "-r", "@", "--no-graph", "-T", "change_id"], { cwd: workspacePath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: WORKSPACE_CLEANUP_TIMEOUT_MS });
+        const summary = spawnSync(jjCommand(), ["diff", "--summary", "--from", baselineHead, "--to", "@"], { cwd: workspacePath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: WORKSPACE_CLEANUP_TIMEOUT_MS, env: vcsEnvironment() });
+        const change = spawnSync(jjCommand(), ["log", "-r", "@", "--no-graph", "-T", "change_id"], { cwd: workspacePath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: WORKSPACE_CLEANUP_TIMEOUT_MS, env: vcsEnvironment() });
         const changedPaths = summary.status === 0 ? String(summary.stdout || "").split(/\r?\n/).map((line) => line.replace(/^\S+\s+/, "").trim()).filter(Boolean) : [];
         const finalHead = change.status === 0 ? String(change.stdout || "").trim() : undefined;
         finalized = {
@@ -1162,13 +1172,13 @@ function createJjLease(input, jjRoot) {
         return finalized;
       },
       cleanup() {
-        spawnSync(jjCommand(), ["workspace", "forget", name], { cwd: jjRoot, stdio: "ignore", timeout: WORKSPACE_CLEANUP_TIMEOUT_MS });
+        spawnSync(jjCommand(), ["workspace", "forget", name], { cwd: jjRoot, stdio: "ignore", timeout: WORKSPACE_CLEANUP_TIMEOUT_MS, env: vcsEnvironment() });
         rmSync4(workspacePath, { recursive: true, force: true });
         writer.release();
       }
     };
   } catch (error) {
-    spawnSync(jjCommand(), ["workspace", "forget", name], { cwd: jjRoot, stdio: "ignore", timeout: WORKSPACE_CLEANUP_TIMEOUT_MS });
+    spawnSync(jjCommand(), ["workspace", "forget", name], { cwd: jjRoot, stdio: "ignore", timeout: WORKSPACE_CLEANUP_TIMEOUT_MS, env: vcsEnvironment() });
     rmSync4(workspacePath, { recursive: true, force: true });
     writer.release();
     throw error;
@@ -1180,7 +1190,7 @@ function gitPath(input, root, name) {
   return result.status === 0 ? output(result) : undefined;
 }
 function gitChangedPaths(root, baselineHead) {
-  const command = (args) => spawnSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: WORKSPACE_CLEANUP_TIMEOUT_MS });
+  const command = (args) => spawnSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: WORKSPACE_CLEANUP_TIMEOUT_MS, env: vcsEnvironment() });
   const head = command(["rev-parse", "HEAD"]);
   const finalHead = head.status === 0 ? String(head.stdout || "").trim() : undefined;
   const committed = finalHead ? command(["diff", "--name-only", "-z", baselineHead, finalHead]) : undefined;

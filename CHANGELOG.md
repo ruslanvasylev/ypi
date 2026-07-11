@@ -23,6 +23,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - After deterministic and isolated real-model parity gates, both incumbent engines are marked for deletion but remain shipped, selectable with `YPI_LEGACY_IMPL=1`, and tested for at least one release window. Removal requires a separate maintainer decision; the CLI ledger preserves the Node startup/RSS tradeoff.
 
 ### Fixed
+- Workspace-lease VCS checks (implementer cleanliness, discovery, changed-path reports, jj cleanup) now run with an explicitly scrubbed `GIT_*` environment, so ypi behaves correctly inside git hooks where `GIT_DIR`/`GIT_WORK_TREE` would otherwise point the checks — and test fixtures — at the wrong repository. The native harness also passes explicit environments to fixture git commands because Bun does not propagate `process.env` deletions to implicitly inherited children.
 - Native child answers and stderr are retained through bounded streaming capture while raw stdout is counted but not retained; incremental JSON events are parsed as they arrive, preventing large Pi streams from reaching V8's maximum string length before final tool-output truncation.
 - CLI `rlm_query --async` closes the background worker's inherited stdio so documented `JOB=$(rlm_query --async ...)` capture returns immediately; sentinels now record the eventual child exit code and cleanup runs even when the child fails.
 - Native recursion depth parsing now rejects integer prefixes such as `0junk` and values outside the safe-integer range instead of silently accepting the numeric prefix.

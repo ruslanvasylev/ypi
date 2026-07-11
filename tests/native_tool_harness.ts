@@ -37,9 +37,25 @@ function assertNotContains(label: string, haystack: string, needle: string): voi
 	record(!haystack.includes(needle), label, `did not expect ${JSON.stringify(needle)} in ${JSON.stringify(haystack.slice(0, 500))}`);
 }
 
+// The harness may itself run inside a git hook (pre-push), which exports
+// GIT_DIR/GIT_WORK_TREE into the environment. Inherited values would redirect
+// fixture `git init/add/commit` at the PARENT repository — committing test
+// fixtures onto the real branch. Under Bun, deleting from process.env does NOT
+// propagate to implicitly inherited child environments, so every fixture git
+// spawn passes a scrubbed environment explicitly. N5a2 poisons GIT_* on
+// purpose to prove the runtime-level scrub in workspace-policy.
+function fixtureGitEnv(): NodeJS.ProcessEnv {
+	const env: NodeJS.ProcessEnv = {};
+	for (const [key, value] of Object.entries(process.env)) {
+		if (key.startsWith("GIT_")) continue;
+		env[key] = value;
+	}
+	return env;
+}
+
 function clearYpiEnv(): void {
 	for (const key of Object.keys(process.env)) {
-		if (key.startsWith("RLM_") || key.startsWith("YPI_") || key === "CONTEXT" || key === "PI_TRACE_FILE" || key === "SECRET_TOKEN") {
+		if (key.startsWith("RLM_") || key.startsWith("YPI_") || key === "CONTEXT" || key === "PI_TRACE_FILE" || key === "SECRET_TOKEN" || key.startsWith("GIT_")) {
 			delete process.env[key];
 		}
 	}
@@ -331,10 +347,10 @@ async function run(): Promise<void> {
 	assertNotContains("N5: no-jj child avoids a global tool allowlist", readLog(), "--tools ");
 
 	const implementRoot = mkdtempSync(path.join(scratch, "implement-git."));
-	spawnSync("git", ["init", "-q"], { cwd: implementRoot });
+	spawnSync("git", ["init", "-q"], { cwd: implementRoot, env: fixtureGitEnv() });
 	writeFileSync(path.join(implementRoot, "base.txt"), "base\n");
-	spawnSync("git", ["add", "base.txt"], { cwd: implementRoot });
-	spawnSync("git", ["-c", "user.name=ypi-test", "-c", "user.email=ypi@example.invalid", "commit", "-qm", "base"], { cwd: implementRoot });
+	spawnSync("git", ["add", "base.txt"], { cwd: implementRoot, env: fixtureGitEnv() });
+	spawnSync("git", ["-c", "user.name=ypi-test", "-c", "user.email=ypi@example.invalid", "commit", "-qm", "base"], { cwd: implementRoot, env: fixtureGitEnv() });
 	clearYpiEnv();
 	resetLog();
 	process.env.RLM_DEPTH = "0";
@@ -354,14 +370,46 @@ async function run(): Promise<void> {
 	assertContains("N5a: implementer forces exact confinement extension", readLog(), `-e ${runtime.extensionPath}`);
 	assertContains("N5a: implementer receives its exact write-scope root", readLog(), `YPI_IMPLEMENT_ROOT=${implementRoot}`);
 	assertNotContains("N5a: implementer retains edit/write built-ins", readLog(), "--exclude-tools bash,edit,write");
-	const implementLock = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-path", "ypi-shared-writer.lock"], { cwd: implementRoot, encoding: "utf8" }).stdout.trim();
+	const implementLock = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-path", "ypi-shared-writer.lock"], { cwd: implementRoot, encoding: "utf8", env: fixtureGitEnv() }).stdout.trim();
 	record(!existsSync(implementLock), "N5a: implementer releases writer lease after reporting");
 
+	// N5a2: git hooks export GIT_DIR (and friends) into the environment. The
+	// lease's VCS checks must inspect the leased checkout, not whatever
+	// repository the inherited hook variables point at — otherwise a clean
+	// fixture looks dirty (or a dirty parent looks clean) whenever ypi runs
+	// under `git push`.
+	const hookVictimRoot = mkdtempSync(path.join(scratch, "implement-hook-victim."));
+	spawnSync("git", ["init", "-q"], { cwd: hookVictimRoot, env: fixtureGitEnv() });
+	writeFileSync(path.join(hookVictimRoot, "dirty.txt"), "uncommitted\n");
+	const hookImplementRoot = mkdtempSync(path.join(scratch, "implement-hook-clean."));
+	spawnSync("git", ["init", "-q"], { cwd: hookImplementRoot, env: fixtureGitEnv() });
+	writeFileSync(path.join(hookImplementRoot, "base.txt"), "base\n");
+	spawnSync("git", ["add", "base.txt"], { cwd: hookImplementRoot, env: fixtureGitEnv() });
+	spawnSync("git", ["-c", "user.name=ypi-test", "-c", "user.email=ypi@example.invalid", "commit", "-qm", "base"], { cwd: hookImplementRoot, env: fixtureGitEnv() });
+	clearYpiEnv();
+	resetLog();
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	process.env.RLM_JSON = "0";
+	process.env.RLM_CHILD_EXTENSIONS = "0";
+	process.env.YPI_FAKE_PI_MODE = "write-file";
+	process.env.GIT_DIR = path.join(hookVictimRoot, ".git");
+	process.env.GIT_WORK_TREE = hookVictimRoot;
+	try {
+		ensureEnvironment(runtime, context(hookImplementRoot));
+		const hookImplementResult = await tool.execute("implement-hook-call", { prompt: "bounded implementation under git hook env", mode: "implement" }, undefined, undefined, context(hookImplementRoot));
+		const hookImplementText = hookImplementResult.content.find((item) => item.type === "text")?.text || "";
+		assertContains("N5a2: implementer lease ignores inherited GIT_DIR/GIT_WORK_TREE", hookImplementText, "IMPLEMENT_CHILD_OK");
+	} finally {
+		delete process.env.GIT_DIR;
+		delete process.env.GIT_WORK_TREE;
+	}
+
 	const failingImplementRoot = mkdtempSync(path.join(scratch, "implement-failure."));
-	spawnSync("git", ["init", "-q"], { cwd: failingImplementRoot });
+	spawnSync("git", ["init", "-q"], { cwd: failingImplementRoot, env: fixtureGitEnv() });
 	writeFileSync(path.join(failingImplementRoot, "base.txt"), "base\n");
-	spawnSync("git", ["add", "base.txt"], { cwd: failingImplementRoot });
-	spawnSync("git", ["-c", "user.name=ypi-test", "-c", "user.email=ypi@example.invalid", "commit", "-qm", "base"], { cwd: failingImplementRoot });
+	spawnSync("git", ["add", "base.txt"], { cwd: failingImplementRoot, env: fixtureGitEnv() });
+	spawnSync("git", ["-c", "user.name=ypi-test", "-c", "user.email=ypi@example.invalid", "commit", "-qm", "base"], { cwd: failingImplementRoot, env: fixtureGitEnv() });
 	clearYpiEnv();
 	resetLog();
 	process.env.RLM_DEPTH = "0";
@@ -378,10 +426,10 @@ async function run(): Promise<void> {
 	}
 
 	const descendantRoot = mkdtempSync(path.join(scratch, "implement-descendant."));
-	spawnSync("git", ["init", "-q"], { cwd: descendantRoot });
+	spawnSync("git", ["init", "-q"], { cwd: descendantRoot, env: fixtureGitEnv() });
 	writeFileSync(path.join(descendantRoot, "base.txt"), "base\n");
-	spawnSync("git", ["add", "base.txt"], { cwd: descendantRoot });
-	spawnSync("git", ["-c", "user.name=ypi-test", "-c", "user.email=ypi@example.invalid", "commit", "-qm", "base"], { cwd: descendantRoot });
+	spawnSync("git", ["add", "base.txt"], { cwd: descendantRoot, env: fixtureGitEnv() });
+	spawnSync("git", ["-c", "user.name=ypi-test", "-c", "user.email=ypi@example.invalid", "commit", "-qm", "base"], { cwd: descendantRoot, env: fixtureGitEnv() });
 	clearYpiEnv();
 	resetLog();
 	process.env.RLM_DEPTH = "0";
