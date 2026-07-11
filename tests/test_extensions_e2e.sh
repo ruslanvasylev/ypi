@@ -69,7 +69,7 @@ STDERR_FILE="$TEST_TMP/ext1_stderr.txt"
 STDOUT_FILE="$TEST_TMP/ext1_stdout.txt"
 
 # Run a minimal prompt with the canonical ypi extension
-timeout 30 pi -p --no-session "${PI_E2E_ARGS[@]}" \
+timeout 30 pi -p --no-session --no-extensions "${PI_E2E_ARGS[@]}" \
     -e "$PROJECT_DIR/extensions/recursive.ts" \
     "Reply with exactly: EXTENSION_TEST_OK" \
     >"$STDOUT_FILE" 2>"$STDERR_FILE" || true
@@ -212,6 +212,8 @@ STDOUT_FILE="$TEST_TMP/ext5_stdout.txt"
 
 export RLM_DEPTH=0
 export RLM_MAX_DEPTH=1
+# This extension E2E is a read-only recursion probe; choose no-jj explicitly.
+export RLM_JJ=0
 
 timeout 45 "$PROJECT_DIR/ypi" -p --no-session "${PI_E2E_ARGS[@]}" \
     "What is 2+2? Reply with ONLY the number." \

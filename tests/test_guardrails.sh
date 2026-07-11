@@ -36,6 +36,10 @@ assert_exit_code() {
     local label="$1" expected="$2" actual="$3"
     if [ "$expected" = "$actual" ]; then pass "$label"; else fail "$label" "expected exit $expected, got $actual"; fi
 }
+assert_file_exists() {
+    local label="$1" path="$2"
+    if [ -f "$path" ]; then pass "$label"; else fail "$label" "file should exist: $path"; fi
+}
 assert_file_not_exists() {
     local label="$1" path="$2"
     if [ ! -f "$path" ]; then pass "$label"; else fail "$label" "file should not exist: $path"; fi
@@ -87,8 +91,10 @@ unset RLM_EXTENSIONS RLM_CHILD_EXTENSIONS RLM_CHILD_DISCOVERY RLM_HASHLINE RLM_J
 # YPI_PI_BIN to a real pi binary.
 export YPI_PI_BIN="$MOCK_BIN/pi"
 
-# Disable JSON mode in guardrail tests — mock pi doesn't output JSON
+# Disable JSON mode and explicitly choose no-jj read-only mode for ordinary
+# guardrail probes; the JJ section overrides this where workspace behavior is tested.
 export RLM_JSON=0
+export RLM_JJ=0
 
 TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/rlm_test.XXXXXX")
 export TMPDIR="$TEST_TMP"
@@ -106,7 +112,15 @@ echo ""
 echo "=== Timeout ==="
 
 # G1: RLM_TIMEOUT is propagated to child
-_feature_exists() { grep -q "${1}" "$RLM_QUERY" 2>/dev/null; }
+_feature_exists() {
+    grep -q "${1}" \
+        "$RLM_QUERY" \
+        "$PROJECT_DIR/extensions/ypi/cli.ts" \
+        "$PROJECT_DIR/extensions/ypi/runtime-core.ts" \
+        "$PROJECT_DIR/extensions/ypi/guardrails.ts" \
+        "$PROJECT_DIR/extensions/ypi/env.ts" \
+        "$PROJECT_DIR/extensions/ypi/internal/"*.ts 2>/dev/null
+}
 
 if _feature_exists "RLM_TIMEOUT"; then
     OUTPUT=$(
@@ -197,6 +211,67 @@ if _feature_exists "RLM_START_TIME"; then
 else
     skip "G4: expired timeout exits early" "RLM_START_TIME not implemented yet"
 fi
+
+# G4b: depth-0 timeout starts at CLI invocation, including stdin spooling, and
+# preflight timeout has the conventional exit status 124.
+STDIN_FIFO="$TEST_TMP/open-stdin.fifo"
+mkfifo "$STDIN_FIFO"
+( exec 3>"$STDIN_FIFO"; sleep 30 ) &
+STDIN_WRITER_PID=$!
+START_NS=$(python3 -c 'import time; print(time.monotonic_ns())')
+set +e
+OUTPUT=$(
+    env RLM_STDIN=1 RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_TIMEOUT=1 \
+        RLM_JJ=0 RLM_UNSAFE_NO_JJ_WRITE=1 RLM_CALL_COUNTER_FILE="$TEST_TMP/stdin-timeout.counter" \
+        rlm_query "Open input must obey timeout" <"$STDIN_FIFO" 2>&1
+)
+STDIN_TIMEOUT_RC=$?
+set -e
+END_NS=$(python3 -c 'import time; print(time.monotonic_ns())')
+kill "$STDIN_WRITER_PID" 2>/dev/null || true
+wait "$STDIN_WRITER_PID" 2>/dev/null || true
+rm -f "$STDIN_FIFO"
+STDIN_TIMEOUT_MS=$(( (END_NS - START_NS) / 1000000 ))
+assert_eq "G4b: stdin/setup timeout exits 124" "124" "$STDIN_TIMEOUT_RC"
+assert_not_contains "G4b: expired stdin budget spawns no child" "MOCK_PI_CALLED" "$OUTPUT"
+assert_contains "G4b: expired stdin budget is explicit" "Timeout exceeded" "$OUTPUT"
+if [ "$STDIN_TIMEOUT_MS" -lt 1800 ]; then pass "G4b: active deadline interrupts an open stdin pipe"; else fail "G4b: active deadline interrupts an open stdin pipe" "elapsed=${STDIN_TIMEOUT_MS}ms"; fi
+
+# G4c: read-only review never invokes jj setup, so a slow or broken jj binary
+# cannot delay normal recursion or change repository state.
+cat > "$MOCK_BIN/jj" <<'SLOWJJ'
+#!/bin/bash
+printf 'unexpected jj call\n' >> "$YPI_JJ_REGISTRY_FILE"
+sleep 30
+SLOWJJ
+chmod +x "$MOCK_BIN/jj"
+START_NS=$(python3 -c 'import time; print(time.monotonic_ns())')
+OUTPUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
+    RLM_JJ=auto RLM_CALL_COUNTER_FILE="$TEST_TMP/jj-review.counter" YPI_JJ_REGISTRY_FILE="$TEST_TMP/jj-registry" \
+    rlm_query "Read-only review skips jj setup" 2>&1
+)
+END_NS=$(python3 -c 'import time; print(time.monotonic_ns())')
+JJ_REVIEW_MS=$(( (END_NS - START_NS) / 1000000 ))
+rm -f "$MOCK_BIN/jj"
+assert_contains "G4c: read-only review still runs child" "MOCK_PI_CALLED" "$OUTPUT"
+if [ -e "$TEST_TMP/jj-registry" ]; then fail "G4c: read-only review never invokes jj" "jj was called"; else pass "G4c: read-only review never invokes jj"; fi
+if [ "$JJ_REVIEW_MS" -lt 3000 ]; then pass "G4c: unavailable jj adds no setup delay"; else fail "G4c: unavailable jj adds no setup delay" "elapsed=${JJ_REVIEW_MS}ms"; fi
+
+# G4d: the shared call-counter lock cannot outlive the tree deadline.
+COUNTER_FILE="$TEST_TMP/deadline-lock.counter"
+mkdir "${COUNTER_FILE}.lock"
+START_NS=$(python3 -c 'import time; print(time.monotonic_ns())')
+set +e
+OUTPUT=$(CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_TIMEOUT=1 RLM_JJ=0 RLM_CALL_COUNTER_FILE="$COUNTER_FILE" rlm_query "Bound counter lock" 2>&1)
+COUNTER_TIMEOUT_RC=$?
+set -e
+END_NS=$(python3 -c 'import time; print(time.monotonic_ns())')
+COUNTER_TIMEOUT_MS=$(( (END_NS - START_NS) / 1000000 ))
+rm -rf "${COUNTER_FILE}.lock"
+assert_eq "G4d: counter lock timeout exits 124" "124" "$COUNTER_TIMEOUT_RC"
+assert_contains "G4d: counter lock timeout is explicit" "Timeout exceeded" "$OUTPUT"
+if [ "$COUNTER_TIMEOUT_MS" -lt 2500 ]; then pass "G4d: counter allocation obeys the tree deadline"; else fail "G4d: counter allocation obeys the tree deadline" "elapsed=${COUNTER_TIMEOUT_MS}ms"; fi
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -310,55 +385,62 @@ fi
 echo ""
 echo "=== Temp File Cleanup ==="
 
-# G9: temp context file cleaned up after successful run
-# (This tests post-exec cleanup — currently broken because of `exec`)
-BEFORE=$(find "$TMPDIR" -maxdepth 1 -type f -name 'rlm_ctx_d*' 2>/dev/null | wc -l)
+# G9: canonical context-resource directories are cleaned after successful runs.
+BEFORE=$(find "$TMPDIR" -maxdepth 1 -type d -name 'ypi_ctx_*' 2>/dev/null | wc -l)
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
     RLM_PROVIDER=test RLM_MODEL=test \
     rlm_query "Cleanup test?"
 )
-AFTER=$(find "$TMPDIR" -maxdepth 1 -type f -name 'rlm_ctx_d*' 2>/dev/null | wc -l)
+AFTER=$(find "$TMPDIR" -maxdepth 1 -type d -name 'ypi_ctx_*' 2>/dev/null | wc -l)
+assert_eq "G9: temp file cleaned up" "$BEFORE" "$AFTER"
 
-if grep -q 'rm -f "$CHILD_CONTEXT"' "$RLM_QUERY" 2>/dev/null; then
-    # After implementing cleanup, AFTER should equal BEFORE
-    assert_eq "G9: temp file cleaned up" "$BEFORE" "$AFTER"
-else
-    skip "G9: temp file cleaned up" "cleanup trap not implemented yet (exec replaces process)"
-fi
-
-# G10: temp files cleaned up even on error
-if grep -q 'rm -f "$CHILD_CONTEXT"' "$RLM_QUERY" 2>/dev/null; then
-    # Make mock pi exit with error
-    cat > "$MOCK_BIN/pi" << 'ERRPI'
+# G10: canonical resources are cleaned even when child execution fails.
+cat > "$MOCK_BIN/pi" << 'ERRPI'
 #!/bin/bash
 exit 1
 ERRPI
-    chmod +x "$MOCK_BIN/pi"
+chmod +x "$MOCK_BIN/pi"
 
-    BEFORE=$(find "$TMPDIR" -maxdepth 1 -type f -name 'rlm_ctx_d*' 2>/dev/null | wc -l)
-    OUTPUT=$(
-        CONTEXT="$TEST_TMP/ctx.txt" \
-        RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
-        RLM_PROVIDER=test RLM_MODEL=test \
-        rlm_query "Error cleanup test?" 2>&1 || true
-    )
-    AFTER=$(find "$TMPDIR" -maxdepth 1 -type f -name 'rlm_ctx_d*' 2>/dev/null | wc -l)
-    assert_eq "G10: temp cleaned after error" "$BEFORE" "$AFTER"
+BEFORE=$(find "$TMPDIR" -maxdepth 1 -type d -name 'ypi_ctx_*' 2>/dev/null | wc -l)
+OUTPUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" \
+    RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
+    RLM_PROVIDER=test RLM_MODEL=test \
+    rlm_query "Error cleanup test?" 2>&1 || true
+)
+AFTER=$(find "$TMPDIR" -maxdepth 1 -type d -name 'ypi_ctx_*' 2>/dev/null | wc -l)
+assert_eq "G10: temp cleaned after error" "$BEFORE" "$AFTER"
 
-    # Restore normal mock
-    cat > "$MOCK_BIN/pi" << 'MOCK_PI'
+# G10b: explicit cleanup recognizes canonical and retained private async job
+# directories, remains dry-run by default, and ignores lookalikes without owned entries.
+ASYNC_OWNED="$TMPDIR/rlm_async_cleanup_ABC123"
+ASYNC_LOOKALIKE="$TMPDIR/rlm_async_unrelated_DEF456"
+STALE_COUNTER_LOCK="$TMPDIR/rlm_calls_cleanup.counter.lock"
+mkdir -p "$ASYNC_OWNED" "$ASYNC_LOOKALIKE" "$STALE_COUNTER_LOCK"
+printf '%s\n' done > "$ASYNC_OWNED/output.txt"
+printf '%s\n' keep > "$ASYNC_LOOKALIKE/unrelated.txt"
+touch -d '3 hours ago' "$ASYNC_OWNED" "$ASYNC_LOOKALIKE" "$STALE_COUNTER_LOCK"
+CLEANUP_DRY=$(TMPDIR="$TMPDIR" "$PROJECT_DIR/rlm_cleanup" --age 60)
+assert_contains "G10b: cleanup dry-run discovers owned async directory" "Async job dirs older than 60m: 1" "$CLEANUP_DRY"
+assert_contains "G10b: cleanup dry-run discovers stale counter lock" "Call-counter locks older than 60m: 1" "$CLEANUP_DRY"
+if [ -d "$ASYNC_OWNED" ] && [ -d "$STALE_COUNTER_LOCK" ]; then pass "G10b: cleanup is dry-run by default"; else fail "G10b: cleanup is dry-run by default" "owned directory removed"; fi
+TMPDIR="$TMPDIR" "$PROJECT_DIR/rlm_cleanup" --age 60 --force >/dev/null
+if [ ! -e "$ASYNC_OWNED" ]; then pass "G10b: forced cleanup removes owned async directory"; else fail "G10b: forced cleanup removes owned async directory" "directory remains"; fi
+if [ ! -e "$STALE_COUNTER_LOCK" ]; then pass "G10b: forced cleanup removes stale counter lock"; else fail "G10b: forced cleanup removes stale counter lock" "lock remains"; fi
+if [ -d "$ASYNC_LOOKALIKE" ]; then pass "G10b: cleanup preserves unrelated lookalike"; else fail "G10b: cleanup preserves unrelated lookalike" "lookalike removed"; fi
+rm -rf "$ASYNC_LOOKALIKE"
+
+# Restore normal mock
+cat > "$MOCK_BIN/pi" << 'MOCK_PI'
 #!/bin/bash
 echo "MOCK_PI_CALLED"
 echo "ARGS: $*"
 echo "RLM_DEPTH=$RLM_DEPTH"
 echo "RLM_MODEL=$RLM_MODEL"
 MOCK_PI
-    chmod +x "$MOCK_BIN/pi"
-else
-    skip "G10: temp cleaned after error" "cleanup trap not implemented yet"
-fi
+chmod +x "$MOCK_BIN/pi"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -403,6 +485,206 @@ else
     skip "G11: exit code propagated" "still uses exec (replaces process)"
 fi
 
+# G11b: canonical CLI preserves incremental stdout rather than buffering until
+# child exit.
+cat > "$MOCK_BIN/pi" << 'STREAMPI'
+#!/bin/bash
+printf '%s\n' STREAM_FIRST
+sleep 2
+printf '%s\n' STREAM_SECOND
+STREAMPI
+chmod +x "$MOCK_BIN/pi"
+if RLM_QUERY_PATH="$RLM_QUERY" TEST_CONTEXT="$TEST_TMP/ctx.txt" TEST_COUNTER="$TEST_TMP/stream.counter" python3 <<'PY'
+import os, subprocess, time
+start=time.monotonic()
+env=os.environ.copy()
+env.update({"CONTEXT":os.environ["TEST_CONTEXT"],"RLM_DEPTH":"0","RLM_MAX_DEPTH":"3","RLM_JSON":"0","RLM_JJ":"0","RLM_UNSAFE_NO_JJ_WRITE":"1","RLM_SHARED_SESSIONS":"0","RLM_CALL_COUNTER_FILE":os.environ["TEST_COUNTER"],"RLM_TRACE_ID":"streaming"})
+p=subprocess.Popen([os.environ["RLM_QUERY_PATH"],"Streaming output?"],env=env,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+first=p.stdout.readline().strip()
+elapsed=time.monotonic()-start
+rest,err=p.communicate(timeout=5)
+assert p.returncode==0,(p.returncode,err)
+assert first=="STREAM_FIRST",first
+assert elapsed<1.0,elapsed
+assert "STREAM_SECOND" in rest,rest
+PY
+then
+    pass "G11b: CLI streams stdout before child exit"
+else
+    fail "G11b: CLI streams stdout before child exit" "streaming probe failed"
+fi
+
+# G11c: successful child stderr remains stderr and never contaminates captured
+# answer stdout.
+cat > "$MOCK_BIN/pi" << 'SPLITPI'
+#!/bin/bash
+printf '%s\n' STDOUT_ONLY
+printf '%s\n' STDERR_ONLY >&2
+SPLITPI
+chmod +x "$MOCK_BIN/pi"
+SPLIT_ERR="$TEST_TMP/split.stderr"
+SPLIT_OUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JSON=0 \
+    RLM_JJ=0 RLM_UNSAFE_NO_JJ_WRITE=1 RLM_SHARED_SESSIONS=0 \
+    RLM_CALL_COUNTER_FILE="$TEST_TMP/split.counter" RLM_TRACE_ID=split \
+    rlm_query "Split output?" 2>"$SPLIT_ERR"
+)
+assert_contains "G11c: child stdout remains stdout" "STDOUT_ONLY" "$SPLIT_OUT"
+assert_not_contains "G11c: child stderr excluded from stdout" "STDERR_ONLY" "$SPLIT_OUT"
+assert_contains "G11c: child stderr remains stderr" "STDERR_ONLY" "$(cat "$SPLIT_ERR")"
+
+# G11d: SIGINT reaches the detached child process group and the CLI exits 130.
+cat > "$MOCK_BIN/pi" << 'CANCELPI'
+#!/bin/bash
+printf '%s\n' "$$" > "$YPI_FAKE_PID_FILE"
+sleep 30
+CANCELPI
+chmod +x "$MOCK_BIN/pi"
+if RLM_QUERY_PATH="$RLM_QUERY" TEST_CONTEXT="$TEST_TMP/ctx.txt" TEST_COUNTER="$TEST_TMP/cancel.counter" TEST_PID_FILE="$TEST_TMP/cancel.pid" python3 <<'PY'
+import os, signal, subprocess, time
+env=os.environ.copy()
+env.update({"CONTEXT":os.environ["TEST_CONTEXT"],"RLM_DEPTH":"0","RLM_MAX_DEPTH":"3","RLM_JSON":"0","RLM_JJ":"0","RLM_UNSAFE_NO_JJ_WRITE":"1","RLM_SHARED_SESSIONS":"0","RLM_CALL_COUNTER_FILE":os.environ["TEST_COUNTER"],"RLM_TRACE_ID":"cancel","YPI_FAKE_PID_FILE":os.environ["TEST_PID_FILE"]})
+p=subprocess.Popen([os.environ["RLM_QUERY_PATH"],"Cancel child?"],env=env,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+for _ in range(60):
+    if os.path.exists(os.environ["TEST_PID_FILE"]): break
+    time.sleep(.05)
+assert os.path.exists(os.environ["TEST_PID_FILE"]),"child pid not recorded"
+child_pid=int(open(os.environ["TEST_PID_FILE"]).read())
+p.send_signal(signal.SIGINT)
+p.communicate(timeout=5)
+assert p.returncode==130,p.returncode
+try:
+    os.kill(child_pid,0)
+except ProcessLookupError:
+    pass
+else:
+    raise AssertionError(f"child still alive: {child_pid}")
+PY
+then
+    pass "G11d: CLI cancellation terminates child and exits 130"
+else
+    fail "G11d: CLI cancellation terminates child and exits 130" "cancellation probe failed"
+fi
+
+# G11d2: a descendant that closes inherited stdio and ignores SIGTERM must
+# still receive the scheduled process-group SIGKILL after the leader exits.
+cat > "$MOCK_BIN/pi" << 'DESCENDANTPI'
+#!/bin/bash
+(
+  trap '' TERM
+  exec </dev/null >/dev/null 2>&1
+  while :; do sleep 30; done
+) &
+printf '%s\n' "$!" > "$YPI_DESCENDANT_PID_FILE"
+printf '%s\n' "$$" > "$YPI_FAKE_PID_FILE"
+sleep 30
+DESCENDANTPI
+chmod +x "$MOCK_BIN/pi"
+if RLM_QUERY_PATH="$RLM_QUERY" TEST_CONTEXT="$TEST_TMP/ctx.txt" TEST_COUNTER="$TEST_TMP/descendant-cancel.counter" TEST_PID_FILE="$TEST_TMP/descendant-parent.pid" TEST_DESC_FILE="$TEST_TMP/descendant.pid" python3 <<'PY'
+import os, signal, subprocess, time
+env=os.environ.copy()
+env.update({"CONTEXT":os.environ["TEST_CONTEXT"],"RLM_DEPTH":"0","RLM_MAX_DEPTH":"3","RLM_JSON":"0","RLM_JJ":"0","RLM_SHARED_SESSIONS":"0","RLM_CALL_COUNTER_FILE":os.environ["TEST_COUNTER"],"RLM_TRACE_ID":"descendant-cancel","YPI_FAKE_PID_FILE":os.environ["TEST_PID_FILE"],"YPI_DESCENDANT_PID_FILE":os.environ["TEST_DESC_FILE"]})
+p=subprocess.Popen([os.environ["RLM_QUERY_PATH"],"Cancel descendant group?"],env=env,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+for _ in range(100):
+    if os.path.exists(os.environ["TEST_DESC_FILE"]): break
+    time.sleep(.02)
+assert os.path.exists(os.environ["TEST_DESC_FILE"]),"descendant pid not recorded"
+descendant=int(open(os.environ["TEST_DESC_FILE"]).read())
+p.send_signal(signal.SIGINT)
+p.communicate(timeout=6)
+assert p.returncode==130,p.returncode
+try:
+    os.kill(descendant,0)
+except ProcessLookupError:
+    pass
+else:
+    raise AssertionError(f"SIGTERM-ignoring descendant still alive: {descendant}")
+PY
+then
+    pass "G11d2: cancellation escalates against surviving process-group descendants"
+else
+    fail "G11d2: cancellation escalates against surviving process-group descendants" "descendant cancellation probe failed"
+fi
+
+# G11e: the thin CLI does not invent a trailing newline that the child did not
+# emit; byte presentation remains pipe-compatible with the retained CLI.
+cat > "$MOCK_BIN/pi" << 'BYTESPI'
+#!/bin/bash
+printf '%s' NO_TRAILING_NEWLINE
+BYTESPI
+chmod +x "$MOCK_BIN/pi"
+if RLM_QUERY_PATH="$RLM_QUERY" TEST_CONTEXT="$TEST_TMP/ctx.txt" TEST_COUNTER="$TEST_TMP/bytes.counter" python3 <<'PY'
+import os, subprocess
+env=os.environ.copy()
+env.update({"CONTEXT":os.environ["TEST_CONTEXT"],"RLM_DEPTH":"0","RLM_MAX_DEPTH":"3","RLM_JSON":"0","RLM_JJ":"0","RLM_SHARED_SESSIONS":"0","RLM_CALL_COUNTER_FILE":os.environ["TEST_COUNTER"],"RLM_TRACE_ID":"bytes"})
+r=subprocess.run([os.environ["RLM_QUERY_PATH"],"Exact bytes?"],env=env,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+assert r.returncode==0,(r.returncode,r.stderr)
+assert r.stdout==b"NO_TRAILING_NEWLINE",repr(r.stdout)
+PY
+then
+    pass "G11e: CLI preserves exact child stdout bytes"
+else
+    fail "G11e: CLI preserves exact child stdout bytes" "byte probe failed"
+fi
+
+cat > "$MOCK_BIN/pi" << 'FULLSTREAMPI'
+#!/bin/bash
+python3 -c 'import sys; sys.stdout.write("A" * 100000)'
+FULLSTREAMPI
+chmod +x "$MOCK_BIN/pi"
+if RLM_QUERY_PATH="$RLM_QUERY" TEST_CONTEXT="$TEST_TMP/ctx.txt" TEST_COUNTER="$TEST_TMP/full-stream.counter" python3 <<'PY'
+import os, subprocess
+env=os.environ.copy()
+env.update({"CONTEXT":os.environ["TEST_CONTEXT"],"RLM_DEPTH":"0","RLM_MAX_DEPTH":"3","RLM_JSON":"0","RLM_JJ":"0","RLM_SHARED_SESSIONS":"0","RLM_CALL_COUNTER_FILE":os.environ["TEST_COUNTER"],"RLM_TRACE_ID":"full-stream"})
+r=subprocess.run([os.environ["RLM_QUERY_PATH"],"Full stream?"],env=env,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+assert r.returncode==0,(r.returncode,r.stderr[-500:])
+assert len(r.stdout)==100000,len(r.stdout)
+PY
+then
+    pass "G11e2: CLI streams bytes beyond the retained answer cap"
+else
+    fail "G11e2: CLI streams bytes beyond the retained answer cap" "full stream probe failed"
+fi
+
+# G11f: downstream pipe closure is handled as normal pipeline termination; it
+# aborts paid child work instead of crashing Node with an unhandled EPIPE.
+cat > "$MOCK_BIN/pi" << 'PIPEPI'
+#!/bin/bash
+python3 - <<'PY'
+for i in range(200000):
+    print(f"line-{i:06d}-" + "x" * 200)
+PY
+PIPEPI
+chmod +x "$MOCK_BIN/pi"
+if RLM_QUERY_PATH="$RLM_QUERY" TEST_CONTEXT="$TEST_TMP/ctx.txt" TEST_COUNTER="$TEST_TMP/epipe.counter" python3 <<'PY'
+import os, subprocess
+env=os.environ.copy()
+env.update({"CONTEXT":os.environ["TEST_CONTEXT"],"RLM_DEPTH":"0","RLM_MAX_DEPTH":"3","RLM_JSON":"0","RLM_JJ":"0","RLM_SHARED_SESSIONS":"0","RLM_CALL_COUNTER_FILE":os.environ["TEST_COUNTER"],"RLM_TRACE_ID":"epipe"})
+p=subprocess.Popen([os.environ["RLM_QUERY_PATH"],"Pipe close?"],env=env,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+assert p.stdout is not None
+assert p.stdout.readline()
+p.stdout.close()
+stderr=p.stderr.read() if p.stderr else b""
+rc=p.wait(timeout=5)
+assert rc==0,(rc,stderr[-500:])
+assert b"EPIPE" not in stderr,stderr[-500:]
+PY
+then
+    pass "G11f: downstream EPIPE cancels cleanly without an unhandled error"
+else
+    fail "G11f: downstream EPIPE cancels cleanly without an unhandled error" "pipe closure probe failed"
+fi
+
+# Restore normal mock before subsequent sections.
+cat > "$MOCK_BIN/pi" << 'MOCK_PI'
+#!/bin/bash
+echo "MOCK_PI_CALLED"
+echo "ARGS: $*"
+echo "RLM_DEPTH=$RLM_DEPTH"
+echo "RLM_MODEL=$RLM_MODEL"
+MOCK_PI
+chmod +x "$MOCK_BIN/pi"
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # JJ WORKSPACE ISOLATION TESTS
@@ -424,18 +706,18 @@ exit 0
 MOCK_JJ
 chmod +x "$MOCK_BIN/jj"
 
-# G12: workspace created for non-leaf depth when jj available
+# G12: review mode does not create a workspace even when jj is available
 rm -f "$JJ_LOG"
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
-    RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
+    RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=1 \
     RLM_PROVIDER=test RLM_MODEL=test \
     rlm_query "Check JJ workspace"
 )
 if [ -f "$JJ_LOG" ] && grep -qF -- "workspace add" "$JJ_LOG"; then
-    pass "G12: JJ workspace created for non-leaf depth"
+    fail "G12: review avoids unnecessary JJ workspace" "jj workspace add was called"
 else
-    fail "G12: JJ workspace created for non-leaf depth" "jj workspace add not called"
+    pass "G12: review avoids unnecessary JJ workspace"
 fi
 
 # G13: RLM_JJ=0 disables workspace creation
@@ -455,36 +737,55 @@ fi
 assert_contains "G13: no-jj read-only excludes mutating built-ins" "--exclude-tools bash,edit,write" "$OUTPUT"
 assert_not_contains "G13: no-jj read-only does not allowlist away extension tools" "--tools read,grep,find,ls,rlm_query" "$OUTPUT"
 
-# G14: Max depth nodes still get workspaces (they have tools now)
+# G14: max-depth review nodes remain read-only and avoid workspaces
 rm -f "$JJ_LOG"
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
-    RLM_DEPTH=2 RLM_MAX_DEPTH=3 \
+    RLM_DEPTH=2 RLM_MAX_DEPTH=3 RLM_JJ=1 \
     RLM_PROVIDER=test RLM_MODEL=test \
     rlm_query "Max depth"
 )
 if [ -f "$JJ_LOG" ] && grep -qF -- "workspace add" "$JJ_LOG"; then
-    pass "G14: max depth gets JJ workspace"
+    fail "G14: max-depth review avoids JJ workspace" "jj workspace add was called"
 else
-    fail "G14: max depth gets JJ workspace" "jj workspace add not called"
+    pass "G14: max-depth review avoids JJ workspace"
 fi
 
-# G15: No jj on PATH → falls back gracefully
+# G15: automatic jj unavailability is invisible to read-only review.
 SAVED_PATH="$PATH"
 PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "$MOCK_BIN" | paste -sd ':' -)
 PATH="$PROJECT_DIR:$PATH"  # keep rlm_query on PATH
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
-    RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
+    RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=1 \
     RLM_PROVIDER=test RLM_MODEL=test \
     PATH="$PATH" \
     rlm_query "No jj present" 2>&1 || true
 )
+assert_contains "G15: missing jj silently proceeds in review mode" "MOCK_PI_CALLED" "$OUTPUT"
+assert_contains "G15: automatic non-jj review excludes mutators" "--exclude-tools bash,edit,write" "$OUTPUT"
+assert_not_contains "G15: automatic review never recommends jj initialization" "jj git init" "$OUTPUT"
+
+OUTPUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" \
+    RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=0 \
+    RLM_PROVIDER=test RLM_MODEL=test \
+    PATH="$PATH" \
+    rlm_query "Explicit no-jj read-only" 2>&1
+)
+assert_contains "G15: explicit no-jj read-only proceeds" "MOCK_PI_CALLED" "$OUTPUT"
+assert_contains "G15: explicit no-jj mode excludes mutators" "--exclude-tools bash,edit,write" "$OUTPUT"
+
+OUTPUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" \
+    RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=1 RLM_UNSAFE_NO_JJ_WRITE=1 \
+    RLM_PROVIDER=test RLM_MODEL=test \
+    PATH="$PATH" \
+    rlm_query "Legacy unsafe flag is ignored" 2>&1
+)
 PATH="$SAVED_PATH"
-# Should still call mock pi successfully (pi is back on PATH after restore)
-# The key check: no crash/error about jj
-assert_not_contains "G15: no jj error" "jj: command not found" "$OUTPUT"
-pass "G15: gracefully continues without jj"
+assert_contains "G15: legacy unsafe flag cannot block review" "MOCK_PI_CALLED" "$OUTPUT"
+assert_contains "G15: legacy unsafe flag cannot grant mutators" "--exclude-tools bash,edit,write" "$OUTPUT"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -564,16 +865,18 @@ else
     fail "G18: elapsed in trace" "no elapsed= in trace"
 fi
 
-# G19: No COMPLETED when PI_TRACE_FILE unset
-TRACE_FILE2="$TEST_TMP/no_summary_trace.log"
+# G19: Automatic trace captures lifecycle when no explicit path is supplied.
+TRACE_FILE2="$TEST_TMP/rlm_trace_auto-summary.jsonl"
 rm -f "$TRACE_FILE2"
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
-    RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
+    RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_TRACE_ID=auto-summary \
     RLM_PROVIDER=test RLM_MODEL=test \
-    rlm_query "No trace test"
+    rlm_query "Private auto trace text"
 )
-assert_file_not_exists "G19: no trace file when unset" "$TRACE_FILE2"
+assert_file_exists "G19: automatic lifecycle trace exists" "$TRACE_FILE2"
+assert_contains "G19: automatic trace records completion" "COMPLETED" "$(cat "$TRACE_FILE2")"
+assert_not_contains "G19: automatic trace excludes prompt text" "Private auto trace text" "$(cat "$TRACE_FILE2")"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -828,10 +1131,13 @@ echo "MOCK_PI_CALLED"
 echo "ARGS: $*"
 echo "RLM_DEPTH=$RLM_DEPTH"
 echo "RLM_MODEL=$RLM_MODEL"
+echo "PI_CODING_AGENT_DIR=${PI_CODING_AGENT_DIR:-unset}"
+echo "PI_PACKAGE_DIR=${PI_PACKAGE_DIR:-unset}"
+echo "PI_OFFLINE=${PI_OFFLINE:-unset}"
 MOCK_PI
 chmod +x "$MOCK_BIN/pi"
 
-# G34: children keep normal Pi package discovery by default and still load ypi explicitly
+# G34: children isolate ambient extension copies by default and load only exact ypi; non-extension discovery remains enabled
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
@@ -839,9 +1145,15 @@ OUTPUT=$(
     RLM_PROVIDER=test RLM_MODEL=test \
     rlm_query "Extensions default test"
 )
-assert_not_contains "G34: ambient extension discovery enabled by default" "--no-extensions" "$OUTPUT"
+assert_contains "G34: ambient extension copies disabled by default" "--no-extensions" "$OUTPUT"
 assert_not_contains "G34: skill discovery enabled by default" "--no-skills" "$OUTPUT"
 assert_contains "G34: ypi extension explicitly loaded" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
+OUTPUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
+    YPI_EXTENSION_PATH="$PROJECT_DIR/extensions/recursive.ts" RLM_AMBIENT_EXTENSIONS=1 \
+    RLM_PROVIDER=test RLM_MODEL=test rlm_query "Ambient extension compatibility"
+)
+assert_not_contains "G34b: ambient extension compatibility is explicit" "--no-extensions" "$OUTPUT"
 
 # G35: RLM_EXTENSIONS=0 disables even ypi's explicit extension
 OUTPUT=$(
@@ -855,7 +1167,7 @@ OUTPUT=$(
 assert_contains "G35: RLM_EXTENSIONS=0 disables" "--no-extensions" "$OUTPUT"
 assert_not_contains "G35: no explicit extension when disabled" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
 
-# G36: max depth nodes still keep Pi package discovery and get ypi's explicit extension by default
+# G36: max depth nodes keep the exact ypi extension while ambient copies stay disabled
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=2 RLM_MAX_DEPTH=3 \
@@ -863,7 +1175,7 @@ OUTPUT=$(
     RLM_PROVIDER=test RLM_MODEL=test \
     rlm_query "Max depth extensions test"
 )
-assert_not_contains "G36: max depth keeps ambient extension discovery" "--no-extensions" "$OUTPUT"
+assert_contains "G36: max depth disables ambient extension copies" "--no-extensions" "$OUTPUT"
 assert_contains "G36: max depth has ypi extension" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
 
 # G37: RLM_CHILD_EXTENSIONS=0 disables root-to-child extension loading
@@ -899,7 +1211,8 @@ OUTPUT=$(
 )
 assert_contains "G38b: child discovery off disables non-extension skills" "--no-skills" "$OUTPUT"
 assert_contains "G38b: child discovery off disables context files" "--no-context-files" "$OUTPUT"
-assert_not_contains "G38b: child discovery off does not disable extensions" "--no-extensions" "$OUTPUT"
+assert_contains "G38b: child discovery off retains canonical-only extension mode" "--no-extensions" "$OUTPUT"
+assert_contains "G38b: child discovery off still loads exact ypi" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
 
 # G38c: combine child discovery and extension opt-outs for full package/resource isolation
 OUTPUT=$(
@@ -914,91 +1227,106 @@ OUTPUT=$(
 assert_contains "G38c: full child isolation disables extensions" "--no-extensions" "$OUTPUT"
 assert_contains "G38c: full child isolation disables non-extension skills" "--no-skills" "$OUTPUT"
 assert_not_contains "G38c: full child isolation avoids explicit ypi extension" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
+assert_not_contains "G38c: full isolation replaces the ambient Pi agent root" "PI_CODING_AGENT_DIR=unset" "$OUTPUT"
+assert_contains "G38c: full isolation prevents package installation" "PI_OFFLINE=1" "$OUTPUT"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# BUDGET / COST TESTS
+# COST TELEMETRY / DOLLAR-CAP NON-ENFORCEMENT TESTS
 # ═══════════════════════════════════════════════════════════════════════════
 
 echo ""
-echo "=== Budget & Cost ==="
+echo "=== Cost telemetry (dollar caps ignored) ==="
 
-# Restore standard mock
+# Restore standard mock; emit Pi JSON events when the canonical runtime requests
+# measurable JSON mode for observational cost accounting.
 cat > "$MOCK_BIN/pi" << 'MOCK_PI'
 #!/bin/bash
-echo "MOCK_PI_CALLED"
-echo "ARGS: $*"
-echo "RLM_DEPTH=$RLM_DEPTH"
-echo "RLM_MODEL=$RLM_MODEL"
+if printf '%s\n' "$*" | grep -q -- '--mode json'; then
+    printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"MOCK_PI_CALLED"}}'
+    printf '%s\n' '{"type":"turn_end","message":{"usage":{"totalTokens":1,"cost":{"total":0.01}}},"toolResults":[]}'
+else
+    echo "MOCK_PI_CALLED"
+    echo "ARGS: $*"
+    echo "RLM_DEPTH=$RLM_DEPTH"
+    echo "RLM_MODEL=$RLM_MODEL"
+fi
 MOCK_PI
 chmod +x "$MOCK_BIN/pi"
 
-# G39: no budget by default — RLM_BUDGET not set, call succeeds
+# G39: an inherited dollar cap is ignored; product work still runs.
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
     RLM_PROVIDER=test RLM_MODEL=test \
-    RLM_JSON=0 \
-    rlm_query "No budget test"
+    RLM_JSON=0 RLM_BUDGET=0 \
+    rlm_query "Cost telemetry only"
 )
-assert_contains "G39: no budget succeeds" "MOCK_PI_CALLED" "$OUTPUT"
+assert_contains "G39: inherited dollar cap never stops work" "MOCK_PI_CALLED" "$OUTPUT"
 
-# G40: budget set but no spend yet — call proceeds
+# G40: JSON mode records cost telemetry without requiring a cap.
 COST_FILE=$(mktemp "${TMPDIR:-/tmp}/rlm_cost_test.jsonl.XXXXXX")
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
     RLM_PROVIDER=test RLM_MODEL=test \
-    RLM_JSON=0 \
-    RLM_BUDGET=1.00 \
-    RLM_COST_FILE="$COST_FILE" \
-    rlm_query "Budget with no spend"
+    RLM_JSON=1 RLM_COST_FILE="$COST_FILE" \
+    rlm_query "Record telemetry"
 )
-assert_contains "G40: budget set, no spend, proceeds" "MOCK_PI_CALLED" "$OUTPUT"
+assert_contains "G40: telemetry child succeeds" "MOCK_PI_CALLED" "$OUTPUT"
+assert_contains "G40: telemetry ledger records cost" '"cost":0.01' "$(cat "$COST_FILE")"
 rm -f "$COST_FILE"
 
-# G41: budget exceeded — cost file shows spend over budget
+# G40b: even malformed inherited dollar limits are discarded, not validated.
+OUTPUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" \
+    RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
+    RLM_PROVIDER=test RLM_MODEL=test \
+    RLM_JSON=0 RLM_BUDGET=not-a-number \
+    rlm_query "Ignore malformed cap"
+)
+assert_contains "G40b: malformed dollar cap does not block work" "MOCK_PI_CALLED" "$OUTPUT"
+
+# G40c: incomplete telemetry is recorded honestly but never blocks later work.
+cat > "$MOCK_BIN/pi" << 'NOENDPI'
+#!/bin/bash
+printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"PARTIAL"}}'
+exit 42
+NOENDPI
+chmod +x "$MOCK_BIN/pi"
+COST_FILE=$(mktemp "${TMPDIR:-/tmp}/rlm_cost_incomplete.jsonl.XXXXXX")
+OUTPUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JSON=1 \
+    RLM_BUDGET=0 RLM_COST_FILE="$COST_FILE" \
+    RLM_CALL_COUNTER_FILE="$TEST_TMP/incomplete-cost.counter" \
+    rlm_query "Unknown failed telemetry" 2>&1 || true
+)
+assert_contains "G40c: missing turn_end records incomplete telemetry" '"incomplete":true' "$(cat "$COST_FILE")"
+cat > "$MOCK_BIN/pi" << 'MOCK_PI'
+#!/bin/bash
+printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"MOCK_PI_CALLED"}}'
+printf '%s\n' '{"type":"turn_end","message":{"usage":{"totalTokens":1,"cost":{"total":0.01}}},"toolResults":[]}'
+MOCK_PI
+chmod +x "$MOCK_BIN/pi"
+OUTPUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JSON=1 \
+    RLM_BUDGET=0 RLM_COST_FILE="$COST_FILE" \
+    RLM_CALL_COUNTER_FILE="$TEST_TMP/incomplete-cost.counter" \
+    rlm_query "Continue after incomplete telemetry"
+)
+assert_contains "G40c: incomplete telemetry never blocks later admission" "MOCK_PI_CALLED" "$OUTPUT"
+rm -f "$COST_FILE"
+
+# G41: a pre-existing high cost total is observable, never an admission gate.
 COST_FILE=$(mktemp "${TMPDIR:-/tmp}/rlm_cost_test.jsonl.XXXXXX")
-echo '{"cost": 0.60, "tokens": 5000}' > "$COST_FILE"
-echo '{"cost": 0.45, "tokens": 4000}' >> "$COST_FILE"
+echo '{"cost": 100.00, "tokens": 5000}' > "$COST_FILE"
 OUTPUT=$(
-    CONTEXT="$TEST_TMP/ctx.txt" \
-    RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
-    RLM_PROVIDER=test RLM_MODEL=test \
-    RLM_JSON=0 \
-    RLM_BUDGET=1.00 \
-    RLM_COST_FILE="$COST_FILE" \
-    rlm_query "Over budget" 2>&1 || true
+    CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JSON=1 \
+    RLM_BUDGET=0 RLM_COST_FILE="$COST_FILE" \
+    rlm_query "Continue product work"
 )
-assert_contains "G41: budget exceeded" "Budget exceeded" "$OUTPUT"
+assert_contains "G41: accumulated cost never stops product work" "MOCK_PI_CALLED" "$OUTPUT"
 rm -f "$COST_FILE"
-
-# G42: budget not exceeded — cost under limit
-COST_FILE=$(mktemp "${TMPDIR:-/tmp}/rlm_cost_test.jsonl.XXXXXX")
-echo '{"cost": 0.30, "tokens": 3000}' > "$COST_FILE"
-OUTPUT=$(
-    CONTEXT="$TEST_TMP/ctx.txt" \
-    RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
-    RLM_PROVIDER=test RLM_MODEL=test \
-    RLM_JSON=0 \
-    RLM_BUDGET=1.00 \
-    RLM_COST_FILE="$COST_FILE" \
-    rlm_query "Under budget"
-)
-assert_contains "G42: under budget proceeds" "MOCK_PI_CALLED" "$OUTPUT"
-rm -f "$COST_FILE"
-
-# G43: RLM_COST_FILE propagated to children
-OUTPUT=$(
-    CONTEXT="$TEST_TMP/ctx.txt" \
-    RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
-    RLM_PROVIDER=test RLM_MODEL=test \
-    RLM_JSON=0 \
-    RLM_BUDGET=5.00 \
-    rlm_query "Budget propagation test"
-)
-# Budget creates a cost file automatically
-assert_contains "G43: budget propagation proceeds" "MOCK_PI_CALLED" "$OUTPUT"
 
 # G44: rlm_cost with no cost file returns $0
 OUTPUT=$(
@@ -1030,6 +1358,21 @@ assert_contains "G46: rlm_cost json has cost" "0.3" "$OUTPUT"
 assert_contains "G46: rlm_cost json has tokens" "3000" "$OUTPUT"
 assert_contains "G46: rlm_cost json has calls" '"calls": 2' "$OUTPUT"
 rm -f "$COST_FILE"
+
+# G46b: retained JSON parser emits one newline-delimited cost record per call.
+PARSER_COST_FILE="$TEST_TMP/parser_cost.jsonl"
+: > "$PARSER_COST_FILE"
+for _ in 1 2; do
+    printf '%s\n' '{"type":"turn_end","message":{"usage":{"totalTokens":2,"cost":{"total":0.1}}}}' \
+        | python3 "$PROJECT_DIR/rlm_parse_json" 3>>"$PARSER_COST_FILE"
+done
+PARSER_COST_LINES="$(python3 - "$PARSER_COST_FILE" <<'PY'
+import json, sys
+rows = [json.loads(line) for line in open(sys.argv[1]) if line.strip()]
+print(len(rows))
+PY
+)"
+assert_eq "G46b: retained cost records stay JSONL across calls" "2" "$PARSER_COST_LINES"
 
 # G47: RLM_JSON=0 disables JSON mode (plain text)
 OUTPUT=$(
@@ -1109,7 +1452,7 @@ echo ""
 echo "=== Trace ID Sanitization ==="
 
 # G52: a hostile RLM_TRACE_ID cannot traverse out of the session directory
-if _feature_exists "safe_trace_id"; then
+if _feature_exists "safeTraceId"; then
     cat > "$MOCK_BIN/pi" << 'TRACEPI'
 #!/bin/bash
 echo "ARGS: $*"
@@ -1142,7 +1485,199 @@ echo "=== Async Notify ==="
 
 # G53: --async --notify writes valid JSON to the peer inbox even when child output
 # contains quotes/backslashes/newlines, and async temp files honor TMPDIR.
-if _feature_exists "NOTIFY_PID"; then
+if _feature_exists "notifyPid"; then
+    # G53a: metadata capture through command substitution must not wait for the
+    # background child to close the inherited stdout pipe.
+    cat > "$MOCK_BIN/pi" << 'SLOWPI'
+#!/bin/bash
+sleep 2
+printf '%s\n' 'slow child complete'
+SLOWPI
+    chmod +x "$MOCK_BIN/pi"
+
+    START_NS=$(python3 -c 'import time; print(time.monotonic_ns())')
+    JOB=$(
+        CONTEXT="$TEST_TMP/ctx.txt" \
+        RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=0 \
+        RLM_PROVIDER=test RLM_MODEL=test \
+        RLM_TRACE_ID="async_success_$$" \
+        RLM_CALL_COUNTER_FILE="$TEST_TMP/async_success.counter" \
+        rlm_query --async "Async immediate metadata?" 2>/dev/null
+    )
+    END_NS=$(python3 -c 'import time; print(time.monotonic_ns())')
+    ELAPSED_MS=$(( (END_NS - START_NS) / 1000000 ))
+    if [ "$ELAPSED_MS" -lt 1000 ]; then
+        pass "G53a: command-substitution async returns immediately"
+    else
+        fail "G53a: command-substitution async returns immediately" "elapsed=${ELAPSED_MS}ms"
+    fi
+    ASYNC_SENTINEL=$(printf '%s' "$JOB" | python3 -c "import json,sys; print(json.load(sys.stdin).get('sentinel',''))")
+    if [ ! -e "$ASYNC_SENTINEL" ]; then
+        pass "G53a: slow child is still pending when metadata returns"
+    else
+        fail "G53a: slow child is still pending when metadata returns" "sentinel already exists"
+    fi
+    for _ in $(seq 1 50); do [ -e "$ASYNC_SENTINEL" ] && break; sleep 0.1; done
+    assert_eq "G53a: successful async sentinel records exit code" "0" "$(cat "$ASYNC_SENTINEL" 2>/dev/null || echo missing)"
+
+    # G53b: set -e in the parent script must not skip sentinel creation or
+    # cleanup when the background child itself exits nonzero.
+    cat > "$MOCK_BIN/pi" << 'FAILPI'
+#!/bin/bash
+printf '%s\n' 'async child failed' >&2
+exit 42
+FAILPI
+    chmod +x "$MOCK_BIN/pi"
+    JOB=$(
+        CONTEXT="$TEST_TMP/ctx.txt" \
+        RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=0 \
+        RLM_PROVIDER=test RLM_MODEL=test \
+        RLM_TRACE_ID="async_failure_$$" \
+        RLM_CALL_COUNTER_FILE="$TEST_TMP/async_failure.counter" \
+        rlm_query --async "Async failure sentinel?" 2>/dev/null
+    )
+    FAILURE_SENTINEL=$(printf '%s' "$JOB" | python3 -c "import json,sys; print(json.load(sys.stdin).get('sentinel',''))")
+    for _ in $(seq 1 50); do [ -e "$FAILURE_SENTINEL" ] && break; sleep 0.1; done
+    assert_eq "G53b: failed async sentinel records child exit code" "42" "$(cat "$FAILURE_SENTINEL" 2>/dev/null || echo missing)"
+
+    # G53c: guardrail rejection occurs before async metadata acknowledges work.
+    set +e
+    REJECTED=$(
+        CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=3 RLM_MAX_DEPTH=3 RLM_JJ=0 \
+        RLM_TRACE_ID="async_reject_$$" RLM_CALL_COUNTER_FILE="$TEST_TMP/async_reject.counter" \
+        rlm_query --async "Reject before acknowledgement" 2>&1
+    )
+    REJECT_RC=$?
+    set -e
+    if [ "$REJECT_RC" -ne 0 ]; then pass "G53c: async guardrail rejection returns nonzero"; else fail "G53c: async guardrail rejection returns nonzero" "$REJECTED"; fi
+    assert_contains "G53c: async rejection reports depth guard" "Max depth exceeded" "$REJECTED"
+    assert_not_contains "G53c: rejected async call emits no accepted job metadata" '"job_id"' "$REJECTED"
+    if find "$TEST_TMP" -maxdepth 1 -type d -name "rlm_async_async_reject_*" -print -quit | grep -q .; then
+        fail "G53c: rejected async job directory is removed" "stale private job directory"
+    else
+        pass "G53c: rejected async job directory is removed"
+    fi
+
+    NO_JJ_JOB=$(
+        CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=auto \
+        RLM_TRACE_ID="async_no_jj_$$" RLM_CALL_COUNTER_FILE="$TEST_TMP/async_no_jj.counter" \
+        rlm_query --async "Automatic read-only async review" 2>&1
+    )
+    assert_contains "G53c: async review needs no jj choice" '"job_id"' "$NO_JJ_JOB"
+    assert_not_contains "G53c: async review never recommends jj initialization" "jj git init" "$NO_JJ_JOB"
+    NO_JJ_SENTINEL=$(printf '%s' "$NO_JJ_JOB" | python3 -c "import json,sys; print(json.load(sys.stdin).get('sentinel',''))")
+    for _ in $(seq 1 50); do [ -e "$NO_JJ_SENTINEL" ] && break; sleep 0.1; done
+    if [ -e "$NO_JJ_SENTINEL" ]; then pass "G53c: async read-only review reaches terminal state"; else fail "G53c: async read-only review reaches terminal state" "missing sentinel"; fi
+
+    # G53d: inherited context is snapshotted at invocation time, not read from a
+    # mutable caller path after metadata returns.
+    cat > "$MOCK_BIN/pi" << 'SNAPSHOTPI'
+#!/bin/bash
+sleep 1
+cat "$CONTEXT"
+SNAPSHOTPI
+    chmod +x "$MOCK_BIN/pi"
+    printf '%s\n' ORIGINAL_CONTEXT > "$TEST_TMP/mutable-context.txt"
+    JOB=$(
+        CONTEXT="$TEST_TMP/mutable-context.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=0 \
+        RLM_TRACE_ID="async_snapshot_$$" RLM_CALL_COUNTER_FILE="$TEST_TMP/async_snapshot.counter" \
+        rlm_query --async "Snapshot context" 2>/dev/null
+    )
+    SNAPSHOT_OUTPUT=$(printf '%s' "$JOB" | python3 -c "import json,sys; print(json.load(sys.stdin)['output'])")
+    SNAPSHOT_SENTINEL=$(printf '%s' "$JOB" | python3 -c "import json,sys; print(json.load(sys.stdin)['sentinel'])")
+    printf '%s\n' MUTATED_CONTEXT > "$TEST_TMP/mutable-context.txt"
+    for _ in $(seq 1 50); do [ -e "$SNAPSHOT_SENTINEL" ] && break; sleep 0.1; done
+    assert_contains "G53d: async context uses invocation snapshot" "ORIGINAL_CONTEXT" "$(cat "$SNAPSHOT_OUTPUT")"
+    assert_not_contains "G53d: async context ignores later mutation" "MUTATED_CONTEXT" "$(cat "$SNAPSHOT_OUTPUT")"
+    ASYNC_MODE=$(stat -c '%a' "$(dirname "$SNAPSHOT_OUTPUT")" 2>/dev/null || echo unknown)
+    assert_eq "G53d: async job directory is private" "700" "$ASYNC_MODE"
+
+    # G53e: root charter and fork session are immutable invocation snapshots too.
+    cat > "$MOCK_BIN/pi" << 'ROOTSNAPPI'
+#!/bin/bash
+sleep 1
+cat "$RLM_ROOT_PROMPT_FILE"
+[ -f "${RLM_SESSION_FILE:-}" ] && cat "$RLM_SESSION_FILE"
+ROOTSNAPPI
+    chmod +x "$MOCK_BIN/pi"
+    printf '%s\n' ORIGINAL_ROOT_CHARTER > "$TEST_TMP/mutable-root-prompt.txt"
+    printf '%s\n' ORIGINAL_PARENT_SESSION > "$TEST_TMP/mutable-parent-session.jsonl"
+    mkdir -p "$TEST_TMP/async-sessions"
+    JOB=$(
+        CONTEXT="$TEST_TMP/ctx.txt" RLM_ROOT_PROMPT_FILE="$TEST_TMP/mutable-root-prompt.txt" \
+        RLM_SESSION_FILE="$TEST_TMP/mutable-parent-session.jsonl" RLM_SESSION_DIR="$TEST_TMP/async-sessions" \
+        RLM_SHARED_SESSIONS=1 RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=0 RLM_JSON=0 \
+        RLM_TRACE_ID="async_charter_$$" RLM_CALL_COUNTER_FILE="$TEST_TMP/async_charter.counter" \
+        rlm_query --async --fork "Snapshot charter and session" 2>/dev/null
+    )
+    CHARTER_OUTPUT=$(printf '%s' "$JOB" | python3 -c "import json,sys; print(json.load(sys.stdin)['output'])")
+    CHARTER_SENTINEL=$(printf '%s' "$JOB" | python3 -c "import json,sys; print(json.load(sys.stdin)['sentinel'])")
+    printf '%s\n' MUTATED_ROOT_CHARTER > "$TEST_TMP/mutable-root-prompt.txt"
+    printf '%s\n' MUTATED_PARENT_SESSION > "$TEST_TMP/mutable-parent-session.jsonl"
+    for _ in $(seq 1 50); do [ -e "$CHARTER_SENTINEL" ] && break; sleep 0.1; done
+    CHARTER_RESULT=$(cat "$CHARTER_OUTPUT")
+    assert_contains "G53e: async worker uses root charter snapshot" "ORIGINAL_ROOT_CHARTER" "$CHARTER_RESULT"
+    assert_not_contains "G53e: async root charter ignores later mutation" "MUTATED_ROOT_CHARTER" "$CHARTER_RESULT"
+    assert_contains "G53e: async fork uses parent session snapshot" "ORIGINAL_PARENT_SESSION" "$CHARTER_RESULT"
+    assert_not_contains "G53e: async fork session ignores later mutation" "MUTATED_PARENT_SESSION" "$CHARTER_RESULT"
+
+    # G53f: signalling the acknowledged worker must abort the detached Pi process
+    # group and still publish a terminal sentinel.
+    cat > "$MOCK_BIN/pi" << 'ASYNCANCELPI'
+#!/bin/bash
+printf '%s\n' "$$" > "$RLM_ASYNC_TEST_PID_FILE"
+sleep 30 &
+printf '%s\n' "$!" > "$RLM_ASYNC_TEST_DESC_PID_FILE"
+wait
+ASYNCANCELPI
+    chmod +x "$MOCK_BIN/pi"
+    JOB=$(
+        CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=0 RLM_JSON=0 \
+        RLM_ASYNC_TEST_PID_FILE="$TEST_TMP/async-child.pid" \
+        RLM_ASYNC_TEST_DESC_PID_FILE="$TEST_TMP/async-child.pid.descendant" \
+        RLM_TRACE_ID="async_cancel_$$" RLM_CALL_COUNTER_FILE="$TEST_TMP/async_cancel.counter" \
+        rlm_query --async "Cancel worker and child" 2>/dev/null
+    )
+    CANCEL_WORKER=$(printf '%s' "$JOB" | python3 -c "import json,sys; print(json.load(sys.stdin)['pid'])")
+    CANCEL_SENTINEL=$(printf '%s' "$JOB" | python3 -c "import json,sys; print(json.load(sys.stdin)['sentinel'])")
+    for _ in $(seq 1 50); do [ -s "$TEST_TMP/async-child.pid" ] && break; sleep 0.1; done
+    kill -TERM "$CANCEL_WORKER"
+    for _ in $(seq 1 70); do [ -e "$CANCEL_SENTINEL" ] && break; sleep 0.1; done
+    assert_eq "G53f: cancelled async worker records SIGTERM exit" "143" "$(cat "$CANCEL_SENTINEL" 2>/dev/null || echo missing)"
+    ASYNC_CHILD_PID=$(cat "$TEST_TMP/async-child.pid" 2>/dev/null || echo 0)
+    ASYNC_DESC_PID=$(cat "$TEST_TMP/async-child.pid.descendant" 2>/dev/null || echo 0)
+    for _ in $(seq 1 30); do
+        if ! kill -0 "$ASYNC_CHILD_PID" 2>/dev/null && ! kill -0 "$ASYNC_DESC_PID" 2>/dev/null; then break; fi
+        sleep 0.1
+    done
+    if kill -0 "$ASYNC_CHILD_PID" 2>/dev/null || kill -0 "$ASYNC_DESC_PID" 2>/dev/null; then
+        fail "G53f: async cancellation leaves no child process group" "child=$ASYNC_CHILD_PID descendant=$ASYNC_DESC_PID"
+    else
+        pass "G53f: async cancellation leaves no child process group"
+    fi
+
+    if RLM_QUERY_PATH="$RLM_QUERY" TEST_CONTEXT="$TEST_TMP/ctx.txt" TEST_COUNTER="$TEST_TMP/async-epipe.counter" python3 <<'PY'
+import os, subprocess, time
+counter=os.environ['TEST_COUNTER']
+os.mkdir(counter+'.lock')
+env=os.environ.copy()
+env.update({'CONTEXT':os.environ['TEST_CONTEXT'],'RLM_DEPTH':'0','RLM_MAX_DEPTH':'3','RLM_JSON':'0','RLM_JJ':'0','RLM_SHARED_SESSIONS':'0','RLM_TRACE_ID':'async-epipe','RLM_CALL_COUNTER_FILE':counter})
+p=subprocess.Popen([os.environ['RLM_QUERY_PATH'],'--async','Closed metadata reader'],env=env,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+assert p.stdout is not None
+p.stdout.close()
+time.sleep(.2)
+os.rmdir(counter+'.lock')
+stderr=p.stderr.read() if p.stderr else b''
+rc=p.wait(timeout=8)
+assert rc==0,(rc,stderr[-500:])
+assert b'EPIPE' not in stderr,stderr[-500:]
+PY
+    then
+        pass "G53g: async acknowledgement EPIPE cancels cleanly"
+    else
+        fail "G53g: async acknowledgement EPIPE cancels cleanly" "metadata pipe probe failed"
+    fi
+
     cat > "$MOCK_BIN/pi" << 'NASTYPI'
 #!/bin/bash
 printf '%s\n' 'He said "hello" and used C:\path\to\file'
@@ -1181,6 +1716,8 @@ NASTYPI
         fi
         MSG_OK=$(printf '%s' "$LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print('yes' if 'He said \"hello\"' in d.get('message','') else 'no')" 2>/dev/null || echo "no")
         assert_eq "G53: notify message preserves the hostile content" "yes" "$MSG_OK"
+        EXIT_OK=$(printf '%s' "$LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print('yes' if d.get('exit_code') == 0 and 'exit=0' in d.get('message','') else 'no')" 2>/dev/null || echo "no")
+        assert_eq "G53: notify includes terminal exit status" "yes" "$EXIT_OK"
     else
         fail "G53: notify writes to the peer inbox" "no inbox content at $INBOX"
     fi
@@ -1205,7 +1742,7 @@ echo ""
 echo "=== Depth Validation ==="
 
 # G54: a non-integer RLM_MAX_DEPTH fails closed (no pi call) instead of bypassing the limiter
-if grep -q 'Invalid RLM_MAX_DEPTH' "$RLM_QUERY" 2>/dev/null; then
+if _feature_exists "Invalid recursion depth config"; then
     OUTPUT=$(
         CONTEXT="$TEST_TMP/ctx.txt" \
         RLM_DEPTH=0 RLM_MAX_DEPTH=abc \
@@ -1213,11 +1750,48 @@ if grep -q 'Invalid RLM_MAX_DEPTH' "$RLM_QUERY" 2>/dev/null; then
         rlm_query "Malformed depth?" 2>&1 || true
     )
     assert_not_contains "G54: malformed depth → no pi call" "MOCK_PI_CALLED" "$OUTPUT"
-    assert_contains "G54: malformed depth → error message" "Invalid RLM_MAX_DEPTH" "$OUTPUT"
+    assert_contains "G54: malformed depth → error message" "Invalid recursion depth config" "$OUTPUT"
 else
     skip "G54: depth validation" "RLM_MAX_DEPTH validation not implemented yet"
 fi
 
+# G55: structural call and explicit timeout controls fail closed on malformed
+# values in both canonical and retained fallback adapters.
+for SPEC in \
+    'RLM_MAX_CALLS=12junk|RLM_MAX_CALLS' \
+    'RLM_TIMEOUT=2junk|RLM_TIMEOUT'; do
+    SETTING="${SPEC%%|*}"
+    NAME="${SPEC##*|}"
+    OUTPUT=$(
+        env "$SETTING" CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
+            RLM_JJ=0 \
+            RLM_CALL_COUNTER_FILE="$TEST_TMP/malformed-${NAME}.counter" \
+            rlm_query "Malformed guardrail?" 2>&1 || true
+    )
+    assert_contains "G55: canonical rejects malformed $NAME" "Invalid $NAME" "$OUTPUT"
+    assert_not_contains "G55: malformed canonical $NAME spawns no child" "MOCK_PI_CALLED" "$OUTPUT"
+
+    OUTPUT=$(
+        env "$SETTING" YPI_LEGACY_IMPL=1 CONTEXT="$TEST_TMP/ctx.txt" \
+            RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JJ=0 \
+            RLM_CALL_COUNTER_FILE="$TEST_TMP/malformed-legacy-${NAME}.counter" \
+            rlm_query "Malformed legacy guardrail?" 2>&1 || true
+    )
+    assert_contains "G55: legacy rejects malformed $NAME" "Invalid $NAME" "$OUTPUT"
+    assert_not_contains "G55: malformed legacy $NAME spawns no child" "MOCK_PI_CALLED" "$OUTPUT"
+done
+
+OUTPUT=$(
+    env RLM_TIMEOUT=60 RLM_START_TIME=bad CONTEXT="$TEST_TMP/ctx.txt" \
+        RLM_DEPTH=1 RLM_MAX_DEPTH=3 RLM_JJ=0 \
+        RLM_CALL_COUNTER_FILE="$TEST_TMP/malformed-start.counter" \
+        rlm_query "Malformed inherited start?" 2>&1 || true
+)
+assert_contains "G55: canonical rejects malformed RLM_START_TIME" "Invalid RLM_START_TIME" "$OUTPUT"
+assert_not_contains "G55: malformed start time spawns no child" "MOCK_PI_CALLED" "$OUTPUT"
+
+OUTPUT=$(RLM_BUDGET=free YPI_LEGACY_IMPL=1 CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_JSON=0 rlm_query "Legacy ignores dollar cap")
+assert_contains "G55b: retained fallback ignores inherited dollar cap" "MOCK_PI_CALLED" "$OUTPUT"
 
 # ─── Summary ──────────────────────────────────────────────────────────────
 

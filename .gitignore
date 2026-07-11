@@ -27,4 +27,5 @@ node_modules/
 /pi-recursive/extensions/
 /pi-recursive/SYSTEM_PROMPT.md
 /pi-recursive/LICENSE
+/pi-recursive/skills/
 /pi-recursive/*.tgz

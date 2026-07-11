@@ -2,8 +2,8 @@
 # test_provider_allowlist.sh — keep the child-process provider env allowlist correct.
 #
 # Two invariants (no LLM calls):
-#   1. Parity: the native extension (extensions/ypi/native-tool.ts) and the shell
-#      rlm_query expose the SAME set of provider env vars to child Pi processes.
+#   1. Parity: the canonical runtime core and retained shell fallback expose the
+#      SAME provider env vars. The default CLI delegates directly to the core.
 #   2. Completeness: every real provider credential pi reads (pi-mono *_API_KEY /
 #      *_OAUTH_TOKEN, minus pi's custom/test placeholder names) is in the allowlist,
 #      so a child can always authenticate to the same provider as its parent.
@@ -15,8 +15,9 @@ exec </dev/null
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-NATIVE_TOOL="$PROJECT_DIR/extensions/ypi/native-tool.ts"
-RLM_QUERY="$PROJECT_DIR/rlm_query"
+RUNTIME_CONFIG="$PROJECT_DIR/extensions/ypi/internal/child-config.ts"
+CLI_ADAPTER="$PROJECT_DIR/extensions/ypi/cli.ts"
+LEGACY_RLM_QUERY="$PROJECT_DIR/rlm_query.legacy"
 PI_MONO="$PROJECT_DIR/pi-mono"
 
 PASS=0
@@ -35,12 +36,12 @@ echo ""
 echo "=== Provider env allowlist ==="
 
 # ── Extract the native allowlist (the PROVIDER_ENV_ALLOWLIST Set) ──────────────
-NATIVE_KEYS="$(awk '/PROVIDER_ENV_ALLOWLIST = new Set\(\[/{f=1;next} /\]\);/{f=0} f' "$NATIVE_TOOL" \
+NATIVE_KEYS="$(awk '/PROVIDER_ENV_ALLOWLIST = new Set\(\[/{f=1;next} /\]\);/{f=0} f' "$RUNTIME_CONFIG" \
     | grep -oE '"[A-Z][A-Z0-9_]*"' | tr -d '"' | sort -u)"
 
 # ── Extract the shell allowlist (the append_allowed_env `for key in` block), then
 #    drop the non-provider system/Pi keys to get the provider subset ────────────
-SHELL_ALL="$(sed -n '/for key in \\/,/; do/p' "$RLM_QUERY" \
+SHELL_ALL="$(sed -n '/for key in \\/,/; do/p' "$LEGACY_RLM_QUERY" \
     | grep -oE '[A-Z][A-Z0-9_]+' | sort -u)"
 SHELL_KEYS="$SHELL_ALL"
 for k in $NON_PROVIDER; do
@@ -52,14 +53,14 @@ MISSING_IN_SHELL="$(comm -23 <(printf '%s\n' "$NATIVE_KEYS") <(printf '%s\n' "$S
 MISSING_IN_NATIVE="$(comm -13 <(printf '%s\n' "$NATIVE_KEYS") <(printf '%s\n' "$SHELL_KEYS"))"
 
 if [ -z "$MISSING_IN_SHELL" ]; then
-    pass "P1: every native provider key is in the shell allowlist"
+    pass "P1: every core provider key is in the retained shell allowlist"
 else
-    fail "P1: every native provider key is in the shell allowlist" "missing from shell: $(echo $MISSING_IN_SHELL)"
+    fail "P1: every core provider key is in the retained shell allowlist" "missing from fallback: $(echo $MISSING_IN_SHELL)"
 fi
 if [ -z "$MISSING_IN_NATIVE" ]; then
-    pass "P2: every shell provider key is in the native allowlist"
+    pass "P2: every retained shell provider key is in the core allowlist"
 else
-    fail "P2: every shell provider key is in the native allowlist" "missing from native: $(echo $MISSING_IN_NATIVE)"
+    fail "P2: every retained shell provider key is in the core allowlist" "missing from core: $(echo $MISSING_IN_NATIVE)"
 fi
 
 NATIVE_COUNT="$(printf '%s\n' "$NATIVE_KEYS" | grep -c . || true)"
@@ -67,6 +68,12 @@ if [ "$NATIVE_COUNT" -ge 40 ]; then
     pass "P3: allowlist is populated ($NATIVE_COUNT provider keys)"
 else
     fail "P3: allowlist is populated" "only $NATIVE_COUNT keys"
+fi
+
+if grep -q 'runRecursiveChild' "$CLI_ADAPTER"; then
+    pass "P4: default CLI delegates child execution to the canonical core"
+else
+    fail "P4: default CLI delegates child execution to the canonical core" "missing runRecursiveChild dependency"
 fi
 
 # ── Invariant 2: completeness vs pinned pi-mono (skips if submodule absent) ─────

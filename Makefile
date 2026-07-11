@@ -1,4 +1,4 @@
-.PHONY: test test-unit test-guardrails test-native test-provider-allowlist test-extensions test-consumer-pack test-pi-recursive-pack build-pi-recursive test-e2e test-recursion-e2e test-extension-recursion-e2e test-parity-e2e test-fast doctor test-doctor check-release-consistency test-release-consistency test-install-from-registry publish publish-dry pre-push-checks check-upstream install-hooks release-preflight land ci-status ci-last-failure clean
+.PHONY: test test-unit test-guardrails test-native test-runtime-contract test-eval-contracts test-workspace-policy test-write-scope test-publication-policy typecheck-runtime build-runtime-cli check-runtime-cli test-provider-allowlist test-extensions test-consumer-pack test-pi-recursive-pack build-pi-recursive test-e2e test-recursion-e2e test-extension-recursion-e2e test-parity-e2e eval-depth-ablation eval-runtime-parity test-fast doctor test-doctor check-release-consistency test-release-consistency test-install-from-registry publish publish-dry pre-push-checks check-upstream install-hooks release-preflight land ci-status ci-last-failure clean
 
 # Fast tests — no LLM calls, uses mock pi
 test-unit:
@@ -13,6 +13,37 @@ test-guardrails:
 test-native:
 	@echo "Running native extension tool tests..."
 	@bash tests/test_native_tool.sh
+
+# Shared native/CLI runtime contract — no LLM calls, freezes parity and known divergences
+# before duplicated policy is converged behind one engine.
+test-runtime-contract:
+	@echo "Running recursion runtime contract tests..."
+	@bash tests/test_runtime_contract.sh
+
+test-eval-contracts:
+	@echo "Running evaluation contract tests..."
+	@bash tests/test_eval_contracts.sh
+
+test-workspace-policy:
+	@echo "Running recursive workspace policy tests..."
+	@bun tests/workspace_policy_harness.ts
+
+test-write-scope:
+	@echo "Running implementer write-scope tests..."
+	@bun tests/write_scope_harness.ts
+
+test-publication-policy:
+	@echo "Running publication authority tests..."
+	@bash tests/test_publication_policy.sh
+
+typecheck-runtime:
+	@bunx --bun tsc -p tsconfig.runtime.json
+
+build-runtime-cli:
+	@scripts/build-runtime-cli
+
+check-runtime-cli:
+	@scripts/build-runtime-cli --check
 
 # Provider env allowlist — no LLM calls, enforces native/shell parity + pi-mono coverage
 test-provider-allowlist:
@@ -36,7 +67,7 @@ test-release-consistency:
 	@bash tests/test_release_consistency.sh
 
 # All fast tests (no LLM calls)
-test-fast: test-unit test-guardrails test-native test-provider-allowlist test-doctor test-release-consistency
+test-fast: typecheck-runtime check-runtime-cli test-unit test-guardrails test-native test-runtime-contract test-eval-contracts test-workspace-policy test-write-scope test-publication-policy test-provider-allowlist test-doctor test-release-consistency
 
 # Extension compatibility — requires real pi installed
 test-extensions:
@@ -83,6 +114,16 @@ test-extension-recursion-e2e:
 test-parity-e2e:
 	@echo "Running wrapper/direct-extension parity e2e test (real LLM calls)..."
 	@PI_E2E_PROVIDER="$${PI_E2E_PROVIDER:-openrouter}" PI_E2E_MODEL="$${PI_E2E_MODEL:-openai/gpt-5.5:xhigh}" bash pure-extension/compare.sh
+
+# Manual paid evaluations. Run independent conditions concurrently rather than
+# adding these long-running model calls to the default test target.
+eval-depth-ablation:
+	@test -n "$(DEPTH)" || { echo "usage: make eval-depth-ablation DEPTH=3" >&2; exit 2; }
+	@bash tests/eval/depth-ablation/run-condition.sh "$(DEPTH)"
+
+eval-runtime-parity:
+	@test -n "$(LANE)" || { echo "usage: make eval-runtime-parity LANE=canonical-cli" >&2; exit 2; }
+	@bash tests/eval/runtime-parity/run-lane.sh "$(LANE)"
 
 # All tests
 test: test-fast test-extensions test-e2e

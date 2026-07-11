@@ -2,7 +2,8 @@
 # check-release-consistency — enforce the two-package lockstep + changelog invariants.
 # No LLM, fast. Catches:
 #   * ypi vs pi-recursive version skew,
-#   * pinned-pi skew across package.json dep / pi-recursive peerDep / .pi-version,
+#   * pinned-pi skew between ypi's dependency and .pi-version,
+#   * accidental narrowing of pi-recursive's host Pi/typebox peers,
 #   * a missing (and, with --require-dated, undated) CHANGELOG entry for the version.
 #
 # Usage: scripts/check-release-consistency [--require-dated]
@@ -23,12 +24,11 @@ fail() { FAIL=$((FAIL + 1)); echo "  ✗ $1: $2"; }
 note() { echo "  ! $1"; }
 
 jget() { node -e "try{const p=require('$1');let v=p;for(const k of '$2'.split('.')){v=v&&v[k];}console.log(v||'')}catch(e){console.log('')}" 2>/dev/null; }
-strip_range() { echo "${1#[\^~>=]}"; }
-
 YPI_V="$(jget "$ROOT/package.json" version)"
 PIR_V="$(jget "$ROOT/pi-recursive/package.json" version)"
 DEP="$(jget "$ROOT/package.json" "dependencies.@earendil-works/pi-coding-agent")"
 PEER="$(jget "$ROOT/pi-recursive/package.json" "peerDependencies.@earendil-works/pi-coding-agent")"
+TYPEBOX_PEER="$(jget "$ROOT/pi-recursive/package.json" "peerDependencies.typebox")"
 PIVER="unknown"; [ -f "$ROOT/.pi-version" ] && PIVER="$(tr -d '[:space:]' < "$ROOT/.pi-version")"
 
 echo ""
@@ -41,12 +41,23 @@ else
     fail "package versions in lockstep" "ypi=$YPI_V pi-recursive=$PIR_V"
 fi
 
-# 2. pinned pi consistent across dep / peerDep / .pi-version (compare base versions)
-DEP_B="$(strip_range "$DEP")"; PEER_B="$(strip_range "$PEER")"
-if [ -n "$PIVER" ] && [ "$PIVER" != "unknown" ] && [ "$DEP_B" = "$PIVER" ] && [ "$PEER_B" = "$PIVER" ]; then
-    pass "pinned pi consistent across dep/peerDep/.pi-version ($PIVER)"
+# 2. ypi pins the tested Pi runtime; the pure extension accepts the host Pi.
+# Pinning the peer would make `pi -e` install a second Pi copy instead of using
+# the host API, so these are deliberately different package contracts.
+if [ -n "$PIVER" ] && [ "$PIVER" != "unknown" ] && [ "$DEP" = "$PIVER" ]; then
+    pass "ypi dependency matches .pi-version ($PIVER)"
 else
-    fail "pinned pi consistent" "dep=$DEP peerDep=$PEER .pi-version=$PIVER"
+    fail "pinned pi consistent" "dep=$DEP .pi-version=$PIVER"
+fi
+if [ "$PEER" = "*" ]; then
+    pass "pi-recursive host Pi peer is unrestricted"
+else
+    fail "pi-recursive host Pi peer is unrestricted" "peerDep=$PEER expected=*"
+fi
+if [ "$TYPEBOX_PEER" = "*" ]; then
+    pass "pi-recursive host typebox peer is unrestricted"
+else
+    fail "pi-recursive host typebox peer is unrestricted" "peerDep=$TYPEBOX_PEER expected=*"
 fi
 
 # 3. CHANGELOG has an entry for the release version (and, if --require-dated, it is dated)

@@ -1,13 +1,36 @@
 #!/usr/bin/env bash
-# Pre-push hook for ypi
-# Runs the same checks CI runs so failures are caught before network push.
-
+# Pre-push: fail closed on remote ownership and release authority, then run checks.
 set -euo pipefail
 
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+REMOTE_NAME="${1:-}"
+REMOTE_URL="${2:-}"
+
+push_urls=()
+if [ -n "$REMOTE_NAME" ] && git remote get-url "$REMOTE_NAME" >/dev/null 2>&1; then
+  mapfile -t push_urls < <(git remote get-url --push --all "$REMOTE_NAME")
+fi
+if [ "${#push_urls[@]}" -eq 0 ] && [ -n "$REMOTE_URL" ]; then
+  push_urls=("$REMOTE_URL")
+fi
+if [ "${#push_urls[@]}" -eq 0 ]; then
+  echo "pre-push: could not resolve any push destination; denied" >&2
+  exit 2
+fi
+for push_url in "${push_urls[@]}"; do
+  "$ROOT_DIR/scripts/validate-push-owner" "$push_url"
+done
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -n "${local_ref:-}" ] || continue
+  if [[ "$local_ref" == refs/tags/* || "$remote_ref" == refs/tags/* ]]; then
+    "$ROOT_DIR/scripts/assert-release-authorized"
+  fi
+done
+
 if [ "${YPI_SKIP_PUSH_CHECKS:-0}" = "1" ]; then
-  echo "⚠️  Skipping pre-push checks (YPI_SKIP_PUSH_CHECKS=1)"
+  echo "⚠️  Skipping quality checks (YPI_SKIP_PUSH_CHECKS=1); publication policy was still enforced"
   exit 0
 fi
 
-ROOT_DIR="$(git rev-parse --show-toplevel)"
-"$ROOT_DIR/scripts/pre-push-checks"
+exec "$ROOT_DIR/scripts/pre-push-checks"

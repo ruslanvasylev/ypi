@@ -2,8 +2,9 @@
 # ypi installer — one-line install:
 #   curl -fsSL https://raw.githubusercontent.com/rawwerks/ypi/master/install.sh | bash
 #
-# Installs ypi + Pi coding agent. Requires: bun (or npm), git, bash.
-# Optional: jj (for workspace isolation), sops + age (for encrypted notes)
+# Installs ypi + Pi coding agent. Requires: Node.js >= 22.19, bun (or npm), git, bash.
+# Optional: sops + age (for encrypted notes). Existing jj checkouts are detected,
+# but the installer never adds or initializes VCS tooling.
 
 set -euo pipefail
 
@@ -23,9 +24,19 @@ dim()   { echo -e "${DIM}  $1${RESET}"; }
 MISSING=""
 command -v git &>/dev/null || MISSING="$MISSING git"
 command -v bash &>/dev/null || MISSING="$MISSING bash"
+command -v node &>/dev/null || MISSING="$MISSING node"
 
 if [ -n "$MISSING" ]; then
     warn "Missing required tools:$MISSING"
+    exit 1
+fi
+
+NODE_VERSION="$(node --version | sed 's/^v//')"
+NODE_MAJOR="${NODE_VERSION%%.*}"
+NODE_REST="${NODE_VERSION#*.}"
+NODE_MINOR="${NODE_REST%%.*}"
+if [ "$NODE_MAJOR" -lt 22 ] || { [ "$NODE_MAJOR" -eq 22 ] && [ "$NODE_MINOR" -lt 19 ]; }; then
+    warn "Node.js >= 22.19 is required for the canonical recursion runtime (found $NODE_VERSION)"
     exit 1
 fi
 
@@ -38,20 +49,6 @@ command -v bun &>/dev/null && HAS_BUN=true
 if [ "$HAS_NPM" = false ] && [ "$HAS_BUN" = false ]; then
     warn "Need npm or bun to install Pi. Install Node.js: https://nodejs.org"
     exit 1
-fi
-
-# ── Install Pi if not present ────────────────────────────────────────────
-
-if ! command -v pi &>/dev/null; then
-    info "Installing Pi coding agent..."
-    if [ "$HAS_BUN" = true ]; then
-        bun install -g @earendil-works/pi-coding-agent
-    else
-        npm install -g @earendil-works/pi-coding-agent
-    fi
-    dim "Installed $(pi --version 2>/dev/null | head -1 || echo 'pi')"
-else
-    dim "Pi already installed: $(which pi)"
 fi
 
 # ── Clone ypi ────────────────────────────────────────────────────────────
@@ -69,6 +66,20 @@ else
     cd "$INSTALL_DIR"
     git submodule update --init --depth 1 --quiet
 fi
+
+# Install the exact Pi/runtime dependency versions declared by this checkout.
+# A global PATH Pi may coexist, but ypi deliberately resolves this local copy first.
+info "Installing pinned ypi runtime dependencies..."
+if [ "$HAS_BUN" = true ]; then
+    bun install --production --frozen-lockfile
+else
+    npm install --omit=dev --ignore-scripts
+fi
+if [ ! -x "$INSTALL_DIR/node_modules/.bin/pi" ]; then
+    warn "Pinned Pi dependency was not installed at $INSTALL_DIR/node_modules/.bin/pi"
+    exit 1
+fi
+dim "Pinned Pi dependency: $($INSTALL_DIR/node_modules/.bin/pi --version 2>/dev/null | head -1 || echo 'installed')"
 
 # ── Add to PATH ──────────────────────────────────────────────────────────
 
@@ -108,7 +119,7 @@ dim "Required:"
 command -v pi &>/dev/null && dim "  ✓ pi ($(which pi))" || dim "  ✗ pi"
 echo ""
 dim "Optional:"
-command -v jj &>/dev/null && dim "  ✓ jj (workspace isolation)" || dim "  · jj — install for workspace isolation: https://martinvonz.github.io/jj/"
+command -v jj &>/dev/null && dim "  ✓ existing jj executable detected (used only in repositories already configured for jj)" || dim "  · jj not present (normal Git repositories remain fully supported)"
 echo ""
 echo -e "${BOLD}Get started:${RESET}"
 echo "  ypi                    # interactive"

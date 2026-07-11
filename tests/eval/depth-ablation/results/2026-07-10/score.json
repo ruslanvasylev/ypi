@@ -1,0 +1,46 @@
+{
+  "source_commit": "036f5d3",
+  "depth_2_evaluated": false,
+  "benchmark": "contract-grounded planted TypeScript defect audit",
+  "expected_findings": 12,
+  "depth_3": {
+    "exit_code": 0,
+    "true_positives": 12,
+    "false_positives": 0,
+    "recall": 1.0,
+    "precision": 1.0,
+    "elapsed_seconds": 732.267,
+    "allocated_call_attempts": 10,
+    "spawned_trace_transitions": 9,
+    "max_observed_child_depth": 3,
+    "complete_ledger_cost": 3.26984,
+    "complete_ledger_tokens": 1529367,
+    "session_observed_cost": 3.26984,
+    "session_observed_tokens": 1529367,
+    "max_rss_kib": 273284
+  },
+  "depth_4": {
+    "exit_code": 124,
+    "true_positives": 0,
+    "false_positives": 0,
+    "recall": 0.0,
+    "precision": null,
+    "elapsed_seconds": 900.071,
+    "allocated_call_attempts": 10,
+    "spawned_trace_transitions": 9,
+    "max_observed_child_depth": 4,
+    "complete_ledger_cost": 4.387705,
+    "complete_ledger_tokens": 2780716,
+    "session_observed_cost": 4.684875,
+    "session_observed_tokens": 2927884,
+    "max_rss_kib": 328284,
+    "failure": "tree-wide timeout before any final answer; complete cost ledger is a lower bound"
+  },
+  "depth_4_vs_3": {
+    "complete_ledger_cost_multiplier": 1.342,
+    "complete_ledger_token_multiplier": 1.818,
+    "rss_multiplier": 1.201
+  },
+  "decision": "keep default RLM_MAX_DEPTH=3; depth 4 remains an explicit per-run override",
+  "boundary": "one paired benchmark rejects promoting depth 4 over depth 3 on this task; depth 2 was not evaluated and deeper recursion may help elsewhere"
+}

@@ -1,124 +1,93 @@
-# release.prose
-# Cut a new ypi release.
+# release.prose — explicitly requested release workflow only
 #
-# Deterministic steps (tests, version bumps, publish) use exec.
-# Judgment steps (changelog, version decision) use session.
-#
-# Run: rp ypi .prose/release.prose
+# This program never solicits release approval. The caller must have received an
+# explicit release request in the current user turn and transport that authority
+# with YPI_EXPLICIT_RELEASE_REQUEST=1. The guard runs before planning or mutation.
 
-# --- Gather state ---
+let authority = exec "scripts/assert-release-authorized"
+
+gate **the current user explicitly initiated this release task**:
+  evidence: authority
+  on-reject: throw "Release authority absent. Stop without asking whether to release."
+
+let start_state = exec "git status --porcelain=v1 --untracked-files=all"
+
+gate **the release checkout starts clean**:
+  evidence: start_state
+  on-reject: throw "Release checkout is dirty. Stop without staging unrelated work."
 
 let current_version = exec "node -p \"require('./package.json').version\""
-let jj_log = exec "jj log --no-graph --limit 30"
+let git_log = exec "git log --oneline --decorate -30"
 let changelog = exec "cat CHANGELOG.md"
-let diff = exec "jj diff --from 'description(\"release:\")' --stat"
 
-# --- Tests ---
-
-let preflight = exec "make release-preflight"
-  on-fail: "continue"
-if **release preflight failed**:
-  session "Report test failures and stop"
-    prompt: """
-      Release preflight failed. Cannot release.
-      Output:
-      {preflight}
-      Diagnose what's broken and propose the smallest safe fix.
-    """
-  throw "Release preflight failed"
-
-# --- Decide version ---
-
-let release_plan = session "Decide version and write changelog"
+output release_plan = session "Plan the explicitly requested release"
   prompt: """
-    Current version: {current_version}
-    
-    Semver rules:
-    - patch: bug fixes, docs
-    - minor: new features, new env vars, new guardrails
-    - major: breaking changes to CLI args, env vars, or rlm_query interface
+    This user-authorized release starts at {current_version}.
+    Inspect the log and changelog. Propose exactly one semver target and a concise
+    release summary. Do not execute commands or publish anything.
 
-    Commits since last release:
-    {jj_log}
+    Git log:
+    {git_log}
 
-    Files changed:
-    {diff}
-
-    Current changelog:
+    Changelog:
     {changelog}
-
-    Decide the new version number. Then write the changelog entry
-    following the existing format (### Added, ### Changed, ### Fixed, ### Removed).
-
-    Return a JSON object:
-    {{
-      "new_version": "X.Y.Z",
-      "changelog_entry": "## [X.Y.Z] - YYYY-MM-DD\\n\\n### Added\\n- ...\\n"
-    }}
   """
+  context: [git_log, changelog]
 
-input confirm_release: ***
-  Release plan:
-
-  {release_plan}
-
-  Approve, edit, or reject.
-***
-
-# --- Apply version + changelog ---
-
-session "Update package.json and CHANGELOG.md"
+session "Prepare release metadata"
   prompt: """
-    Apply this release plan:
-    {release_plan}
-
-    1. Update version in package.json (edit the "version" field only)
-    2. Insert the changelog entry at the top of CHANGELOG.md (after the header)
-
-    Do NOT use npm version. Edit the files directly.
+    Apply the approved plan in {release_plan}. Update both package.json and
+    pi-recursive/package.json to the same strict semver version. Update
+    CHANGELOG.md. Do not commit, tag, push, or publish. Do not modify lockfiles.
   """
+  context: [release_plan]
 
-# --- Encrypt, commit, tag, push ---
-
-exec "scripts/encrypt-prose"
-  on-fail: "continue"
-
-let new_version = exec "node -p \"require('./package.json').version\""
-
-exec """
-jj describe -m "release: v{new_version}"
-jj bookmark set master
-jj bookmark set v{new_version}
-jj git push --bookmark master --bookmark v{new_version}
+# Derive shell-sensitive values from validated repository data, never from model
+# interpolation. All consistency and quality gates run before Git publication.
+let preflight = exec """
+set -euo pipefail
+scripts/assert-release-authorized
+VERSION="$(node -p "require('./package.json').version")"
+node -e 'if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(process.argv[1])) process.exit(2)' "$VERSION"
+[ "$(node -p "require('./pi-recursive/package.json').version")" = "$VERSION" ]
+scripts/check-release-consistency
+make release-preflight
+scripts/encrypt-prose
+scripts/encrypt-prose --check
+git diff --check
+git add -A
+git diff --cached --quiet && { echo "release metadata produced no changes" >&2; exit 2; }
+printf 'validated release v%s\n' "$VERSION"
 """
 
-# --- Publish ---
+gate **release metadata and the exact staged package pass all preflight checks**:
+  evidence: preflight
+  on-reject: throw "Release preflight failed before commit, tag, push, or publication."
 
-let publish = exec "npm publish"
-  on-fail: "continue"
+let published = exec """
+set -euo pipefail
+scripts/assert-release-authorized
+VERSION="$(node -p "require('./package.json').version")"
+node -e 'if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(process.argv[1])) process.exit(2)' "$VERSION"
+BRANCH="$(git branch --show-current)"
+case "$BRANCH" in ''|master|main) echo "release requires a reviewed feature branch" >&2; exit 2;; esac
+mapfile -t URLS < <(git remote get-url --push --all origin)
+[ "${#URLS[@]}" -gt 0 ]
+for url in "${URLS[@]}"; do scripts/validate-push-owner "$url"; done
+git commit -m "release: v$VERSION"
+git tag "v$VERSION"
+YPI_SKIP_PUSH_CHECKS=1 git -c push.followTags=false push --no-follow-tags origin \
+  "HEAD:refs/heads/$BRANCH" "refs/tags/v$VERSION:refs/tags/v$VERSION"
+scripts/publish-packages
+printf 'released v%s from owned origin branch %s\n' "$VERSION" "$BRANCH"
+"""
 
-if **publish failed**:
-  session "Diagnose npm publish failure"
-    prompt: "npm publish failed: {publish}"
-  throw "npm publish failed"
-
-# --- Decrypt back to plaintext ---
-
-exec "scripts/decrypt-prose"
-  on-fail: "ignore"
-
-# --- Start next change ---
-
-exec "jj new"
-
-session "Summarize release"
+output summary = session "Summarize the requested release"
   prompt: """
-    Release complete.
+    Report the completed explicitly requested release from this evidence. Include
+    the version, branch, validation status, and any failure. Do not propose or ask
+    about another release.
 
-    Version: {new_version}
-    npm publish: {publish}
-
-    Summarize what was released based on the changelog entry.
-    Remind to create a GitHub Release at:
-    https://github.com/rawwerks/ypi/releases/new
+    {published}
   """
+  context: published

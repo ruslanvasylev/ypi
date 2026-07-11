@@ -8,9 +8,11 @@ Named after the [Y combinator](https://en.wikipedia.org/wiki/Fixed-point_combina
 
 Inspired by [Recursive Language Models](https://github.com/alexzhang13/rlm) (RLM), which showed that an LLM with a code REPL and a `llm_query()` function can recursively decompose problems, analyze massive contexts, and write code — all through self-delegation.
 
+ypi is an RLM-inspired recursive coding-agent runtime, not a reproduction of the paper's Algorithm 1. A normal root prompt remains a Pi user message. Bulk data becomes external symbolic context when callers use repository files, `$CONTEXT`, or piped stdin. The native tool provides direct child-agent delegation; the CLI helper additionally supports programmatic shell loops and pipelines.
+
 ## The Idea
 
-Pi already has an extension system and a bash REPL. ypi's core is a Pi extension that registers one native tool — `rlm_query` — and teaches Pi to use it recursively. The `ypi` launcher and shell-compatible `rlm_query` command are convenience layers around that extension. [jj](https://martinvonz.github.io/jj/) workspace isolation is used when available, but it is not required for the minimal path.
+Pi already has an extension system and a bash REPL. ypi has one TypeScript recursion runtime used by two thin adapters: the Pi extension registers the native `rlm_query` tool, while the CLI adapter adds stdin, pipelines, async jobs, and notification. The `ypi` launcher configures those surfaces. Review children are read-only by default. One explicitly chartered implementer can acquire an automatic writer lease in an existing clean Git checkout or use an already-existing jj workspace; ypi never installs or initializes VCS tooling.
 
 ```
 ┌──────────────────────────────────────────┐
@@ -25,13 +27,13 @@ Pi already has an extension system and a bash REPL. ypi's core is a Pi extension
 │            ▼                             │
 │    ┌────────────────────────────┐        │
 │    │  ypi (depth 1)            │        │
-│    │  Workspace: jj if present │        │
-│    │  Edits files safely       │        │
-│    │  Returns: patch on stdout │        │
+│    │  Mode: review (read-only) │        │
+│    │  or one implementer lease │        │
+│    │  Returns evidence/report  │        │
 │    └────────────────────────────┘        │
 │                                          │
-│  > jj squash --from <child-change>       │
-│  # absorb the fix into our working copy  │
+│  > inspect changed paths + final diff    │
+│  > run deterministic acceptance gates   │
 └──────────────────────────────────────────┘
 ```
 
@@ -91,38 +93,42 @@ pi
 pi install -l npm:pi-recursive
 ```
 
-The npm package has a Pi manifest that exposes only
-`./extensions/recursive.ts`. The `ypi` binary remains available for users who
+The npm package exposes `./extensions/recursive.ts` plus the on-demand
+`bounded-recursive-delegation` skill. The `ypi` binary remains available for users who
 want the wrapper defaults and shell-compatible helper commands.
 
 ### How It Works
-**Three pieces** (same architecture as Python RLM):
+**Three adapted pieces** from the RLM pattern:
 | Piece | Python RLM | ypi |
 |---|---|---|
 | System prompt | `RLM_SYSTEM_PROMPT` | `SYSTEM_PROMPT.md` |
 | Context / REPL | Python `context` variable | `$CONTEXT` file + bash |
 | Sub-call function | `llm_query("prompt")` | native Pi tool `rlm_query`; optional shell command `rlm_query "prompt"` |
-**Recursion:** the `extensions/recursive.ts` extension registers a native `rlm_query` tool that spawns a child Pi process with the same extension and tools. The child can call `rlm_query` too:
+**Recursion:** the `extensions/recursive.ts` extension registers a native `rlm_query` tool that spawns a child Pi process with the same extension and a depth/isolation-appropriate tool profile. A nonterminal child can call `rlm_query` too:
 
 ```
-Depth 0 (root)    -> full Pi with native rlm_query + bash
-  Depth 1 (child) -> full Pi with native rlm_query + bash
-    Depth 2 (leaf) -> full Pi with bash, but no rlm_query (max depth)
+Depth 0 (root)        -> full Pi with native rlm_query + normal root tools
+  Depth 1 (review)    -> read-only Pi with native rlm_query
+    Depth 2 (review)  -> read-only Pi with native rlm_query
+      Depth 3 (leaf)  -> read-only Pi without rlm_query (default max depth)
+
+One root-delegated child may instead use `mode=implement`; descendants cannot
+escalate writable authority.
 ```
 
-**File isolation with jj:** When jj is available and `RLM_JJ` is not `0`, recursive children use [jj workspaces](https://martinvonz.github.io/jj/latest/working-copy/) for isolation. Without jj, the minimal extension still works, but children exclude built-in mutators (`bash`, `edit`, `write`) unless `RLM_UNSAFE_NO_JJ_WRITE=1`. Installed extension tools remain available by default, so package trust still follows Pi's installed-package model.
+**Automatic workspace policy:** `rlm_query` defaults to read-only `review` mode and never needs or creates a workspace. `mode=implement` is accepted only at the root for one bounded writer: an existing jj repository gets one repository-wide lease plus an isolated jj workspace; an ordinary existing Git checkout must be clean and receives one exclusive ypi writer lease in its existing metadata. Implementers can use checkout-confined `edit`/`write` but not process-spawning `bash`; external/symlink escapes and `.git`/`.jj` metadata writes are blocked, and the parent runs deterministic gates. Native calls are sequential batch barriers, preventing root mutators from overlapping the implementer; bounded parallel read-only reviews use shell `rlm_query --async`. Dirty, non-VCS, contended, or nested-writer cases decline safely and tell the root to implement directly. ypi never installs or initializes Git, jj, or another VCS. Children load only the exact canonical ypi extension by default, so other ambient extension tools are intentionally unavailable; `RLM_AMBIENT_EXTENSIONS=1` restores trusted ambient tools for reviews but never for an implementer, avoiding hidden writer/process escalation.
 
 ### Why It Works
 
-The design has three properties that compound:
+The design has four properties that compound:
 
-1. **Self-similarity** — Every depth runs the same prompt, same tools, same agent. No specialized "scout" or "planner" roles. The intelligence is in *decomposition*, not specialization. The system prompt teaches one pattern — size-first → search → chunk → delegate → combine — and it works at every scale.
+1. **Recursive similarity** — Nonterminal depths run the same agent and extension with the same decomposition guidance. Tool profiles can narrow for no-jj safety, recursion disappears at the configured leaf, and provider/model/thinking routes can vary by depth. The intelligence remains in *decomposition*, not specialized role prompts.
 
-2. **Self-hosting** — The extension is the canonical recursion machinery. When the shell helper is enabled (the `ypi` wrapper, or any load with `YPI_SHELL_HELPER=1`), the prompt also includes its source for inspection and modification. A bare `pi -e` / npm extension install uses the native tool only and does not require that shell file.
+2. **Self-hosting** — The TypeScript runtime core is the canonical recursion machinery. When the CLI helper is enabled (the `ypi` wrapper, or any load with `YPI_SHELL_HELPER=1`), the prompt includes the thin launcher, runtime core, and CLI adapter for inspection. A bare `pi -e` / npm extension install uses the thin native adapter over the same core.
 
-3. **Bounded recursion** — Five concentric guardrails (depth limit, PATH scrubbing, call count, budget, timeout) guarantee termination. The system prompt also installs *cognitive* pressure: deeper agents are told to be more conservative, preferring direct action over spawning more children.
+3. **Bounded ancestry with observable tree guards** — `RLM_MAX_DEPTH` remains `3`; a controlled depth-3/depth-4 audit found all 12 planted defects at depth 3, while depth 4 timed out without an answer after 1.818× the depth-3 tokens in complete ledger events (a lower bound) and 1.914× in session-observed usage. This rejects promoting depth 4 on the tested task; depth 2 was not evaluated, so it does not establish a globally optimal depth. `RLM_MAX_CALLS` defaults to `128` to prevent runaway fan-out. At the cap, the root continues directly. Cost and tokens are always telemetry, never a dollar stop. The tracked fixture, scorer, runner, and result boundary live under `tests/eval/depth-ablation/`.
 
-4. **Symbolic access** — Anything the agent needs to manipulate precisely is a file, not just tokens in context. `$CONTEXT` holds the data, `$RLM_PROMPT_FILE` holds the original prompt, and hashline provides line-addressed edits. Agents `grep`/`sed`/`cat` instead of copying tokens from memory.
+4. **Symbolic access** — `$CONTEXT` holds external data, the active human root request is captured in `$RLM_ROOT_PROMPT_FILE`, and each delegated charter lives in `$RLM_PROMPT_FILE`. Pi receives delegated text through non-interactive stdin instead of a syntax-sensitive or `ARG_MAX`-bounded argv token. Pi normalizes outer stdin whitespace, so `$RLM_PROMPT_FILE` is the byte-exact authoritative charter for whitespace-sensitive work. Async jobs snapshot all three task/session inputs before acknowledgement. Agents can use exact files and line-addressed edits instead of copying bulk data through model memory.
 
 ### Model Configuration
 
@@ -138,7 +144,7 @@ Root model selection is owned by Pi, not ypi. Configure the default root model i
 
 Bare `ypi` passes no provider/model by default, so Pi applies those settings (or `/model`, `--provider`, `--model`, and `--thinking`). ypi then captures the active root provider/model/thinking and forwards that route to recursive children unless child routing variables override it.
 
-For depth-based cost control, use child routing:
+For depth-based capability or latency routing, use child routing:
 
 ```bash
 RLM_CHILD_MODELS='gpt-5.5,gpt-5.5' \
@@ -152,17 +158,19 @@ This means root uses Pi's configured default, depth-1 children use high thinking
 
 | Feature | Env var | What it does |
 |---------|---------|-------------|
-| Budget | `RLM_BUDGET=0.50` | Max dollar spend for entire recursive tree; native extension mode requires JSON output so child cost can be measured |
-| Timeout | `RLM_TIMEOUT=60` | Wall-clock limit for entire recursive tree |
-| Call limit | `RLM_MAX_CALLS=20` | Max total `rlm_query` invocations |
+| Cost telemetry | automatic `RLM_COST_FILE` | Private per-tree cost/token ledger; observational only and never an admission gate |
+| Progress telemetry | automatic `PI_TRACE_FILE` | Private lifecycle trace plus live elapsed time, four sanitized recent tool activities, completed cost, and observe-only stale warning |
+| Explicit timeout | `RLM_TIMEOUT=60` | Optional user-requested wall-clock limit; no timeout is set by default |
+| Call limit | `RLM_MAX_CALLS=128` | Max child-call admissions (default 128); at the cap the root continues directly |
 | Model routing | `RLM_CHILD_MODEL=haiku` or `RLM_CHILD_MODELS=big:high,small:medium` | Use one child model for every sub-call, or a comma-separated depth route for depth 1, 2, ... |
-| Depth limit | `RLM_MAX_DEPTH=3` | How deep recursion can go |
-| jj disable | `RLM_JJ=0` | Skip workspace isolation; child agents exclude built-in mutators unless `RLM_UNSAFE_NO_JJ_WRITE=1`, while installed extension tools remain available |
+| Depth limit | `RLM_MAX_DEPTH=3` | How deep recursion can go (default 3; increase only for a measured task with an explicit call limit and visible progress) |
+| Child mode | native `rlm_query` `mode=review|implement` | Read-only review by default; one clean-checkout implementer when explicitly selected by the root agent |
 | Plain text | `RLM_JSON=0` | Disable JSON mode (no cost tracking) |
-| Child non-extension discovery isolation | `RLM_CHILD_DISCOVERY=0` | Pass Pi's `--no-skills`, `--no-prompt-templates`, `--no-themes`, `--no-context-files`, and `--no-approve`; installed extensions may still register commands/skills unless extension loading is also disabled |
-| Tracing | `PI_TRACE_FILE=$HOME/scratch/trace.log` | Log all calls with timing + cost |
+| Child non-extension discovery isolation | `RLM_CHILD_DISCOVERY=0` | Pass Pi's `--no-skills`, `--no-prompt-templates`, `--no-themes`, `--no-context-files`, and `--no-approve`; with child extensions disabled, use a private Pi agent/config root and `PI_OFFLINE=1` while preserving Pi's own package assets |
+| Ambient extension compatibility | `RLM_AMBIENT_EXTENSIONS=1` | Opt into Pi's ambient extension discovery in addition to the exact ypi copy; disabled by default because old ypi copies cannot unregister their handlers |
+| Trace override | `PI_TRACE_FILE=$HOME/scratch/trace.log` | Override the automatic private lifecycle trace path |
 
-The agent can check spend at any time:
+The agent can report observed spend at any time; it never uses this telemetry to stop product work:
 
 ```bash
 rlm_cost          # "$0.042381"
@@ -176,10 +184,10 @@ ypi is a thin layer on top of Pi. We strive not to break or duplicate what Pi al
 | Pi feature | ypi behavior | Tests |
 |---|---|---|
 | **Session history** | Uses Pi's native session manager when a parent session exists. Child sessions go in the same dir with trace-encoded filenames. `RLM_SHARED_SESSIONS=0` uses `--no-session` and clears child session env. No separate session store. | G24–G30 |
-| **Extensions** | Child processes keep normal Pi package/extension discovery enabled by default and explicitly load the ypi extension so installed Pi packages remain available recursively. `RLM_EXTENSIONS=0` disables recursion extension loading; `RLM_CHILD_EXTENSIONS=0` disables it for child depths; `RLM_CHILD_DISCOVERY=0` disables non-extension discovery surfaces only. Use both child opt-outs for full child package/resource isolation. | G34–G38, N8 |
-| **Native recursion** | The canonical `extensions/recursive.ts` extension registers a native Pi `rlm_query` tool. Minimal mode works with only Pi plus extension files: no `ypi` launcher, no shell helper, no jj. | extension smoke, pure-extension E2E |
-| **System prompt** | The extension injects `SYSTEM_PROMPT.md` when present and falls back to a minimal built-in prompt when it is not. If the shell `rlm_query` file exists, its source is appended as optional compatibility context. Standalone shell `rlm_query` falls back to Pi's `--system-prompt`. | T8–T9, parity E2E |
-| **`-p` mode** | All child Pi calls run non-interactive (`-p`). ypi never fakes a terminal. | T3–T4 |
+| **Extensions** | The wrapper and recursive children load exactly their canonical ypi extension by default (`--no-extensions -e ...`) so an older ambient copy cannot register conflicting handlers. `RLM_AMBIENT_EXTENSIONS=1` is the explicit compatibility opt-in. `RLM_EXTENSIONS=0`/`RLM_CHILD_EXTENSIONS=0` disable ypi; combining child extension and discovery opt-outs adds a private Pi agent/config root and offline mode without replacing Pi's own package assets. | G34–G38, N8, runtime contract |
+| **Native recursion** | `extensions/recursive.ts` registers a thin native Pi `rlm_query` adapter over `extensions/ypi/runtime-core.ts`. Minimal mode works with only Pi plus extension files: no `ypi` launcher, CLI helper, or jj. | extension smoke, pure-extension E2E |
+| **System prompt** | The extension injects `SYSTEM_PROMPT.md` when present and falls back to a minimal built-in prompt when it is not. Every child receives exact task-context and charter paths plus task-context-over-unrelated-retrieval guidance; extension-isolated children receive the same map through a private generated `--system-prompt`. Wrapper mode appends the thin launcher, canonical runtime core, and CLI adapter as self-hosting context. | T8–T9, runtime contract, live E1/E2/E4 |
+| **Non-interactive mode** | Child Pi calls use `--mode json` for measurable structured output or `-p` for plain mode. ypi never fakes a terminal. | T3–T4, N10 |
 | **`--session` flag** | Used when session sharing is enabled and Pi has a session dir; `--no-session` otherwise. Never both. | G24, G28 |
 | **Provider/model** | Bare `ypi` defers root provider/model/thinking to Pi (`defaultProvider`, `defaultModel`, `defaultThinkingLevel`, `/model`, or CLI flags). The extension captures Pi's active root route into `RLM_PROVIDER`/`RLM_MODEL`/`RLM_THINKING_LEVEL` so children inherit it unless `RLM_CHILD_*` or depth lists override child routing. | T14, T14c–T14g, G6b, N7b |
 
@@ -187,12 +195,13 @@ If Pi changes how sessions or extensions work, our guardrail tests should catch 
 
 ### Troubleshooting
 
-If `ypi` or recursion **seems broken**, run `make doctor` first. The most common
-cause is the wrong host `pi`: either the old `@mariozechner/pi-coding-agent`
-shadowing the current `@earendil-works/pi-coding-agent`, or a version older than
-`.pi-version`. `make doctor` reports the exact mismatch and the one-line fix
-(`bun add -g @earendil-works/pi-coding-agent@<pinned>`). It honors `YPI_PI_BIN`,
-so it checks the same binary recursion actually spawns.
+If `ypi` or recursion **seems broken**, run `ypi-doctor` for an npm install or
+`make doctor` from a source checkout. The most common cause is the wrong host
+`pi`: either the old `@mariozechner/pi-coding-agent` shadowing the current
+`@earendil-works/pi-coding-agent`, or a version older than `.pi-version`. The
+doctor prefers ypi's package-local exact dependency over PATH, reports the
+mismatch, and honors an explicit `YPI_PI_BIN`, so it checks the same binary
+recursion actually spawns.
 
 ### Package Boundary
 
@@ -201,7 +210,13 @@ There are two published packages, built from one canonical source:
 | Package | Audience | Entry point | Includes |
 |---|---|---|---|
 | **`pi-recursive`** | Pi users who want recursion inside plain `pi` | `pi install npm:pi-recursive` or `pi -e npm:pi-recursive` | The native `rlm_query` tool, prompt injection, depth/status/env handling. No `bin`; host `pi` is a peer dependency. |
-| **`ypi`** | Users who want a preconfigured recursive CLI | `npm install -g ypi` / `bun install -g ypi` | The same extension plus launcher defaults, the shell-compatible `rlm_query` (pipes/async), cost/session helpers. Bundles `pi` so the CLI runs without a separate global install. |
+| **`ypi`** | Users who want a preconfigured recursive CLI | `npm install -g ypi` / `bun install -g ypi` | The same core and extension plus launcher defaults, the Node-backed `rlm_query` CLI (pipes/async), cost/session helpers, and retained one-release fallbacks. Bundles `pi` so the CLI runs without a separate global install. |
+
+During the convergence window, `YPI_LEGACY_IMPL=1 ypi ...` or
+`YPI_LEGACY_IMPL=1 rlm_query ...` selects the shipped incumbent native/CLI
+engine for rollback and comparison. These paths remain packaged and tested;
+`docs/deletion-candidates.md` is a mark-for-deletion evidence ledger, not
+permission to remove them.
 
 Both ship the same `extensions/` source. `pi-recursive` is the extension-only
 publish view, staged from the repo root by `scripts/build-pi-recursive`; `ypi`
@@ -218,10 +233,11 @@ opt-in (`YPI_SHELL_HELPER=1`, set by the `ypi` wrapper), so installing
 ```
 ypi/
 ├── ypi                    # Thin launcher: sets env, loads extensions/recursive.ts
-├── rlm_query              # Optional shell-compatible recursive sub-call command
+├── rlm_query              # Thin shell launcher for the canonical CLI adapter
+├── rlm_query.legacy       # Retained fallback; candidate, not removed
 ├── extensions/
 │   ├── recursive.ts       # Canonical ypi Pi extension
-│   ├── ypi/               # Native tool, env, prompt, status modules
+│   ├── ypi/               # Runtime core plus native/CLI adapters and support
 │   └── ypi.ts             # Compatibility alias for recursive.ts
 ├── SYSTEM_PROMPT.md       # Teaches the LLM to be recursive + edit code
 ├── AGENTS.md              # Meta-instructions for the agent (read by ypi itself)
@@ -236,17 +252,19 @@ ypi/
 
 ### Version Control
 
-This repo strongly prefers **[jj](https://martinvonz.github.io/jj/)** for version control. Git remains the remote-facing substrate.
+Use the repository's existing Git checkout. ypi never installs or initializes a
+second VCS. Root work uses normal feature branches; recursive reviews are
+read-only and one explicit implementer may use ypi's automatic writer policy.
 
 ```bash
-jj status                    # What's changed
-jj describe -m "message"     # Describe current change
-jj new                       # Start a new change
-jj bookmark set master       # Point master at current change
-jj git push                  # Push to GitHub
+git status --short --branch
+git switch -c feat-description
+# edit and validate
+git add <scoped-paths>
+git commit -m "feat: description"
+scripts/validate-push-owner "$(git remote get-url --push origin)"
+git push -u origin HEAD
 ```
-
-Prefer jj for local changes, especially recursive agent work. Use the repo's safe push/land helpers for remote-facing operations.
 
 ### Testing
 
@@ -261,16 +279,22 @@ make test-parity-e2e   # wrapper vs direct-extension parity proof
 make test              # all of the above
 ```
 
+For a large, proof-bound, or self-hosting change, follow
+[`docs/bounded-recursive-development.md`](docs/bounded-recursive-development.md).
+It defines the single persisted run envelope, three-review topology,
+continuation semantics, and freeze-before-live-model gate. The lightweight
+`.prose/recursive-development.prose` workflow is not a substitute for that
+contract.
+
 Install hooks once per clone to run checks automatically on git push:
 ```bash
 make install-hooks
 ```
 
-Release/update helper:
-```bash
-make release-preflight   # same checks + upstream dry-run in one command
-make land                # deterministic-ish landing helper
-```
+`make land` runs the delivery gate and may push the current feature branch only
+to an owner-validated `origin`; it never tags, releases, publishes, or mutates a
+non-owned remote. Release workflows are absent from normal development and run
+only after an explicit user-initiated release request.
 
 **Before any change to `rlm_query`:** run `make test-fast`. After: run it again. `rlm_query` is a live dependency of the agent's own execution — breaking it breaks the agent.
 
@@ -289,7 +313,7 @@ ypi went through five approaches before landing on the current design:
 2. **Python bridge** — HTTP server between Pi and Python RLM. Too complex.
 3. **Pi extension** — Custom provider with search tools. Not true recursion.
 4. **Bash RLM** (`rlm_query` + `SYSTEM_PROMPT.md`) — True recursion via bash.
-5. **Pi-native extension RLM** — `extensions/recursive.ts` registers native recursion; `ypi` and shell `rlm_query` are compatibility/ergonomics layers. **Current approach.**
+5. **Pi-native recursive-agent extension** — `extensions/recursive.ts` registers native recursion; `ypi` and shell `rlm_query` provide wrapper and programmatic composition surfaces. This is the current RLM-inspired approach, not an Algorithm 1 reproduction.
 
 The key insight: Pi's extension API can expose recursion as a first-class tool, while Pi's bash tool remains the REPL for command-line composition. No bridge needed.
 
@@ -299,4 +323,4 @@ The key insight: Pi's extension API can expose recursion as a first-class tool, 
 
 - [Pi coding agent](https://github.com/earendil-works/pi) — the underlying agent
 - [Recursive Language Models](https://github.com/alexzhang13/rlm) — the library that inspired this
-- [rlm-cli](https://github.com/rawwerks/rlm-cli) — Python RLM CLI (budget, timeout, model routing)
+- [rlm-cli](https://github.com/rawwerks/rlm-cli) — Python RLM CLI (cost accounting, explicit timeout, model routing)

@@ -37,6 +37,7 @@ echo "--- Pi version pin ---"
 KNOWN_GOOD=$(tr -d '[:space:]' < "$PROJECT_DIR/.pi-version")
 PINNED=$(node -e "const p=require('$PROJECT_DIR/package.json'); console.log(p.dependencies['@earendil-works/pi-coding-agent'] || '')")
 PI_MANIFEST=$(node -e "const p=require('$PROJECT_DIR/package.json'); console.log((p.pi?.extensions || []).join('\\n'))")
+PI_SKILLS=$(node -e "const p=require('$PROJECT_DIR/package.json'); console.log((p.pi?.skills || []).join('\\n'))")
 LATEST=""
 if command -v bun &>/dev/null; then
     LATEST=$(bun pm view @earendil-works/pi-coding-agent version 2>/dev/null | tail -1 | tr -d '[:space:]' || true)
@@ -68,6 +69,11 @@ if [ "$PI_MANIFEST" = "./extensions/recursive.ts" ]; then
     pass "pi package manifest exposes only canonical extension"
 else
     fail "pi package manifest exposes only canonical extension" "pi.extensions=$PI_MANIFEST"
+fi
+if [ "$PI_SKILLS" = "./skills" ] && grep -q '^name: bounded-recursive-delegation$' "$PROJECT_DIR/skills/bounded-recursive-delegation/SKILL.md"; then
+    pass "pi package manifest exposes bounded recursive delegation skill"
+else
+    fail "pi package manifest exposes bounded recursive delegation skill" "pi.skills=$PI_SKILLS"
 fi
 
 echo ""
@@ -159,7 +165,7 @@ stdout_file="$MIN_ROOT/minimal.stdout"
 set +e
 env -u YPI_EXTENSION_ROOT -u YPI_EXTENSION_PATH \
     RLM_JJ=0 \
-    RLM_MAX_DEPTH=1 \
+    RLM_DEPTH=0 RLM_MAX_DEPTH=1 \
     YPI_EXTENSION_DEBUG=1 \
     timeout 15 pi --no-extensions \
     -e "$MIN_ROOT/extensions/recursive.ts" --list-models test \

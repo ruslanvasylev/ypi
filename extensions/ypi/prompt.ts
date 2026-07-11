@@ -1,6 +1,7 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import type { BeforeAgentStartEvent } from "@earendil-works/pi-coding-agent";
 import { shellHelperEnabled } from "./env.ts";
+import { renderActiveTaskFilesSection } from "./internal/task-files.ts";
 import type { YpiRuntime } from "./runtime.ts";
 import { debug } from "./runtime.ts";
 
@@ -9,29 +10,60 @@ const MINIMAL_SYSTEM_PROMPT = `# ypi Minimal Recursive Mode
 You are Pi with a native \`rlm_query\` tool.
 
 - Use the native \`rlm_query\` tool to delegate clear, bounded subtasks to child Pi agents.
-- For independent subtasks, issue multiple native \`rlm_query\` tool calls in the same assistant turn so Pi can run them in parallel.
+- Native \`rlm_query\` calls are sequential so an implementer cannot overlap root mutations. Use shell \`rlm_query --async\` only for bounded read-only fan-out when that optional helper exists.
 - Each child receives a fresh context window and can call \`rlm_query\` again until \`RLM_MAX_DEPTH\`.
-- \`jj\` workspace isolation is strongly encouraged when available, but recursion must still work without \`jj\`.
+- \`rlm_query\` defaults to read-only review mode. Only the root may use implement mode, for one bounded edit/write unit in an existing clean Git or existing jj checkout; the parent runs commands and tests.
+- Never install or initialize version-control tooling. Never run parallel implementers.
+- Cost is telemetry only; never set or recommend a dollar budget.
+- Never release or mutate a non-owned remote without an explicit user request for that exact operation.
 - The shell command named \`rlm_query\` is optional compatibility glue. Do not require it for minimal recursion.
 `;
 
-function shellImplementationSection(runtime: YpiRuntime): string {
+function runtimeImplementationSection(runtime: YpiRuntime): string {
 	if (!shellHelperEnabled(runtime)) {
 		debug("__YPI_EXTENSION_NO_SHELL_HELPER__");
 		return "";
 	}
 
 	const rlmQuery = readFileSync(runtime.rlmQueryPath, "utf8");
+	const runtimeCore = readFileSync(runtime.runtimeCorePath, "utf8");
+	const internalRuntime = readdirSync(runtime.runtimeInternalDir)
+		.filter((name) => name.endsWith(".ts"))
+		.sort()
+		.map((name) => `// ${name}\n${readFileSync(`${runtime.runtimeInternalDir}/${name}`, "utf8")}`)
+		.join("\n\n");
+	const cliAdapter = readFileSync(runtime.cliAdapterPath, "utf8");
 	return `
 
-## SECTION 6 - rlm_query Shell Compatibility Implementation
+## SECTION 6 - Canonical rlm_query Runtime Implementation
 
-Below is the full source of the optional shell-compatible \`rlm_query\` command.
-The native Pi tool is the minimal recursion path; this shell helper adds pipes,
-async jobs, and command-line ergonomics when present.
+The shell command is a thin launcher. Child planning, guardrails, resources,
+process execution, result handling, and cleanup belong to the shared TypeScript
+runtime below. The CLI adapter adds stdin, async jobs, and notification; the Pi
+adapter calls the same runtime directly.
+
+### Launcher
 
 \`\`\`bash
 ${rlmQuery}
+\`\`\`
+
+### Canonical runtime core
+
+\`\`\`typescript
+${runtimeCore}
+\`\`\`
+
+### Internal runtime owners
+
+\`\`\`typescript
+${internalRuntime}
+\`\`\`
+
+### CLI adapter
+
+\`\`\`typescript
+${cliAdapter}
 \`\`\`
 `;
 }
@@ -45,7 +77,11 @@ export function buildYpiPrompt(runtime: YpiRuntime): string {
 		systemPrompt = MINIMAL_SYSTEM_PROMPT;
 	}
 
-	return `${systemPrompt}${shellImplementationSection(runtime)}`;
+	return `${systemPrompt}${renderActiveTaskFilesSection({
+		contextPath: process.env.CONTEXT,
+		promptPath: process.env.RLM_PROMPT_FILE,
+		rootPromptPath: process.env.RLM_ROOT_PROMPT_FILE,
+	})}${runtimeImplementationSection(runtime)}`;
 }
 
 export function patchSystemPrompt(runtime: YpiRuntime, event: BeforeAgentStartEvent): string {

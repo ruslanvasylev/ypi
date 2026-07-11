@@ -17,8 +17,10 @@ DEST="$ROOT/pi-recursive"
 mkdir -p "$DEST/extensions"
 # Clean previously staged artifacts so a deleted source file cannot linger.
 find "$DEST/extensions" -mindepth 1 -delete
+rm -rf "$DEST/skills"
 cp -R "$ROOT/extensions/." "$DEST/extensions/"
+cp -R "$ROOT/skills" "$DEST/skills"
 cp "$ROOT/SYSTEM_PROMPT.md" "$DEST/SYSTEM_PROMPT.md"
 cp "$ROOT/LICENSE" "$DEST/LICENSE"
 
-echo "Staged pi-recursive from canonical source: $(find "$DEST/extensions" -name '*.ts' | wc -l) extension files + SYSTEM_PROMPT.md + LICENSE"
+echo "Staged pi-recursive from canonical source: $(find "$DEST/extensions" -name '*.ts' | wc -l) extension files + $(find "$DEST/skills" -name SKILL.md | wc -l) skills + SYSTEM_PROMPT.md + LICENSE"

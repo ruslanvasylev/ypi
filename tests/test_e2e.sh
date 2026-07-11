@@ -26,6 +26,10 @@ export RLM_SYSTEM_PROMPT="$PROJECT_DIR/SYSTEM_PROMPT.md"
 export RLM_PROVIDER="${RLM_PROVIDER:-openrouter}"
 export RLM_MODEL="${RLM_MODEL:-google/gemini-3-flash-preview}"
 export RLM_MAX_DEPTH="${RLM_MAX_DEPTH:-3}"
+export RLM_MAX_CALLS="${RLM_MAX_CALLS:-128}"
+E2E_MAX_CALLS_DEFAULT="$RLM_MAX_CALLS"
+# E2E tasks are read-only probes; choose no-jj mode explicitly.
+export RLM_JJ=0
 
 PASS=0
 FAIL=0
@@ -43,6 +47,10 @@ should_run() {
 
 # Temp dir for test artifacts
 TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/rlm_e2e.XXXXXX")
+unset RLM_CALL_COUNT RLM_START_TIME RLM_ROOT_PROMPT_FILE
+export RLM_TRACE_ID="e2e-$$"
+export RLM_CALL_COUNTER_FILE="$TEST_TMP/suite.counter"
+rm -f "$RLM_CALL_COUNTER_FILE"
 export PI_TRACE_FILE="$TEST_TMP/trace.log"
 trap 'rm -rf "$TEST_TMP"' EXIT
 
@@ -164,7 +172,7 @@ fi
 # ─── E5: Timeout enforcement (if implemented) ────────────────────────────
 
 if should_run "E5"; then
-    if grep -q "RLM_TIMEOUT" "$PROJECT_DIR/rlm_query" 2>/dev/null; then
+    if grep -q "RLM_TIMEOUT" "$PROJECT_DIR/extensions/ypi/guardrails.ts" 2>/dev/null; then
         echo "--- E5: Timeout enforcement ---"
         cat > "$TEST_TMP/ctx_e5.txt" << 'EOF'
 Write a 10,000 word essay about the history of mathematics.
@@ -186,9 +194,8 @@ EOF
 
         unset RLM_TIMEOUT
 
-        # Kill any orphan pi/parser processes left by the timeout
-        pkill -f "rlm_parse_json" 2>/dev/null || true
-        sleep 1  # Let any orphan output drain
+        # The runtime must terminate only the process group it launched. This
+        # harness never uses broad pkill/killall cleanup against user processes.
     else
         skip "E5: timeout enforcement" "RLM_TIMEOUT not implemented yet"
     fi
@@ -197,12 +204,14 @@ fi
 # ─── E6: Max calls enforcement (if implemented) ──────────────────────────
 
 if should_run "E6"; then
-    if grep -q "RLM_MAX_CALLS" "$PROJECT_DIR/rlm_query" 2>/dev/null; then
+    if grep -q "RLM_MAX_CALLS" "$PROJECT_DIR/extensions/ypi/guardrails.ts" 2>/dev/null; then
         echo "--- E6: Max calls enforcement ---"
         export CONTEXT="$TEST_TMP/ctx_e4.txt"
         export RLM_DEPTH=0
-        export RLM_CALL_COUNT=99
+        export RLM_CALL_COUNT=100
         export RLM_MAX_CALLS=100
+        export RLM_CALL_COUNTER_FILE="$TEST_TMP/e6.counter"
+        rm -f "$RLM_CALL_COUNTER_FILE"
 
         START=$(date +%s)
         OUTPUT=$(rlm_query "This should be blocked." 2>&1 || true)
@@ -214,7 +223,9 @@ if should_run "E6"; then
             fail "E6: max calls" "expected error about max calls, got: $(echo "$OUTPUT" | head -3)"
         fi
 
-        unset RLM_CALL_COUNT RLM_MAX_CALLS
+        unset RLM_CALL_COUNT
+        export RLM_MAX_CALLS="$E2E_MAX_CALLS_DEFAULT"
+        export RLM_CALL_COUNTER_FILE="$TEST_TMP/suite.counter"
     else
         skip "E6: max calls enforcement" "RLM_MAX_CALLS not implemented yet"
     fi
@@ -232,8 +243,10 @@ Favorite number: 42
 EOF
     export CONTEXT="$TEST_TMP/ctx_e7.txt"
     export RLM_DEPTH=0
-    export RLM_MAX_CALLS=2  # Allow root call (1), block any sub-call (2 >= 2)
+    export RLM_MAX_CALLS=2  # Permit calls 1..2; trace inspection below still detects an unwanted sub-call
     unset RLM_CALL_COUNT 2>/dev/null || true
+    export RLM_CALL_COUNTER_FILE="$TEST_TMP/e7.counter"
+    rm -f "$RLM_CALL_COUNTER_FILE"
 
     TRACE_E7="$TEST_TMP/trace_e7.log"
     export PI_TRACE_FILE="$TRACE_E7"
@@ -259,7 +272,9 @@ EOF
     fi
 
     export PI_TRACE_FILE="$TEST_TMP/trace.log"
-    unset RLM_MAX_CALLS RLM_CALL_COUNT 2>/dev/null || true
+    unset RLM_CALL_COUNT 2>/dev/null || true
+    export RLM_MAX_CALLS="$E2E_MAX_CALLS_DEFAULT"
+    export RLM_CALL_COUNTER_FILE="$TEST_TMP/suite.counter"
 fi
 
 # ─── E8: Architectural invariant — self-similarity across depths ────────
@@ -306,11 +321,18 @@ if should_run "E9"; then
         STDERR_E9="$TEST_TMP/e9_stderr.txt"
         PROMPT_E9="Use the rlm_query tool exactly once with this exact prompt: Reply with exactly CHILD_OK. Then reply with exactly the child answer and no other text."
 
+        # JSON mode keeps observational cost telemetry measurable while the runtime
+        # still projects parsed child text back to the root agent. E9 owns an
+        # isolated call counter so ambient sessions and earlier E2E cases cannot
+        # change its one-child assertion.
+        unset CONTEXT RLM_CALL_COUNT
+        export RLM_CALL_COUNTER_FILE="$TEST_TMP/e9.counter"
+        rm -f "$RLM_CALL_COUNTER_FILE"
         START=$(date +%s)
         set +e
         RLM_DEPTH=0 \
         RLM_MAX_DEPTH=1 \
-        RLM_JSON=0 \
+        RLM_JSON=1 \
         PI_TRACE_FILE="$TRACE_E9" \
         timeout 90 "$PROJECT_DIR/ypi" -p --no-session \
             --provider "$RLM_PROVIDER" \
@@ -330,8 +352,8 @@ if should_run "E9"; then
             fail "E9: full ypi recursive child call" "missing child answer; stdout=$(head -5 "$STDOUT_E9"); trace=$(tail -5 "$TRACE_E9" 2>/dev/null || true)"
         elif [ "$CALLS" -ne 1 ]; then
             fail "E9: full ypi recursive child call" "expected exactly one depth=0→1 trace entry, got $CALLS; trace=$(tail -10 "$TRACE_E9" 2>/dev/null || true)"
-        elif ! grep -q "prompt: Reply with exactly CHILD_OK" "$TRACE_E9"; then
-            fail "E9: full ypi recursive child call" "trace did not record the child prompt; trace=$(tail -10 "$TRACE_E9" 2>/dev/null || true)"
+        elif grep -q "Reply with exactly CHILD_OK" "$TRACE_E9"; then
+            fail "E9: full ypi recursive child call" "lifecycle trace leaked delegated prompt text; trace=$(tail -10 "$TRACE_E9" 2>/dev/null || true)"
         elif ! grep -q "COMPLETED exit=0" "$TRACE_E9"; then
             fail "E9: full ypi recursive child call" "child did not complete cleanly; trace=$(tail -10 "$TRACE_E9" 2>/dev/null || true)"
         else
@@ -340,6 +362,7 @@ if should_run "E9"; then
         fi
 
         export PI_TRACE_FILE="$TEST_TMP/trace.log"
+        export RLM_CALL_COUNTER_FILE="$TEST_TMP/suite.counter"
     fi
 fi
 # ─── Summary ──────────────────────────────────────────────────────────────

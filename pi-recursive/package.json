@@ -28,19 +28,21 @@
   "pi": {
     "extensions": [
       "./extensions/recursive.ts"
+    ],
+    "skills": [
+      "./skills"
     ]
   },
   "files": [
     "extensions/**/*.ts",
+    "skills/**/SKILL.md",
     "SYSTEM_PROMPT.md",
     "README.md",
     "LICENSE"
   ],
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.79.4"
-  },
-  "dependencies": {
-    "typebox": "1.1.38"
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   },
   "os": [
     "linux",

@@ -1,170 +1,57 @@
 # recursive-development.prose
-# Use ypi to develop, test, and validate a ypi feature.
-#
-# The recursion is literal: ypi spawns sub-agents that modify ypi's own source,
-# then ypi tests itself with the changes. The repo IS the test environment.
-#
-# Run: rp ypi .prose/recursive-development.prose
-# Input: describe the feature you want to build
-#
-# Monitor from another terminal:
-#   rlm_sessions read --last | tail -30    # see what the agent is doing
-#   rlm_sessions grep "pattern"             # search across all sessions
+# Lightweight, local ypi feature workflow. It never creates VCS state, commits,
+# pushes, merges, tags, releases, or publishes. Start it from an existing clean
+# feature branch. Large/proof-bound work uses docs/bounded-recursive-development.md.
 
 input feature: "Description of the feature to build"
 
-# --- Understand current state ---
+let branch = exec "git branch --show-current"
+let cleanliness = exec "git status --porcelain=v1 --untracked-files=all"
 
-let tests_before = exec "make test-fast 2>&1 | tail -5"
-let jj_log = exec "jj log --no-graph --limit 10"
-let structure = exec "wc -l ypi rlm_query rlm_sessions SYSTEM_PROMPT.md AGENTS.md"
+gate **the current checkout is an existing clean feature branch, not main or master**:
+  evidence: [branch, cleanliness]
+  on-reject: throw "Choose the repository's normal feature branch outside this workflow; do not initialize or change VCS here."
 
-# Gate: don't start if tests are already broken
-gate **tests pass**:
+let tests_before = exec "make test-fast"
+
+gate **the deterministic baseline passes**:
   evidence: tests_before
-  on-reject: "Fix existing test failures before starting new work."
+  on-reject: throw "Fix or explicitly re-scope the baseline failure before feature work."
 
-# --- Start a feature branch ---
-
-exec "jj new -m 'feat: {feature}'"
-
-# --- Design phase: ypi studies itself ---
-
-let design = session "Design the feature using self-knowledge"
+# One owning implementation context avoids overlapping writers. That context may
+# use ypi's bounded-recursive-delegation skill for read-only reviews and at most
+# one root-chartered implementer lease.
+session "Implement and verify the bounded feature"
   prompt: """
-    Feature request: {feature}
+    Implement this feature in the current existing feature branch:
 
-    You ARE ypi. Study your own source to design this feature:
+    {feature}
 
-    1. Read the files you'd need to change (ypi, rlm_query, SYSTEM_PROMPT.md, etc.)
-    2. Check rlm_sessions for how previous agents approached similar work
-    3. Look at AGENTS.md for architectural invariants that must be preserved
-    4. Look at tests/ to understand what's tested and how
-
-    Produce a design:
-    - Which files change and why
-    - What env vars or CLI flags are needed
-    - What could break (the three invariants: self-similarity, self-hosting, bounded recursion)
-    - What tests to add
-
-    Keep it minimal. Smallest change that works.
+    Follow AGENTS.md, SYSTEM_PROMPT.md, and the bounded-recursive-delegation
+    skill. Discover deterministically first. Keep one implementation head. Use
+    review children only for disjoint evidence, or one root-only mode=implement
+    child after its scope and gates are explicit. Inspect changed scope and the
+    final diff yourself. Run focused tests after each coherent edit and make
+    test-fast at the end. Do not create or switch branches, commit, push, merge,
+    tag, release, publish, initialize VCS, or ask whether to release.
   """
 
-# --- Backup before surgery ---
+let tests_after = exec "make test-fast"
+let diff = exec "git diff --check && git diff --stat && git status --short --branch"
 
-exec "cp rlm_query rlm_query.bak"
-  on-fail: "continue"
+gate **the final deterministic gate passes and the diff is reviewable**:
+  evidence: [tests_after, diff]
+  on-reject: throw "Fix the implementation or report the blocker; do not bypass, publish, or broaden scope."
 
-# --- Implement ---
-
-session "Implement the feature"
+output summary = session "Prepare the local review handoff"
   prompt: """
-    Implement this design:
-    {design}
+    Prepare a concise review handoff for {feature} from this evidence. State the
+    branch, changed scope, validation, residual risk, and exact next local action.
+    Do not edit files, create commits, push, merge, or ask about a release.
 
-    Rules (from AGENTS.md):
-    - Write files directly, don't just describe changes
-    - One file at a time, test between changes
-    - Never modify rlm_query and SYSTEM_PROMPT.md in the same step
-
-    After each file change, run: make test-unit
-    If tests break, fix immediately before moving to the next file.
+    Branch: {branch}
+    Baseline: {tests_before}
+    Final gate: {tests_after}
+    Diff: {diff}
   """
-
-# --- Verify: tests still pass ---
-
-let tests_after = exec "make test-fast 2>&1"
-
-gate **all tests pass**:
-  evidence: tests_after
-  on-reject: """
-    Tests broke. The implementation has a bug.
-    Restore backup: cp rlm_query.bak rlm_query
-    Then diagnose what went wrong.
-  """
-
-# --- The recursive test: can ypi still call itself? ---
-
-let smoke = exec """
-  echo "2+2=" | rlm_query "What is the answer? Just the number." 2>/dev/null
-"""
-
-gate **smoke test returns 4**:
-  evidence: smoke
-  on-reject: """
-    ypi broke itself. The recursive smoke test failed.
-    Restore: cp rlm_query.bak rlm_query
-    This is the most critical failure — rlm_query is a live dependency.
-  """
-
-# --- Dogfood: use the feature ---
-
-let dogfood = session "Dogfood the new feature"
-  prompt: """
-    The feature is implemented and tests pass. Now USE it.
-
-    You are ypi with the new feature. Try it on this repo:
-    - Does it work as designed?
-    - Does it feel natural?
-    - Any rough edges?
-
-    If rlm_sessions is available, check if previous agents left notes
-    about similar features.
-
-    Report: works / works with issues / broken
-  """
-
-gate **dogfood succeeded**:
-  evidence: dogfood
-  on-reject: "Feature doesn't work in practice. Fix before continuing."
-
-# --- Add tests for the new feature ---
-
-session "Write tests for the new feature"
-  prompt: """
-    The feature works. Now make it durable:
-
-    1. Add unit tests to tests/test_unit.sh (mock pi, no LLM calls)
-    2. Add guardrail tests to tests/test_guardrails.sh if there are new env vars
-    3. Add an e2e test to tests/test_e2e.sh if behavior changed (architectural invariant)
-    4. Update AGENTS.md env var table if new variables were added
-
-    Follow existing test patterns. Run make test-fast after adding tests.
-  """
-
-let tests_final = exec "make test-fast 2>&1"
-
-gate **all tests pass including new ones**:
-  evidence: tests_final
-  on-reject: "New tests are failing. Fix them."
-
-# --- Clean up and land ---
-
-exec "rm -f rlm_query.bak"
-  on-fail: "ignore"
-
-session "Describe the change and land"
-  prompt: """
-    Feature complete. Finalize with jj:
-
-    1. jj diff --stat (review what changed)
-    2. jj describe -m "feat: <concise description based on {feature}>"
-    3. jj bookmark set master
-    4. jj git push
-    5. jj new (start fresh change for next work)
-
-    Summarize what was built, what was tested, and any follow-up work needed.
-  """
-
-output summary = session "Final summary"
-  prompt: """
-    Recursive development cycle complete.
-
-    Feature: {feature}
-    Tests before: {tests_before}
-    Tests after: {tests_final}
-    Smoke test: {smoke}
-    Dogfood: {dogfood}
-
-    Summarize in 3 bullets: what was built, what was tested, what's next.
-  """
+  context: [branch, tests_before, tests_after, diff]

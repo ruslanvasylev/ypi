@@ -83,11 +83,20 @@ echo "ARGS: $*"
 echo "CONTEXT=$CONTEXT"
 echo "RLM_DEPTH=$RLM_DEPTH"
 echo "RLM_MAX_DEPTH=$RLM_MAX_DEPTH"
-echo "RLM_PROVIDER=$RLM_PROVIDER"
+echo "RLM_MAX_CALLS=$RLM_MAX_CALLS"
+echo "RLM_PROVIDER=$RLM_PROVIDER"},{
 echo "RLM_MODEL=$RLM_MODEL"
 echo "RLM_THINKING_LEVEL=${RLM_THINKING_LEVEL:-}"
 echo "RLM_SYSTEM_PROMPT=$RLM_SYSTEM_PROMPT"
 echo "RLM_PROMPT_FILE=$RLM_PROMPT_FILE"
+PREVIOUS=""
+for ARG in "$@"; do
+    if [ "$PREVIOUS" = "--system-prompt" ] && [ -f "$ARG" ]; then
+        grep -q '# rlm_query — Recursive Language Model sub-call for Pi.' "$ARG" && echo "LEGACY_SELF_SOURCE=1" || true
+        grep -q '# rlm_query — thin CLI adapter' "$ARG" && echo "THIN_SELF_SOURCE=1" || true
+    fi
+    PREVIOUS="$ARG"
+done
 if [ -n "${RLM_PROMPT_FILE:-}" ] && [ -f "${RLM_PROMPT_FILE:-}" ]; then
     echo "PROMPT_CONTENT=$(cat "$RLM_PROMPT_FILE")"
 fi
@@ -97,7 +106,11 @@ if echo "$*" | grep -q -- "--no-tools"; then
 fi
 # Echo the context file content if it exists
 if [ -n "${CONTEXT:-}" ] && [ -f "${CONTEXT:-}" ]; then
-    echo "CONTEXT_CONTENT=$(cat "$CONTEXT")"
+    if [ -n "${YPI_CAPTURE_CONTEXT:-}" ]; then
+        cp "$CONTEXT" "$YPI_CAPTURE_CONTEXT"
+    else
+        echo "CONTEXT_CONTENT=$(cat "$CONTEXT")"
+    fi
 fi
 MOCK_PI
 chmod +x "$MOCK_BIN/pi"
@@ -113,6 +126,8 @@ for var in $(env | grep '^YPI_' | cut -d= -f1); do unset "$var"; done
 # use the mock. A live parent ypi session exports YPI_PI_BIN to the real pi;
 # without this override unit tests accidentally make real model calls.
 export YPI_PI_BIN="$MOCK_BIN/pi"
+# The unit harness explicitly chooses no-jj read-only children.
+export RLM_JJ=0
 # Disable JSON mode in unit tests — mock pi doesn't output JSON
 export RLM_JSON=0
 
@@ -170,6 +185,22 @@ OUTPUT=$(
 )
 assert_contains "T3: piped text becomes context" "cats" "$OUTPUT"
 assert_not_contains "T3: parent context NOT inherited" "dogs" "$OUTPUT"
+
+# T3b: stdin is spooled as bytes rather than decoded into an unbounded UTF-8
+# string, preserving invalid UTF-8 and NUL bytes exactly.
+python3 - "$TEST_TMP/binary-context.bin" <<'PY'
+import sys
+open(sys.argv[1], "wb").write(b"\xff\x00binary\n")
+PY
+cat "$TEST_TMP/binary-context.bin" | \
+    YPI_CAPTURE_CONTEXT="$TEST_TMP/captured-binary-context.bin" \
+    RLM_DEPTH=0 RLM_MAX_DEPTH=3 RLM_PROVIDER=test-provider RLM_MODEL=test-model \
+    rlm_query "Preserve binary context" >/dev/null
+if cmp -s "$TEST_TMP/binary-context.bin" "$TEST_TMP/captured-binary-context.bin"; then
+    pass "T3b: piped context is byte-preserving"
+else
+    fail "T3b: piped context is byte-preserving" "captured bytes differ"
+fi
 
 # T4: no pipe → inherits parent context
 OUTPUT=$(
@@ -233,7 +264,8 @@ assert_contains "T7: depth 1→2" "RLM_DEPTH=2" "$OUTPUT"
 echo ""
 echo "=== System Prompt ==="
 
-# T8: system prompt file path is passed (not content)
+# T8: package-owned system prompt path is propagated symbolically; the explicit
+# canonical extension owns prompt assembly when extensions are enabled.
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=0 \
@@ -243,8 +275,7 @@ OUTPUT=$(
     RLM_SYSTEM_PROMPT="$PROJECT_DIR/SYSTEM_PROMPT.md" \
     rlm_query "Question?"
 )
-assert_contains "T8: --system-prompt in args" "--system-prompt" "$OUTPUT"
-assert_contains "T8: system prompt is file path" "SYSTEM_PROMPT.md" "$OUTPUT"
+assert_contains "T8: system prompt is file path" "RLM_SYSTEM_PROMPT=$PROJECT_DIR/SYSTEM_PROMPT.md" "$OUTPUT"
 
 # T8b: when the canonical ypi extension is available, child Pi reuses it
 # instead of rebuilding the prompt in rlm_query.
@@ -260,6 +291,15 @@ OUTPUT=$(
 )
 assert_contains "T8b: ypi extension passed to child" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
 assert_not_contains "T8b: no duplicate system prompt with extension" "--system-prompt" "$OUTPUT"
+
+# T8c: the retained fallback embeds its own active implementation when it must
+# self-host without the canonical extension, not the thin canonical launcher.
+OUTPUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" YPI_LEGACY_IMPL=1 RLM_EXTENSIONS=0 \
+    RLM_DEPTH=0 RLM_MAX_DEPTH=3 rlm_query "Legacy self-host source?"
+)
+assert_contains "T8c: retained fallback embeds active legacy source" "LEGACY_SELF_SOURCE=1" "$OUTPUT"
+assert_not_contains "T8c: retained fallback does not embed thin launcher" "THIN_SELF_SOURCE=1" "$OUTPUT"
 
 # T9: missing system prompt file → no --system-prompt arg
 OUTPUT=$(
@@ -293,19 +333,23 @@ OUTPUT=$(
 assert_file_exists "T10: trace file created" "$TRACE_FILE"
 TRACE_CONTENT=$(cat "$TRACE_FILE")
 assert_contains "T10: trace has depth" "depth=0→1" "$TRACE_CONTENT"
-assert_contains "T10: trace has prompt" "Traced question" "$TRACE_CONTENT"
+assert_not_contains "T10: trace excludes private prompt text" "Traced question" "$TRACE_CONTENT"
 
-# T11: no trace file when PI_TRACE_FILE is unset
-rm -f "$TEST_TMP/no_trace.log"
+# T11: an automatic private trace is created when no path is supplied.
+AUTO_TRACE="$TEST_TMP/rlm_trace_auto-trace.jsonl"
+rm -f "$AUTO_TRACE"
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=0 \
     RLM_MAX_DEPTH=3 \
     RLM_PROVIDER=test-provider \
     RLM_MODEL=test-model \
-    rlm_query "Untraced question?"
+    RLM_TRACE_ID=auto-trace \
+    rlm_query "Automatically traced question?"
 )
-assert_file_not_exists "T11: no trace file when unset" "$TEST_TMP/no_trace.log"
+assert_file_exists "T11: automatic trace file created" "$AUTO_TRACE"
+if [ "$(stat -c '%a' "$AUTO_TRACE")" = "600" ]; then pass "T11: automatic trace is private"; else fail "T11: automatic trace is private" "mode=$(stat -c '%a' "$AUTO_TRACE")"; fi
+assert_not_contains "T11: automatic trace excludes prompt text" "Automatically traced question" "$(cat "$AUTO_TRACE")"
 
 # ─── Test Group: Edge Cases ───────────────────────────────────────────────
 
@@ -340,6 +384,8 @@ OUTPUT=$(
     rlm_query "Defaults question?"
 )
 assert_contains "T14: default depth=0→1" "RLM_DEPTH=1" "$OUTPUT"
+assert_contains "T14: default maximum depth is three" "RLM_MAX_DEPTH=3" "$OUTPUT"
+assert_contains "T14: default total call cap is bounded" "RLM_MAX_CALLS=128" "$OUTPUT"
 # T14b: provider/model must NOT be hardcoded — Pi's defaults should be used
 assert_contains "T14: no hardcoded provider" "RLM_PROVIDER=" "$OUTPUT"
 assert_not_contains "T14: no cerebras default" "cerebras" "$OUTPUT"
@@ -365,6 +411,7 @@ OUTPUT=$(
 assert_not_contains "T14e: launcher does not hardcode provider" "--provider" "$OUTPUT"
 assert_not_contains "T14e: launcher does not hardcode model" "--model" "$OUTPUT"
 assert_contains "T14e: launcher loads canonical extension" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
+assert_contains "T14e: launcher explicitly loads packaged skills" "--skill $PROJECT_DIR/skills" "$OUTPUT"
 assert_not_contains "T14e: launcher does not limit tools" "--tools" "$OUTPUT"
 assert_not_contains "T14e: launcher does not build system prompt" "--system-prompt" "$OUTPUT"
 
@@ -397,7 +444,7 @@ OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     rlm_query "How many r's in strawberry?"
 )
-assert_contains "T14d: prompt file is set" "RLM_PROMPT_FILE=$TMPDIR/rlm_prompt_" "$OUTPUT"
+assert_contains "T14d: prompt file is set" "RLM_PROMPT_FILE=$TMPDIR/ypi_prompt_" "$OUTPUT"
 assert_contains "T14d: prompt file has content" "PROMPT_CONTENT=How many r's in strawberry?" "$OUTPUT"
 
 # ─── Test Group: Temp File Cleanup ────────────────────────────────────────

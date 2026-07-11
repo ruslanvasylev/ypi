@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# Fail closed unless one exact GitHub push target belongs to ruslanvasylev.
+set -euo pipefail
+
+url="${1:-}"
+if [ -z "$url" ]; then
+  echo "validate-push-owner: missing push URL" >&2
+  exit 2
+fi
+
+set +e
+parsed="$(YPI_VALIDATE_URL="$url" YPI_ALLOW_LOCAL="${YPI_ALLOW_LOCAL_REMOTE_FOR_TESTS:-0}" python3 - <<'PY'
+import os
+import re
+import sys
+from urllib.parse import unquote, urlsplit
+
+raw = os.environ["YPI_VALIDATE_URL"]
+
+# Local remotes exist only for deterministic tests. Production publication
+# requires an owner-bearing GitHub URL.
+if raw.startswith(("/", "./", "../", "file://")):
+    if os.environ.get("YPI_ALLOW_LOCAL") == "1":
+        print("local")
+        raise SystemExit(0)
+    raise SystemExit(2)
+
+owner = repo = None
+if "://" in raw:
+    try:
+        parsed = urlsplit(raw)
+    except ValueError:
+        raise SystemExit(2)
+    if parsed.scheme not in {"https", "http", "ssh", "git"}:
+        raise SystemExit(2)
+    if (parsed.hostname or "").lower() != "github.com" or parsed.query or parsed.fragment:
+        raise SystemExit(2)
+    if parsed.password is not None or parsed.port not in {None, 22}:
+        raise SystemExit(2)
+    if parsed.scheme in {"https", "http", "git"} and parsed.username is not None:
+        raise SystemExit(2)
+    if parsed.scheme == "ssh" and parsed.username not in {None, "git"}:
+        raise SystemExit(2)
+    decoded = unquote(parsed.path)
+    if decoded != parsed.path or "//" in decoded:
+        raise SystemExit(2)
+    parts = decoded.strip("/").split("/")
+    if len(parts) != 2:
+        raise SystemExit(2)
+    owner, repo = parts
+else:
+    # Git's SCP-like grammar is [user@]host:path. Accept only the canonical
+    # GitHub host and git user; never reinterpret @ or : inside the path.
+    match = re.fullmatch(r"(?:(git)@)?(github\.com):([^/:@]+)/([^/:@]+)", raw, re.I)
+    if not match:
+        raise SystemExit(2)
+    _, _, owner, repo = match.groups()
+
+if repo.endswith(".git"):
+    repo = repo[:-4]
+component = re.compile(r"[A-Za-z0-9_.-]+")
+if not owner or not repo or owner in {".", ".."} or repo in {".", ".."}:
+    raise SystemExit(2)
+if component.fullmatch(owner) is None or component.fullmatch(repo) is None:
+    raise SystemExit(2)
+print(f"github.com/{owner.lower()}/{repo.lower()}")
+PY
+)"
+rc=$?
+set -e
+if [ "$rc" -ne 0 ] || [ -z "$parsed" ]; then
+  echo "validate-push-owner: cannot prove an exact GitHub owner from '$url'; denied" >&2
+  exit 2
+fi
+
+case "$parsed" in
+  local)
+    echo "validate-push-owner: ALLOWED local test remote"
+    ;;
+  github.com/ruslanvasylev/*)
+    echo "validate-push-owner: ALLOWED $parsed"
+    ;;
+  *)
+    echo "validate-push-owner: DENIED $parsed (owner must be exactly ruslanvasylev)" >&2
+    exit 3
+    ;;
+esac

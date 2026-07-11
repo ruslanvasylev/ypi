@@ -1,0 +1,14 @@
+[
+  {"path":"cache.ts","line":9,"needle":"falsy"},
+  {"path":"cache.ts","line":14,"needle":"rejection"},
+  {"path":"pagination.ts","line":11,"needle":"nextcursor"},
+  {"path":"pagination.ts","line":11,"needle":"empty"},
+  {"path":"retry.ts","line":8,"needle":"maxattempts + 1"},
+  {"path":"retry.ts","line":14,"needle":"post"},
+  {"path":"retry.ts","line":12,"needle":"milliseconds"},
+  {"path":"safe-path.ts","line":6,"needle":"prefix"},
+  {"path":"safe-path.ts","line":5,"needle":"symlink"},
+  {"path":"timeout.ts","line":7,"needle":"clear"},
+  {"path":"timeout.ts","line":7,"needle":"abort"},
+  {"path":"token.ts","line":4,"needle":"milliseconds"}
+]

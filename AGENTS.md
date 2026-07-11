@@ -1,5 +1,12 @@
 # Agent Instructions — ypi
 
+## Hard Authority Boundaries
+
+- Never install or initialize Git, jj, or another version-control system. Use only repository state that already exists.
+- Resolve publication authority from the remote URL, never the remote name. Remotes outside exact owner namespace `ruslanvasylev` are read-only unless the user's current request explicitly authorizes that exact operation.
+- Never infer or ask about a release. Package publication, release tags, and GitHub releases happen only when the user's current request explicitly initiates them.
+- Never set or recommend a dollar budget for recursive work. Cost is telemetry; call admission, live progress, deduplication, and manual cancellation are the controls.
+
 ## Running Prose Programs & Background Tasks
 Launch long-running tasks in tmux with a sentinel file. The `notify-done` extension
 watches `/tmp/ypi-signal-*` and **injects a message into your conversation** when
@@ -25,37 +32,28 @@ part appears in the notification. File contents become the notification body.
 The file is deleted after consumption.
 **Key programs:**
 - `rp ypi .prose/land.prose` — "land it" / "land the plane": tests, push, handoff
-- `rp ypi .prose/release.prose confirm_release='Approved.'` — cut an npm release
+- `.prose/release.prose` exists only for an explicitly user-initiated release task; never invoke or suggest it otherwise
 - `rp ypi .prose/check-upstream.prose` — verify Pi compatibility
 - `rp ypi .prose/incorporate-insight.prose insight='...'` — propagate an insight across the repo
+- `docs/bounded-recursive-development.md` — mandatory run contract for large, proof-bound, or self-hosting recursive work
 
-## Version Control: Use jj, not git
+## Version Control
 
-This repo uses **jj** (Jujutsu) for version control. Git is only for GitHub sync.
+Root delivery uses the repository's existing Git checkout and normal feature branches. Do not create `.jj` metadata or ask the user to choose a VCS mode.
 
 ```bash
-# Working with changes
-jj status                    # What's changed
-jj diff                      # See the diff
-jj describe -m "message"     # Describe current change
-jj new                       # Start a new change on top
-
-# Pushing to GitHub
-jj bookmark set master       # Point master at current change
-jj git push                  # Push to GitHub
-
-# Reviewing sub-agent work
-jj log                       # See all changes including sub-agent workspaces
-jj diff -r <change-id>       # Review a sub-agent's edits
-jj squash --from <change-id> # Absorb a sub-agent's work into yours
-jj abandon <change-id>       # Discard a sub-agent's work
+git status --short --branch
+git switch -c feat/description
+git add <scoped-paths>
+git commit -m "type: description"
+git push -u origin HEAD       # only after scripts/validate-push-owner approves origin's URL
 ```
 
-**Never use `git add`, `git commit`, or `git push` directly.** jj manages git
-under the hood. Using git directly creates confusion and potential conflicts.
-
-Sub-agents get their own jj workspaces automatically (via `rlm_query`). Their
-edits appear as separate changes in `jj log` that you can review and absorb.
+`rlm_query` review children are read-only. A single `mode=implement` child may
+write only after ypi acquires its automatic clean-checkout lease; an already
+existing jj repository may use its own isolated workspace. The root reviews the
+changed-path report and final diff before acceptance. Never run parallel
+implementers.
 
 ## You Are The Recursion
 
@@ -77,7 +75,7 @@ echo "I am at depth $RLM_DEPTH of $RLM_MAX_DEPTH"
 **Know your constraints:**
 - At deeper depths, prefer direct answers over spawning more sub-calls
 - Your sub-LLMs share the same system prompt and tools you have
-- At `RLM_MAX_DEPTH`, sub-calls become plain LM calls (no bash, no tools)
+- At `RLM_MAX_DEPTH`, the leaf keeps its depth/isolation-appropriate Pi tools but cannot call `rlm_query` again
 - Every `rlm_query` call costs time and tokens — be intentional
 
 **Dogfooding rule:** When implementing changes to the recursive infrastructure,
@@ -86,12 +84,12 @@ delegation fails, that's a bug you just found.
 
 ## Architectural Invariants
 
-Three properties make ypi work. All are tested (E7, E8, E9 in test_e2e.sh):
+Four properties make ypi work. They are covered by focused unit/guardrail gates plus the live E7–E9 probes:
 
-1. **Self-similarity** — Same prompt, same tools, same agent at every depth. No specialized roles. The intelligence is in decomposition, not specialization.
-2. **Self-hosting** — When the shell helper is enabled (`YPI_SHELL_HELPER=1`, set by the `ypi` wrapper), the system prompt's SECTION 6 is generated with the full source of `rlm_query`, so the agent can read its own recursion machinery — when it modifies `rlm_query`, it's modifying itself. A bare `pi -e` / native-tool install omits SECTION 6 and recurses through the native tool.
-3. **Bounded recursion** — 5 guardrails (depth, PATH scrubbing, call count, budget, timeout) guarantee termination. The system prompt adds *cognitive* pressure: deeper agents prefer direct action.
-4. **Symbolic access** — Anything the agent needs to manipulate precisely is a file, not just tokens in context. `$CONTEXT` for data, `$RLM_PROMPT_FILE` for the original prompt, hashline for edits. Agents grep/sed/cat instead of copying tokens from memory. (T14d)
+1. **Self-similar runtime, explicit capability modes** — Every depth uses the same canonical ypi prompt, native tool, and runtime. Review is read-only by default; only one root-chartered implementer may receive a writer lease, and descendants cannot escalate it. Ambient third-party extensions are isolated by default to prevent version-skew conflicts; opt into them with `RLM_AMBIENT_EXTENSIONS=1` only when that trust boundary is intentional. The intelligence remains in decomposition rather than hidden specialized prompts.
+2. **Self-hosting** — When the shell helper is enabled (`YPI_SHELL_HELPER=1`, set by the `ypi` wrapper), SECTION 6 includes the thin launcher, canonical runtime core, and CLI adapter. The agent can inspect the machinery it is using without treating the retained legacy fallback as a second owner. A bare `pi -e` / native-tool install omits SECTION 6 and recurses through the native adapter.
+3. **Bounded ancestry and observable tree guards** — depth and total child-call admission are bounded by default. Cost is always observational telemetry. An explicit user timeout remains possible, but ypi sets no default timeout and staleness warnings never terminate work. The system prompt adds cognitive pressure: deeper agents prefer direct action.
+4. **Symbolic access** — `$CONTEXT` carries external data, delegated children receive their task in `$RLM_PROMPT_FILE`, and hashline provides line-addressed edits. The root wrapper prompt remains a normal Pi user message. Agents grep/sed/cat instead of copying bulk data through model memory. (T14d)
 
 **Don't write static architecture docs.** Encode claims as tests. If a property matters, there should be an E2E test that breaks when it stops being true.
 
@@ -145,7 +143,7 @@ These repos have features we've ported to bash. Read them for design patterns.
 
 ### rlm-cli (`/home/raw/Documents/GitHub/rlm-cli`)
 Python CLI wrapping the RLM library. Has:
-- **Budget tracking**: `max_budget` with cumulative cost, propagates `remaining_budget` to children
+- **Cost accounting**: cumulative spend/token telemetry without using spend as an admission or stop condition
 - **Timeout**: `max_timeout` with wall-clock tracking, propagates `remaining_timeout`
 - **Max tokens**: `max_tokens` with aggregate tracking across iterations
 - **Max errors**: `max_errors` — consecutive error threshold
@@ -175,11 +173,10 @@ make test-e2e           # real LLM calls (minutes, costs money)
 make pre-push-checks       # same gate used by CI
 ```
 
-For release/upstream work, use one command:
-```bash
-make release-preflight
-make land
-```
+`make land` validates and pushes the current feature branch only to an owned
+`origin`; it never releases, tags, or mutates a non-owned remote. Release and
+non-owned-remote work require separate explicit user requests and are not
+suggested proactively.
 Install local hooks once per clone:
 ```bash
 make install-hooks
@@ -200,6 +197,16 @@ echo "2+2=" | rlm_query "What is the answer? Just the number."
 ```
 
 If that breaks, you broke yourself. Revert.
+
+### Bounded recursive development
+
+For large, proof-bound, or self-hosting changes, follow
+`docs/bounded-recursive-development.md` before the first child call. Use its
+single persisted trace/counter/cost envelope, three disjoint reviewers, one
+implementation head, continuation-without-reset rule, and freeze-before-live-model
+gate. Do not improvise extra review waves or hand-roll parity lane environments.
+The existing `.prose/recursive-development.prose` workflow is lightweight and
+does not own proof-bound recursion.
 
 ### Running experiments and evals
 **NEVER block the main conversation waiting for a script to finish.**
@@ -239,12 +246,13 @@ Set `RLM_SHARED_SESSIONS=0` to disable session sharing (full isolation).
 
 ### Starting a feature branch:
 ```bash
-jj new -m "feat: description of the feature"
-jj bookmark create feature-name   # optional, for pushing to GitHub
-# ... do work ...
-jj describe -m "feat: final description"
-jj bookmark set master             # when ready to land
-jj git push
+git status --short --branch
+git switch -c feat-description
+# ... do work and validate ...
+git add <scoped-paths>
+git commit -m "feat: final description"
+scripts/validate-push-owner "$(git remote get-url --push origin)"
+git push -u origin HEAD
 ```
 
 ## Editing rlm_query Safely
@@ -272,11 +280,13 @@ testing between changes. One variable at a time.
 | `RLM_PROVIDER` | LLM provider override for root + sub-calls; otherwise seeded from Pi's active/root provider | Pi settings/active model |
 | `RLM_MODEL` | LLM model override for root + sub-calls; otherwise seeded from Pi's active/root model | Pi settings/active model |
 | `RLM_THINKING_LEVEL` | Thinking level propagated to child calls; otherwise seeded from Pi's active/root thinking level | Pi settings/active thinking |
-| `RLM_SYSTEM_PROMPT` | Path to system prompt file | (required) |
-| `PI_TRACE_FILE` | Trace log path | (none) |
+| `RLM_SYSTEM_PROMPT` | Path to system prompt file | package-owned default |
+| `RLM_PROMPT_FILE` | Exact current child charter | auto-created |
+| `RLM_ROOT_PROMPT_FILE` | Exact active root human request in extension sessions; standalone shell calls fall back to the first delegation charter | auto-created per tree |
+| `PI_TRACE_FILE` | Private lifecycle trace path | automatic per tree |
 | `RLM_TIMEOUT` | Max wall-clock seconds | (none = unlimited) |
 | `RLM_START_TIME` | Epoch seconds when the current depth-0 tree began | (auto-set per top-level call) |
-| `RLM_MAX_CALLS` | Max total rlm_query invocations (permits 1..N, rejects N+1) | (none = unlimited) |
+| `RLM_MAX_CALLS` | Max total rlm_query invocations (permits 1..N, rejects N+1) | `128` |
 | `RLM_CALL_COUNT` | Running count of calls so far | `0` |
 | `RLM_CHILD_MODEL` | Model override for all child depths | (none = same as parent/root route) |
 | `RLM_CHILD_PROVIDER` | Provider override used with `RLM_CHILD_MODEL` | (none = same as parent/root route) |
@@ -284,10 +294,11 @@ testing between changes. One variable at a time.
 | `RLM_CHILD_MODELS` | Comma-separated per-child-depth model route, depth 1,2,... | (none) |
 | `RLM_CHILD_PROVIDERS` | Comma-separated per-child-depth provider route, depth 1,2,... | (none) |
 | `RLM_CHILD_THINKING_LEVELS` | Comma-separated per-child-depth thinking route, depth 1,2,... | (none) |
-| `RLM_JJ` | Enable jj workspace isolation | `1` (set `0` to disable) |
-| `RLM_UNSAFE_NO_JJ_WRITE` | Allow writable child tools when jj is disabled/unavailable | `0` |
+| native `rlm_query` `mode` | `review` is read-only; `implement` requests one automatic exclusive writer | `review` |
+| `RLM_COST_FILE` | Private append-only cost/token telemetry ledger | automatic per tree |
 | `RLM_SHARED_SESSIONS` | Allow child agents to write trace-named Pi sessions | `1` (set `0` for `--no-session`) |
-| `RLM_CHILD_DISCOVERY` | Set to `0` to disable child Pi non-extension skill, prompt-template, theme, context-file, and approval-prompt discovery; use with `RLM_CHILD_EXTENSIONS=0` for full package/resource isolation | enabled by default |
+| `RLM_CHILD_DISCOVERY` | Set to `0` to disable child Pi non-extension skill/template/theme/context/approval discovery; with `RLM_CHILD_EXTENSIONS=0`, use a private Pi agent/config root and offline resolution while preserving Pi's shipped package assets | enabled by default |
+| `RLM_AMBIENT_EXTENSIONS` | Set to `1` to opt into other ambient Pi extensions alongside canonical ypi; this can reintroduce conflicts with old ypi copies | `0` |
 | `YPI_SHELL_HELPER` | Expose the shell `rlm_query` helper (its dir on `PATH` + its source in the prompt); the `ypi` wrapper sets this | `0` (a bare `pi -e` / npm install uses the native tool only) |
 
 ## Bugs We've Found (and must not re-introduce)
@@ -359,7 +370,8 @@ before push. They live **plaintext on disk** so agents and editors can read them
 ```bash
 # Before pushing (MANDATORY)
 scripts/encrypt-prose
-jj git push
+scripts/validate-push-owner "$(git remote get-url --push origin)"
+git push origin HEAD
 
 # After cloning or pulling
 scripts/decrypt-prose
@@ -368,8 +380,9 @@ scripts/decrypt-prose
 scripts/encrypt-prose --check
 ```
 
-**Never push without encrypting first.** The `.githooks/pre-commit` blocks
-unencrypted files if someone uses git directly, but jj bypasses git hooks.
+**Never push without encrypting first.** The Git hooks enforce the local safety
+checks; the pre-push hook also blocks non-owned remote URLs independently of the
+quality-check skip flag.
 
 ### OpenProse Programs
 

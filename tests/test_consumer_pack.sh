@@ -51,8 +51,21 @@ fi
 TARBALL_LIST="$(tar -tzf "$TGZ")"
 assert_contains "tarball contains package manifest" "package/package.json" "$TARBALL_LIST"
 assert_contains "tarball contains canonical extension" "package/extensions/recursive.ts" "$TARBALL_LIST"
-assert_contains "tarball contains native modules" "package/extensions/ypi/native-tool.ts" "$TARBALL_LIST"
+assert_contains "tarball contains native adapter" "package/extensions/ypi/native-tool.ts" "$TARBALL_LIST"
+assert_contains "tarball contains canonical runtime core" "package/extensions/ypi/runtime-core.ts" "$TARBALL_LIST"
+assert_contains "tarball contains internal child-process owner" "package/extensions/ypi/internal/child-process.ts" "$TARBALL_LIST"
+assert_contains "tarball contains internal child-output owner" "package/extensions/ypi/internal/child-output.ts" "$TARBALL_LIST"
+assert_contains "tarball contains workspace-policy owner" "package/extensions/ypi/internal/workspace-policy.ts" "$TARBALL_LIST"
+assert_contains "tarball contains implementer write-scope owner" "package/extensions/ypi/internal/write-scope.ts" "$TARBALL_LIST"
+assert_contains "tarball contains bounded delegation skill" "package/skills/bounded-recursive-delegation/SKILL.md" "$TARBALL_LIST"
+assert_contains "tarball contains internal CLI-input owner" "package/extensions/ypi/internal/cli-input.ts" "$TARBALL_LIST"
+assert_contains "tarball contains thin CLI adapter" "package/extensions/ypi/cli.ts" "$TARBALL_LIST"
+assert_contains "tarball contains generated Node CLI projection" "package/dist/rlm_query.mjs" "$TARBALL_LIST"
+assert_contains "tarball contains retained native fallback" "package/extensions/ypi/legacy-native-tool.ts" "$TARBALL_LIST"
+assert_contains "tarball contains retained CLI fallback" "package/rlm_query.legacy" "$TARBALL_LIST"
 assert_contains "tarball contains cleanup helper" "package/rlm_cleanup" "$TARBALL_LIST"
+assert_contains "tarball contains installed doctor" "package/scripts/doctor" "$TARBALL_LIST"
+assert_contains "tarball contains Pi compatibility pin" "package/.pi-version" "$TARBALL_LIST"
 assert_not_contains "tarball excludes private files" "package/private/" "$TARBALL_LIST"
 
 mkdir -p "$TEST_TMP/install" "$TEST_TMP/home" "$TEST_TMP/cache"
@@ -81,9 +94,59 @@ else
 	fail "isolated global install exposes rlm_cleanup" "missing executable $TEST_TMP/install/bin/rlm_cleanup"
 fi
 
+DOCTOR_BIN="$TEST_TMP/install/bin/ypi-doctor"
+if [ -x "$DOCTOR_BIN" ]; then
+	pass "isolated global install exposes ypi-doctor"
+else
+	fail "isolated global install exposes ypi-doctor" "missing executable $DOCTOR_BIN"
+fi
+
+RLM_BIN="$TEST_TMP/install/bin/rlm_query"
+if [ -x "$RLM_BIN" ]; then
+	pass "isolated global install exposes rlm_query"
+else
+	fail "isolated global install exposes rlm_query" "missing executable $RLM_BIN"
+fi
+
+mkdir -p "$TEST_TMP/mock-bin"
+cat > "$TEST_TMP/mock-bin/pi" <<'MOCK_PI'
+#!/usr/bin/env bash
+[ -f "${RLM_SYSTEM_PROMPT:-}" ] || { echo "missing packaged system prompt" >&2; exit 90; }
+[ -f "${YPI_EXTENSION_ROOT:-}/extensions/ypi/runtime-core.ts" ] || { echo "missing packaged runtime root" >&2; exit 91; }
+[ -f "${YPI_EXTENSION_PATH:-}" ] || { echo "missing packaged extension path" >&2; exit 92; }
+printf 'PACKED_CHILD_OK implementation=%s\n' "${YPI_RLM_IMPLEMENTATION:-unset}"
+MOCK_PI
+chmod +x "$TEST_TMP/mock-bin/pi"
+set +e
+PACKED_RLM_OUTPUT="$(env -u RLM_BUDGET -u RLM_COST_FILE -u RLM_TIMEOUT -u RLM_START_TIME \
+	HOME="$TEST_TMP/home" \
+	PATH="$TEST_TMP/mock-bin:$(dirname "$(command -v node)"):/usr/bin:/bin" \
+	YPI_PI_BIN="$TEST_TMP/mock-bin/pi" \
+	RLM_DEPTH=0 RLM_MAX_DEPTH=2 RLM_CALL_COUNT=0 RLM_MAX_CALLS=8 \
+	RLM_CALL_COUNTER_FILE="$TEST_TMP/packed-canonical.counter" RLM_TRACE_ID=packed-canonical \
+	RLM_JSON=0 RLM_JJ=auto RLM_SHARED_SESSIONS=0 \
+	"$RLM_BIN" "Packed runtime smoke" 2>&1)"
+PACKED_RLM_RC=$?
+set -e
+if [ "$PACKED_RLM_RC" -eq 0 ]; then pass "installed canonical CLI exits cleanly"; else fail "installed canonical CLI exits cleanly" "rc=$PACKED_RLM_RC $PACKED_RLM_OUTPUT"; fi
+assert_contains "installed rlm_query executes canonical runtime" "PACKED_CHILD_OK implementation=canonical" "$PACKED_RLM_OUTPUT"
+set +e
+PACKED_LEGACY_OUTPUT="$(env -u RLM_BUDGET -u RLM_COST_FILE -u RLM_TIMEOUT -u RLM_START_TIME \
+	HOME="$TEST_TMP/home" \
+	PATH="$TEST_TMP/mock-bin:$(dirname "$(command -v node)"):/usr/bin:/bin" \
+	YPI_PI_BIN="$TEST_TMP/mock-bin/pi" YPI_LEGACY_IMPL=1 \
+	RLM_DEPTH=0 RLM_MAX_DEPTH=2 RLM_CALL_COUNT=0 RLM_MAX_CALLS=8 \
+	RLM_CALL_COUNTER_FILE="$TEST_TMP/packed-legacy.counter" RLM_TRACE_ID=packed-legacy \
+	RLM_JSON=0 RLM_JJ=auto RLM_SHARED_SESSIONS=0 \
+	"$RLM_BIN" "Packed legacy smoke" 2>&1)"
+PACKED_LEGACY_RC=$?
+set -e
+if [ "$PACKED_LEGACY_RC" -eq 0 ]; then pass "installed retained CLI exits cleanly"; else fail "installed retained CLI exits cleanly" "rc=$PACKED_LEGACY_RC $PACKED_LEGACY_OUTPUT"; fi
+assert_contains "installed rlm_query retains executable CLI fallback" "PACKED_CHILD_OK implementation=legacy" "$PACKED_LEGACY_OUTPUT"
+
 RUN_LOG="$TEST_TMP/ypi-version.log"
 NODE_BIN="$(dirname "$(command -v node)")"
-if env \
+if env -u YPI_PI_BIN \
 	HOME="$TEST_TMP/home" \
 	BUN_INSTALL="$TEST_TMP/install" \
 	XDG_CACHE_HOME="$TEST_TMP/cache" \
@@ -93,6 +156,38 @@ if env \
 else
 	fail "global ypi resolves package-local pi without system pi on PATH" "$(cat "$RUN_LOG")"
 fi
+assert_contains "global ypi executes its exact package-local Pi dependency" "0.79.4" "$(cat "$RUN_LOG")"
+
+STALE_LOG="$TEST_TMP/ypi-stale-path.log"
+if env -u YPI_PI_BIN \
+	HOME="$TEST_TMP/home" BUN_INSTALL="$TEST_TMP/install" XDG_CACHE_HOME="$TEST_TMP/cache" \
+	PATH="$TEST_TMP/mock-bin:$TEST_TMP/install/bin:$NODE_BIN:/usr/bin:/bin" \
+	"$YPI_BIN" --version >"$STALE_LOG" 2>&1; then
+	pass "global ypi ignores an incompatible PATH Pi when package-local Pi exists"
+else
+	fail "global ypi ignores an incompatible PATH Pi when package-local Pi exists" "$(cat "$STALE_LOG")"
+fi
+assert_contains "PATH shadow probe still uses package-local Pi" "0.79.4" "$(cat "$STALE_LOG")"
+assert_not_contains "PATH shadow probe does not execute stale Pi" "PACKED_CHILD_OK" "$(cat "$STALE_LOG")"
+
+DOCTOR_LOG="$TEST_TMP/installed-doctor.log"
+if env -u YPI_PI_BIN HOME="$TEST_TMP/home" \
+	PATH="$TEST_TMP/mock-bin:$TEST_TMP/install/bin:$NODE_BIN:/usr/bin:/bin" \
+	"$DOCTOR_BIN" >"$DOCTOR_LOG" 2>&1; then
+	pass "installed ypi-doctor validates package-local Pi despite PATH shadow"
+else
+	fail "installed ypi-doctor validates package-local Pi despite PATH shadow" "$(cat "$DOCTOR_LOG")"
+fi
+assert_contains "installed doctor reads packaged Pi pin" "satisfies pinned 0.79.4" "$(cat "$DOCTOR_LOG")"
+
+RLM_RESOLVE_LOG="$TEST_TMP/rlm-local-pi-resolution.log"
+set +e
+env -u YPI_PI_BIN HOME="$TEST_TMP/home" \
+	PATH="$TEST_TMP/mock-bin:$TEST_TMP/install/bin:$NODE_BIN:/usr/bin:/bin" \
+	RLM_DEPTH=0 RLM_MAX_DEPTH=0 bash -x "$RLM_BIN" "resolution probe" >"$RLM_RESOLVE_LOG" 2>&1
+set -e
+assert_contains "installed rlm_query resolves package-local Pi before PATH" "node_modules/.bin/pi" "$(cat "$RLM_RESOLVE_LOG")"
+assert_not_contains "installed rlm_query does not select stale PATH Pi" "YPI_PI_BIN=$TEST_TMP/mock-bin/pi" "$(cat "$RLM_RESOLVE_LOG")"
 
 tar -xzf "$TGZ" -C "$TEST_TMP"
 UNPACKED="$TEST_TMP/package"
@@ -101,6 +196,16 @@ if [ -f "$UNPACKED/extensions/recursive.ts" ] && [ -f "$UNPACKED/package.json" ]
 else
 	fail "tarball unpacks as Pi package root" "missing package files"
 fi
+
+DIRECT_BUNDLE_OUTPUT="$(env -u YPI_EXTENSION_ROOT -u YPI_EXTENSION_PATH -u RLM_SYSTEM_PROMPT \
+	-u RLM_BUDGET -u RLM_COST_FILE -u RLM_TIMEOUT -u RLM_START_TIME \
+	YPI_PI_BIN="$TEST_TMP/mock-bin/pi" CONTEXT="$TEST_TMP/ctx.txt" \
+	RLM_DEPTH=0 RLM_MAX_DEPTH=2 RLM_CALL_COUNT=0 RLM_MAX_CALLS=8 \
+	RLM_CALL_COUNTER_FILE="$TEST_TMP/direct-bundle.counter" RLM_TRACE_ID=direct-bundle \
+	RLM_JSON=0 RLM_JJ=auto RLM_SHARED_SESSIONS=0 \
+	node "$UNPACKED/dist/rlm_query.mjs" "Direct bundle root smoke" 2>&1 || true)"
+assert_contains "direct generated bundle resolves its packaged root" "PACKED_CHILD_OK" "$DIRECT_BUNDLE_OUTPUT"
+assert_not_contains "direct generated bundle avoids source-relative root failure" "missing packaged" "$DIRECT_BUNDLE_OUTPUT"
 
 echo ""
 echo "═══════════════════════════════════"

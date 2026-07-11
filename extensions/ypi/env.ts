@@ -1,17 +1,27 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { YpiRuntime } from "./runtime.ts";
 import { debug } from "./runtime.ts";
 
+export const DEFAULT_MAX_DEPTH = 3;
+export const DEFAULT_MAX_CALLS = 128;
+
+function exactNonNegativeInteger(value: string | undefined, fallback: string): number {
+	const raw = value ?? fallback;
+	if (!/^\d+$/.test(raw)) return Number.NaN;
+	const parsed = Number(raw);
+	return Number.isSafeInteger(parsed) ? parsed : Number.NaN;
+}
+
 export function currentDepth(): number {
-	return Number.parseInt(process.env.RLM_DEPTH || "0", 10);
+	return exactNonNegativeInteger(process.env.RLM_DEPTH, "0");
 }
 
 export function maxDepth(): number {
-	return Number.parseInt(process.env.RLM_MAX_DEPTH || "3", 10);
+	return exactNonNegativeInteger(process.env.RLM_MAX_DEPTH, String(DEFAULT_MAX_DEPTH));
 }
 
 export function nextDepth(): number {
@@ -23,7 +33,12 @@ export function currentCallCount(): number {
 }
 
 export function shouldExposeRecursion(): boolean {
-	return currentDepth() < maxDepth();
+	const depth = currentDepth();
+	const limit = maxDepth();
+	// Keep the tool visible for malformed configuration so invoking it produces
+	// the explicit fail-closed error instead of silently hiding recursion.
+	if (!Number.isInteger(depth) || !Number.isInteger(limit)) return true;
+	return depth < limit;
 }
 
 function prependPath(dir: string): void {
@@ -38,8 +53,9 @@ export function sharedSessionsEnabled(): boolean {
 	return process.env.RLM_SHARED_SESSIONS !== "0";
 }
 
-// The shell-compatible rlm_query helper (PATH entry + full source in the prompt) is
-// convenience glue owned by the ypi wrapper. A bare `pi -e` / npm extension install
+// The shell-compatible rlm_query helper (PATH entry plus canonical runtime and
+// adapter source in the prompt) is convenience glue owned by the ypi wrapper.
+// A bare `pi -e` / npm extension install
 // defaults to the native rlm_query tool only; the wrapper opts in with YPI_SHELL_HELPER=1.
 export function shellHelperEnabled(runtime: YpiRuntime): boolean {
 	return process.env.YPI_SHELL_HELPER === "1" && existsSync(runtime.rlmQueryPath);
@@ -58,36 +74,60 @@ function ensureCallCounterFile(): void {
 	process.env.RLM_CALL_COUNTER_FILE = path.join(tmpdir(), `rlm_calls_${process.env.RLM_TRACE_ID}.counter`);
 }
 
-function ensureCostFile(): void {
-	if (!process.env.RLM_BUDGET || process.env.RLM_COST_FILE) {
-		return;
+function ensurePrivateTelemetryFile(variable: "PI_TRACE_FILE" | "RLM_COST_FILE", prefix: string): void {
+	if (!process.env[variable]) {
+		process.env[variable] = path.join(tmpdir(), `${prefix}_${process.env.RLM_TRACE_ID}.jsonl`);
 	}
-	process.env.RLM_COST_FILE = path.join(tmpdir(), `rlm_cost_${process.env.RLM_TRACE_ID}.jsonl`);
+	const filePath = process.env[variable];
+	if (!filePath) return;
+	try {
+		mkdirSync(path.dirname(filePath), { recursive: true });
+		const descriptor = openSync(filePath, "a", 0o600);
+		closeSync(descriptor);
+		chmodSync(filePath, 0o600);
+	} catch {
+		// Telemetry is observational. An unwritable or invalid sink must never
+		// prevent product work from starting.
+		delete process.env[variable];
+	}
 }
 
 export function ensureEnvironment(runtime: YpiRuntime, ctx?: ExtensionContext, pi?: ExtensionAPI): void {
 	process.env.RLM_DEPTH = process.env.RLM_DEPTH || "0";
-	process.env.RLM_MAX_DEPTH = process.env.RLM_MAX_DEPTH || "3";
+	process.env.RLM_MAX_DEPTH = process.env.RLM_MAX_DEPTH || String(DEFAULT_MAX_DEPTH);
+	process.env.RLM_MAX_CALLS = process.env.RLM_MAX_CALLS || String(DEFAULT_MAX_CALLS);
 	process.env.RLM_SYSTEM_PROMPT = process.env.RLM_SYSTEM_PROMPT || runtime.systemPromptPath;
-	process.env.RLM_JJ = process.env.RLM_JJ || "1";
+	process.env.RLM_JJ = process.env.RLM_JJ || "auto";
 	process.env.RLM_EXTENSIONS = process.env.RLM_EXTENSIONS || "1";
 	process.env.RLM_JSON = process.env.RLM_JSON || "1";
 	process.env.RLM_SHARED_SESSIONS = process.env.RLM_SHARED_SESSIONS || "1";
 	process.env.RLM_TRACE_ID = safeTraceId(process.env.RLM_TRACE_ID || randomBytes(4).toString("hex"));
+	// Dollar caps are deliberately unsupported. Cost remains observable telemetry,
+	// never an admission or termination condition.
+	delete process.env.RLM_BUDGET;
+	delete process.env.RLM_UNSAFE_NO_JJ_WRITE;
 	// RLM_START_TIME anchors the wall-clock timeout budget at the moment a recursion tree
 	// begins, not at extension load. Seeding it here would freeze a long-running root Pi's
 	// budget at session start; the native tool and shell rlm_query set it at the depth-0 call.
 	process.env.YPI_EXTENSION_ROOT = runtime.root;
-	process.env.YPI_EXTENSION_PATH = process.env.YPI_EXTENSION_PATH || runtime.extensionPath;
+	process.env.YPI_EXTENSION_PATH = runtime.extensionPath;
 	ensureCallCounterFile();
-	ensureCostFile();
+	ensurePrivateTelemetryFile("PI_TRACE_FILE", "rlm_trace");
+	ensurePrivateTelemetryFile("RLM_COST_FILE", "rlm_cost");
 
 	if (shouldExposeRecursion() && shellHelperEnabled(runtime)) {
 		prependPath(runtime.root);
 	}
 
-	if (ctx?.sessionManager.getSessionFile() && sharedSessionsEnabled() && !process.env.RLM_SESSION_DIR) {
-		process.env.RLM_SESSION_DIR = ctx.sessionManager.getSessionDir();
+	if (ctx && sharedSessionsEnabled()) {
+		const sessionFile = ctx.sessionManager.getSessionFile();
+		if (sessionFile) {
+			process.env.RLM_SESSION_FILE = sessionFile;
+			process.env.RLM_SESSION_DIR = ctx.sessionManager.getSessionDir();
+		} else if (process.env.RLM_DEPTH === "0") {
+			delete process.env.RLM_SESSION_FILE;
+			delete process.env.RLM_SESSION_DIR;
+		}
 	}
 	if (process.env.RLM_SESSION_DIR && sharedSessionsEnabled()) {
 		mkdirSync(process.env.RLM_SESSION_DIR, { recursive: true });

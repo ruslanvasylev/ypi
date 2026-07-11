@@ -40,7 +40,13 @@ for dir in "${SOPS_DIRS[@]}"; do
                     echo "UNENCRYPTED: $file" >&2
                     COUNT=$((COUNT + 1))
                 else
-                    sops encrypt -i "$file" 2>/dev/null
+                    if ! sops encrypt -i "$file" 2>/dev/null; then
+                        # Some experiment artifacts use a JSON suffix while
+                        # intentionally containing concatenated/raw records.
+                        # Preserve such files byte-for-byte through SOPS binary
+                        # mode instead of failing midway through the push gate.
+                        sops encrypt --input-type binary --output-type json -i "$file" 2>/dev/null
+                    fi
                     echo "✓ encrypted $file"
                     COUNT=$((COUNT + 1))
                 fi

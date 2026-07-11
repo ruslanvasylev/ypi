@@ -19,12 +19,13 @@ The live proof copies only the extension files into a scratch root, starts `pi`
 directly with `-e`, asks the root agent to use the native `rlm_query` tool, asks
 that child to call the native tool again, and asserts a `depth=0->1->2` trace.
 The scratch root intentionally contains no `ypi` launcher, no shell `rlm_query`,
-no `SYSTEM_PROMPT.md`, and runs with `RLM_JJ=0`.
+no `SYSTEM_PROMPT.md`; recursive review is automatically read-only and does not
+invoke or require jj.
 
 Manual one-level smoke invocation:
 
 ```bash
-pi -p --no-session \
+pi -p --no-session --no-extensions \
 	  --provider openrouter \
 	  --model openai/gpt-5.5:xhigh \
 	  -e ./extensions/recursive.ts \

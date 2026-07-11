@@ -64,10 +64,13 @@ fi
 LOAD_LOG="$SB/load.log"
 ( cd "$SB/proj" && PI_CODING_AGENT_DIR="$SB/pihome" YPI_EXTENSION_DEBUG=1 \
     timeout 40 pi --list-models test ) >"$LOAD_LOG" 2>&1
-if grep -q '__YPI_NATIVE_TOOL_REGISTERED__' "$LOAD_LOG" && grep -q '__YPI_EXTENSION_LOADED__' "$LOAD_LOG"; then
-    pass "installed extension loads and registers the native rlm_query tool"
+LOAD_RC=$?
+if [ "$LOAD_RC" -eq 0 ] \
+    && grep -q '__YPI_NATIVE_TOOL_REGISTERED__' "$LOAD_LOG" \
+    && grep -q '__YPI_EXTENSION_LOADED__' "$LOAD_LOG"; then
+    pass "installed extension exits cleanly, loads, and registers native rlm_query"
 else
-    fail "installed extension registers the native rlm_query tool" "$(tail -4 "$LOAD_LOG" | tr '\n' ' ')"
+    fail "installed extension exits cleanly, loads, and registers native rlm_query" "rc=$LOAD_RC $(tail -4 "$LOAD_LOG" | tr '\n' ' ')"
 fi
 
 echo ""

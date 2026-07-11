@@ -1,63 +1,62 @@
 #!/usr/bin/env bash
-# land — deterministic-ish landing helper
-
+# Validate the exact clean feature-branch commit and push only that branch to an
+# owner-verified origin. This helper never merges, tags, publishes, or releases.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-AGENT_CHECK=true
-DRY_RUN=false
+DRY_RUN=0
+if [ "${1:-}" = "--dry-run" ]; then
+  DRY_RUN=1
+elif [ -n "${1:-}" ]; then
+  echo "usage: scripts/land [--dry-run]" >&2
+  exit 2
+fi
 
-while [[ "${1:-}" == --* ]]; do
-  case "$1" in
-    --no-agent-check) AGENT_CHECK=false; shift ;;
-    --dry-run) DRY_RUN=true; shift ;;
-    *) echo "Unknown flag: $1" >&2; exit 1 ;;
-  esac
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "scripts/land: Git checkout required" >&2
+  exit 2
+fi
+BRANCH="$(git branch --show-current)"
+case "$BRANCH" in
+  ""|master|main)
+    echo "scripts/land: refusing shared trunk '$BRANCH'; use a feature branch" >&2
+    exit 2
+    ;;
+esac
+
+if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+  echo "scripts/land: working tree must be clean so validation and delivery name the same commit" >&2
+  exit 2
+fi
+
+mapfile -t PUSH_URLS < <(git remote get-url --push --all origin)
+if [ "${#PUSH_URLS[@]}" -eq 0 ]; then
+  echo "scripts/land: origin has no push URL" >&2
+  exit 2
+fi
+for push_url in "${PUSH_URLS[@]}"; do
+  "$ROOT_DIR/scripts/validate-push-owner" "$push_url"
 done
 
-echo "==> step 1/5: release preflight"
-./scripts/release-preflight
+HEAD_BEFORE="$(git rev-parse HEAD)"
+"$ROOT_DIR/scripts/pre-push-checks"
+"$ROOT_DIR/scripts/doctor"
+"$ROOT_DIR/scripts/check-release-consistency"
+"$ROOT_DIR/scripts/encrypt-prose" --check
+HEAD_AFTER="$(git rev-parse HEAD)"
+if [ "$HEAD_BEFORE" != "$HEAD_AFTER" ] || ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+  echo "scripts/land: checkout changed during validation; rerun on the final clean commit" >&2
+  exit 2
+fi
 
-echo "==> step 2/5: check encryption"
-./scripts/encrypt-prose --check
-
-if [ "$DRY_RUN" = true ]; then
-  echo "✅ dry-run complete (preflight + encryption check passed)"
+if [ "$DRY_RUN" = "1" ]; then
+  echo "scripts/land: dry-run PASS commit=$HEAD_AFTER branch=$BRANCH"
   exit 0
 fi
 
-echo "==> step 3/5: push master"
-jj bookmark set master -r @-
-jj git push
-
-echo "==> step 4/5: recent CI (informational — the local preflight is the gate, not CI)"
-./scripts/ci-status 5 || true
-
-if [ "$AGENT_CHECK" = true ] && command -v ypi >/dev/null 2>&1; then
-  echo "==> step 5/5: agent audit"
-  SNAP=$(mktemp "${TMPDIR:-/tmp}/ypi_land_audit.XXXXXX")
-  trap 'rm -f "$SNAP"' EXIT
-
-  {
-    echo "=== jj status ==="
-    jj status 2>&1
-    echo
-    echo "=== git status ==="
-    git status -sb 2>&1
-    echo
-    echo "=== recent ci ==="
-    ./scripts/ci-status 8 2>&1
-  } > "$SNAP"
-
-  timeout 120s ypi -p --no-session "Given the provided context (jj status, git status, recent CI runs), return strict JSON: {\"land_ok\":true|false,\"reasons\":[...],\"next_actions\":[...]} . Mark land_ok=true only if the working copy is clean and the local release-preflight passed; treat CI as informational, not a required gate." < "$SNAP" || {
-    echo "⚠️  agent audit failed or timed out (landing already pushed)."
-  }
-else
-  echo "==> step 5/5: agent audit skipped"
-fi
-
-echo "✅ land flow complete (code pushed; nothing published)"
-echo "   to publish to npm:  make publish        (preview: make publish-dry)"
-echo "   post-publish smoke: YPI_TEST_REGISTRY_INSTALL=1 PKG_MIN_AGE_DAYS=0 make test-install-from-registry"
+# Explicit branch refspec and disabled follow-tags prevent accidental tag or
+# default-ref publication. The hook repeats owner and release checks.
+YPI_SKIP_PUSH_CHECKS=1 git -c push.followTags=false push --no-follow-tags origin "HEAD:refs/heads/$BRANCH"
+echo "scripts/land: pushed owned feature branch origin/$BRANCH at $HEAD_AFTER; merge/release not performed"
