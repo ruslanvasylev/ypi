@@ -21,10 +21,10 @@ Both adapters must resolve the same behavior for:
 - budget preflight and cost-ledger updates
 - provider, model, and thinking-level routing by child depth
 - trace identity and path-safe session naming
-- prompt and optional context artifacts, including exact child-visible context-path projection and task-context precedence over unrelated retrieval
-- child session and fork behavior
+- file-backed delegated prompt transport, root-human-request capture, and optional context artifacts, including exact child-visible paths and task-context precedence over unrelated retrieval
+- child session and fork behavior, including immutable async root/context/session snapshots
 - child environment allowlisting
-- extension and non-extension discovery policy
+- extension and non-extension discovery policy, including private offline Pi roots when full resource isolation is requested
 - writable jj workspace or explicit no-jj read-only/current-checkout behavior; automatic jj failure may not silently downgrade capability
 - child process cancellation, exit classification, output bounds, and cleanup
 
@@ -32,23 +32,28 @@ A runtime result must distinguish normal exit, timeout, cancellation, and child
 failure. Output limits must be enforced while reading the child stream, not only
 after the full stream is resident in memory. Incremental JSON parsing must retain
 late answer and cost events even when an earlier diagnostic event exceeds its
-capture bound. If the skipped oversized event itself could own cost, configured
-budget enforcement must fail closed rather than record a partial value.
+capture bound. If the skipped oversized event itself could own cost—or a failed/cancelled JSON
+child emits no `turn_end`—the shared ledger is marked incomplete and later
+budget admission fails closed rather than treating unknown spend as zero.
 
 ## Default guardrail posture
 
-- `RLM_MAX_DEPTH=3` remains the default. In the bounded contract-audit ablation,
-  depth 3 returned all 12 expected findings with no false positives; depth 4 used
-  1.82× the tokens and 1.34× the cost, then timed out without a final answer.
+- `RLM_MAX_DEPTH=3` remains the default instead of being promoted to 4. In the
+  bounded contract-audit ablation, depth 3 returned all 12 expected findings
+  with no false positives; depth 4 used 1.82× the tokens and 1.34× the cost,
+  then timed out without a final answer. Depth 2 was not evaluated, so this is
+  not a claim that 3 is globally optimal. The reproducible contract is under
+  `tests/eval/depth-ablation/`.
 - `RLM_MAX_CALLS=128` bounds total fan-out with headroom above the approximately
   52-call evaluation trace that motivated this change.
 - Timeout and dollar budget remain explicit per-run choices because hosted and
   local models do not share a safe universal value.
 - Deeper overrides require an explicit total-call limit and should use timeout or
   budget limits when those dimensions are measurable.
-- `$RLM_ROOT_PROMPT_FILE` preserves the first delegation charter through the
-  tree; child prompts must echo applicable goal/scope/acceptance, and parents
-  must validate results before absorption.
+- `$RLM_ROOT_PROMPT_FILE` captures the active root human request before the root
+  agent starts; standalone shell calls fall back to their first delegation.
+  Child prompts are passed through Pi's `@file` input and must echo applicable
+  goal/scope/acceptance; parents validate results before absorption.
 
 ## Adapter-owned responsibilities
 
@@ -68,9 +73,9 @@ package root, selects the explicit legacy fallback when requested, and launches
 Node:
 
 - CLI flags
-- inherited or piped stdin
-- asynchronous job metadata, sentinels, and peer notification
-- portable command-line presentation of runtime errors and output
+- inherited or piped stdin under an active invocation deadline
+- asynchronous job metadata, cancellation, immutable snapshots, sentinels, and exit-bearing peer notification
+- backpressure/EPIPE-safe command-line presentation of runtime errors and output
 
 Pipes and shell loops remain supported because programmatic composition is an
 important RLM capability. They do not justify a second copy of runtime policy.

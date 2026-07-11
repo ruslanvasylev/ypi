@@ -1,4 +1,4 @@
-.PHONY: test test-unit test-guardrails test-native test-runtime-contract typecheck-runtime build-runtime-cli check-runtime-cli test-provider-allowlist test-extensions test-consumer-pack test-pi-recursive-pack build-pi-recursive test-e2e test-recursion-e2e test-extension-recursion-e2e test-parity-e2e test-fast doctor test-doctor check-release-consistency test-release-consistency test-install-from-registry publish publish-dry pre-push-checks check-upstream install-hooks release-preflight land ci-status ci-last-failure clean
+.PHONY: test test-unit test-guardrails test-native test-runtime-contract typecheck-runtime build-runtime-cli check-runtime-cli test-provider-allowlist test-extensions test-consumer-pack test-pi-recursive-pack build-pi-recursive test-e2e test-recursion-e2e test-extension-recursion-e2e test-parity-e2e eval-depth-ablation eval-runtime-parity test-fast doctor test-doctor check-release-consistency test-release-consistency test-install-from-registry publish publish-dry pre-push-checks check-upstream install-hooks release-preflight land ci-status ci-last-failure clean
 
 # Fast tests — no LLM calls, uses mock pi
 test-unit:
@@ -98,6 +98,16 @@ test-extension-recursion-e2e:
 test-parity-e2e:
 	@echo "Running wrapper/direct-extension parity e2e test (real LLM calls)..."
 	@PI_E2E_PROVIDER="$${PI_E2E_PROVIDER:-openrouter}" PI_E2E_MODEL="$${PI_E2E_MODEL:-openai/gpt-5.5:xhigh}" bash pure-extension/compare.sh
+
+# Manual paid evaluations. Run independent conditions concurrently rather than
+# adding these long-running model calls to the default test target.
+eval-depth-ablation:
+	@test -n "$(DEPTH)" || { echo "usage: make eval-depth-ablation DEPTH=3" >&2; exit 2; }
+	@bash tests/eval/depth-ablation/run-condition.sh "$(DEPTH)"
+
+eval-runtime-parity:
+	@test -n "$(LANE)" || { echo "usage: make eval-runtime-parity LANE=canonical-cli" >&2; exit 2; }
+	@bash tests/eval/runtime-parity/run-lane.sh "$(LANE)"
 
 # All tests
 test: test-fast test-extensions test-e2e

@@ -1,0 +1,7 @@
+Goal: audit the TypeScript fixture at __FIXTURE_DIR__ against contracts.md and identify every high-confidence correctness, security, or resource-lifecycle violation.
+
+Scope: contracts.md plus the six implementation files in that exact fixture directory. Read-only; do not edit files. Ignore style, naming, and speculative concerns not grounded in a stated contract.
+
+Method: act as the orchestrator. Use recursive delegation where useful with disjoint reviewer charters, an adjudication pass, and focused probes for unresolved claims. Each delegated charter must carry this goal and acceptance boundary. Deduplicate equivalent findings before final output.
+
+Acceptance: return only a JSON array. Each item must have path, line, contract, defect, and impact. Include only findings that directly violate contracts.md. Empty array only if no violations exist.

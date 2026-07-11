@@ -1,0 +1,1 @@
+Read the external CONTEXT file. Find KEY_ALPHA, KEY_BETA, and KEY_GAMMA, add their integer values, and return exactly: RESULT=803 EVIDENCE=KEY_ALPHA,KEY_BETA,KEY_GAMMA
