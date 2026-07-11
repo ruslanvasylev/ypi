@@ -19,11 +19,14 @@ tests/eval/runtime-parity/run-lane.sh legacy-native
 
 CLI lanes must return exactly
 `RESULT=803 EVIDENCE=KEY_ALPHA,KEY_BETA,KEY_GAMMA` from a generated 3,000-line
-context and use exactly two calls through depth 2. Native lanes run focused E9
-and must report its recursive child-call pass. Compare the four generated
+context and show observed `depth=0→1` plus native-tool `depth=1→2` trace
+transitions; an allocated call counter alone is not proof. Native lanes run
+focused E9 and must report its recursive child-call pass. Compare the four generated
 `meta.json` files only when provider, model, thinking, timeout, and checkout are
 identical.
 
+The default CLI lane deadline is 600 seconds (native: 180 seconds) because the
+long-context two-call lane has exceeded 300 seconds under provider variance.
 Environment overrides: `PI_E2E_PROVIDER`, `PI_E2E_MODEL`,
 `PI_E2E_THINKING`, `RLM_EVAL_TIMEOUT`, `RLM_EVAL_BUDGET`, and
 `YPI_EVAL_OUTPUT_ROOT`.

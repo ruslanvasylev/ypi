@@ -1,6 +1,6 @@
 #!/bin/bash
 # test_release_consistency.sh — scripts/check-release-consistency enforces the
-# two-package lockstep + changelog invariants. No LLM. Uses YPI_CHECK_ROOT fixtures.
+# two-package lockstep, exact ypi pin, unrestricted host peers, and changelog invariants. No LLM. Uses YPI_CHECK_ROOT fixtures.
 #
 # Run: bash tests/test_release_consistency.sh
 
@@ -24,7 +24,7 @@ mkfix() {
     local ypiv="$1" pirv="$2" dep="$3" peer="$4" piver="$5" clhead="$6"
     mkdir -p "$root/pi-recursive"
     printf '{"name":"ypi","version":"%s","dependencies":{"@earendil-works/pi-coding-agent":"%s"}}\n' "$ypiv" "$dep" > "$root/package.json"
-    printf '{"name":"pi-recursive","version":"%s","peerDependencies":{"@earendil-works/pi-coding-agent":"%s"}}\n' "$pirv" "$peer" > "$root/pi-recursive/package.json"
+    printf '{"name":"pi-recursive","version":"%s","peerDependencies":{"@earendil-works/pi-coding-agent":"%s","typebox":"*"}}\n' "$pirv" "$peer" > "$root/pi-recursive/package.json"
     printf '%s\n' "$piver" > "$root/.pi-version"
     printf '# Changelog\n\n%s\n\n- stuff\n' "$clhead" > "$root/CHANGELOG.md"
     printf '%s\n' "$root"
@@ -60,12 +60,23 @@ R="$(mkfix piskew 0.6.0 0.6.0 0.79.4 '*' 0.79.10 '## [0.6.0] - 2026-06-22')"
 run "$R"
 if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -qi 'pinned pi'; then pass "pinned-pi skew fails"; else fail "pinned-pi skew fails" "rc=$RC out=$OUT"; fi
 
-# 6. a narrowed pi-recursive peer would install or bind a second Pi runtime -> FAIL
+# 6. a ranged dependency is compatible but not the exact tested pin -> FAIL
+R="$(mkfix rangeddep 0.6.0 0.6.0 ^0.79.4 '*' 0.79.4 '## [0.6.0] - 2026-06-22')"
+run "$R"
+if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -qi 'pinned pi'; then pass "ranged ypi Pi dependency fails exact-pin gate"; else fail "ranged ypi Pi dependency fails exact-pin gate" "rc=$RC out=$OUT"; fi
+
+# 7. a narrowed pi-recursive peer would install or bind a second Pi runtime -> FAIL
 R="$(mkfix narrowpeer 0.6.0 0.6.0 0.79.4 ^0.79.4 0.79.4 '## [0.6.0] - 2026-06-22')"
 run "$R"
 if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -qi 'unrestricted'; then pass "narrowed host Pi peer fails"; else fail "narrowed host Pi peer fails" "rc=$RC out=$OUT"; fi
 
-# 7. missing CHANGELOG entry for the version -> FAIL
+# 8. a narrowed host typebox peer violates the pure-extension host contract -> FAIL
+R="$(mkfix narrowtypebox 0.6.0 0.6.0 0.79.4 '*' 0.79.4 '## [0.6.0] - 2026-06-22')"
+node -e "const fs=require('fs'),p='$R/pi-recursive/package.json',d=require(p);d.peerDependencies.typebox='^1.0.0';fs.writeFileSync(p,JSON.stringify(d))"
+run "$R"
+if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -qi 'typebox peer is unrestricted'; then pass "narrowed host typebox peer fails"; else fail "narrowed host typebox peer fails" "rc=$RC out=$OUT"; fi
+
+# 9. missing CHANGELOG entry for the version -> FAIL
 R="$(mkfix nocl 0.6.0 0.6.0 0.79.4 '*' 0.79.4 '## [0.5.0] - 2026-01-01')"
 run "$R"
 if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -qi 'CHANGELOG'; then pass "missing changelog entry fails"; else fail "missing changelog entry fails" "rc=$RC out=$OUT"; fi

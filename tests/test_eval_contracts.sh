@@ -88,6 +88,23 @@ CLI_RC=$?
 set -e
 if [ "$CLI_RC" -ne 0 ]; then pass "CLI parity lane requires two recursive calls, not answer text alone"; else fail "CLI parity lane requires two recursive calls, not answer text alone" "answer-only fake passed"; fi
 
+cat > "$TEST_TMP/fake-flat-trace-cli" <<'MOCK'
+#!/usr/bin/env bash
+printf '2\n' > "$RLM_CALL_COUNTER_FILE"
+printf '%s\n' \
+  '[00:00:00.000] depth=0→1 PID=1 call=1 trace=test caller=cli prompt: first' \
+  '[00:00:00.001] depth=0→1 PID=2 call=2 trace=test caller=tool prompt: second' > "$PI_TRACE_FILE"
+printf '%s' 'RESULT=803 EVIDENCE=KEY_ALPHA,KEY_BETA,KEY_GAMMA'
+MOCK
+chmod +x "$TEST_TMP/fake-flat-trace-cli"
+set +e
+YPI_RLM_QUERY_BIN="$TEST_TMP/fake-flat-trace-cli" YPI_EVAL_OUTPUT_ROOT="$PARITY_ROOT" \
+YPI_PI_BIN="${YPI_PI_BIN:-$(command -v pi)}" \
+"$PROJECT_DIR/tests/eval/runtime-parity/run-lane.sh" canonical-cli >"$TEST_TMP/flat-cli.out" 2>"$TEST_TMP/flat-cli.err"
+FLAT_CLI_RC=$?
+set -e
+if [ "$FLAT_CLI_RC" -ne 0 ]; then pass "CLI parity requires a child-to-grandchild native transition"; else fail "CLI parity requires a child-to-grandchild native transition" "two flat calls passed"; fi
+
 cat > "$TEST_TMP/fake-legacy-trace-cli" <<'MOCK'
 #!/usr/bin/env bash
 printf '2\n' > "$RLM_CALL_COUNTER_FILE"

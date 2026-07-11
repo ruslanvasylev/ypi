@@ -36,7 +36,7 @@ if [[ "$LANE" == *-cli ]]; then
     YPI_LEGACY_IMPL="$LEGACY" YPI_PI_BIN="${YPI_PI_BIN:-$(command -v pi)}" \
     CONTEXT="$OUT/context.txt" RLM_PROVIDER="${PI_E2E_PROVIDER:-openai-codex}" \
     RLM_MODEL="${PI_E2E_MODEL:-gpt-5.6-sol}" RLM_THINKING_LEVEL="${PI_E2E_THINKING:-max}" \
-    RLM_DEPTH=0 RLM_MAX_DEPTH=2 RLM_MAX_CALLS=2 RLM_TIMEOUT="${RLM_EVAL_TIMEOUT:-300}" \
+    RLM_DEPTH=0 RLM_MAX_DEPTH=2 RLM_MAX_CALLS=2 RLM_TIMEOUT="${RLM_EVAL_TIMEOUT:-600}" \
     RLM_BUDGET="${RLM_EVAL_BUDGET:-1}" RLM_JSON=1 RLM_JJ=0 RLM_SHARED_SESSIONS=0 \
     RLM_CHILD_DISCOVERY=0 RLM_TRACE_ID="parity-$LANE" RLM_CALL_COUNTER_FILE="$OUT/counter" \
     RLM_COST_FILE="$OUT/cost.jsonl" PI_TRACE_FILE="$OUT/trace.log" \
@@ -80,7 +80,7 @@ expected_present=expected in text
 recursive_transition_present=(
   ('depth=0→1' in text and 'caller=tool' in text)
   if lane.endswith('-native')
-  else ('depth=0→1' in trace and 'depth=1→2' in trace and spawned_transitions >= 2)
+  else ('depth=0→1' in trace and re.search(r'depth=1→2.*caller=tool',trace) is not None and spawned_transitions >= 2)
 )
 contract_pass=rc == 0 and expected_present and recursive_transition_present
 meta={'lane':lane,'exit_code':rc,'expected_output_present':expected_present,'recursive_transition_present':recursive_transition_present,'contract_pass':contract_pass,'elapsed_seconds':round(elapsed,3),'allocated_call_attempts':calls,'spawned_trace_transitions':spawned_transitions,'cost':round(cost,6),'tokens':tokens,'max_rss_kib':rss}
