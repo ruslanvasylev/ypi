@@ -24,7 +24,7 @@ no `SYSTEM_PROMPT.md`, and runs with `RLM_JJ=0`.
 Manual one-level smoke invocation:
 
 ```bash
-pi -p --no-session \
+pi -p --no-session --no-extensions \
 	  --provider openrouter \
 	  --model openai/gpt-5.5:xhigh \
 	  -e ./extensions/recursive.ts \

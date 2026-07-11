@@ -11,6 +11,14 @@ mkdir -p "$OUT"
 rm -f "$OUT"/{context.txt,counter,cost.jsonl,trace.log,output.txt,stderr.txt,time.txt,exit,meta.json}
 LEGACY=0
 [[ "$LANE" == legacy-* ]] && LEGACY=1
+RLM_QUERY_BIN="${YPI_RLM_QUERY_BIN:-$REPO/rlm_query}"
+MAKE_BIN="${YPI_MAKE_BIN:-make}"
+TIME_PREFIX=()
+if /usr/bin/time -v true >/dev/null 2>&1; then
+  TIME_PREFIX=(/usr/bin/time -v -o "$OUT/time.txt")
+elif command -v gtime >/dev/null 2>&1; then
+  TIME_PREFIX=(gtime -v -o "$OUT/time.txt")
+fi
 python3 - "$OUT/context.txt" <<'PY'
 import sys
 p=sys.argv[1]
@@ -32,7 +40,7 @@ if [[ "$LANE" == *-cli ]]; then
     RLM_BUDGET="${RLM_EVAL_BUDGET:-1}" RLM_JSON=1 RLM_JJ=0 RLM_SHARED_SESSIONS=0 \
     RLM_CHILD_DISCOVERY=0 RLM_TRACE_ID="parity-$LANE" RLM_CALL_COUNTER_FILE="$OUT/counter" \
     RLM_COST_FILE="$OUT/cost.jsonl" PI_TRACE_FILE="$OUT/trace.log" \
-    /usr/bin/time -v -o "$OUT/time.txt" "$REPO/rlm_query" "$PROMPT" \
+    "${TIME_PREFIX[@]}" "$RLM_QUERY_BIN" "$PROMPT" \
     >"$OUT/output.txt" 2>"$OUT/stderr.txt"
   RC=$?
 else
@@ -42,7 +50,7 @@ else
     RLM_THINKING_LEVEL="${PI_E2E_THINKING:-max}" RLM_DEPTH=0 RLM_MAX_DEPTH=2 RLM_MAX_CALLS=4 \
     RLM_TIMEOUT="${RLM_EVAL_TIMEOUT:-180}" RLM_JSON=1 RLM_JJ=0 RLM_SHARED_SESSIONS=0 \
     RLM_CHILD_DISCOVERY=0 RLM_TRACE_ID="parity-$LANE" RLM_CALL_COUNTER_FILE="$OUT/counter" \
-    /usr/bin/time -v -o "$OUT/time.txt" make -C "$REPO" test-recursion-e2e \
+    "${TIME_PREFIX[@]}" "$MAKE_BIN" -C "$REPO" test-recursion-e2e \
     >"$OUT/output.txt" 2>"$OUT/stderr.txt"
   RC=$?
 fi
@@ -67,8 +75,9 @@ if (out/'time.txt').exists():
 text=(out/'output.txt').read_text(errors='replace') if (out/'output.txt').exists() else ''
 expected='RESULT=803 EVIDENCE=KEY_ALPHA,KEY_BETA,KEY_GAMMA' if lane.endswith('-cli') else 'E9: full ypi recursive child call'
 expected_present=expected in text
-contract_pass=rc == 0 and expected_present and (calls == 2 if lane.endswith('-cli') else True)
-meta={'lane':lane,'exit_code':rc,'expected_output_present':expected_present,'contract_pass':contract_pass,'elapsed_seconds':round(elapsed,3),'calls':calls,'cost':round(cost,6),'tokens':tokens,'max_rss_kib':rss}
+recursive_transition_present=('depth=0→1' in text and 'caller=tool' in text) if lane.endswith('-native') else calls == 2
+contract_pass=rc == 0 and expected_present and recursive_transition_present
+meta={'lane':lane,'exit_code':rc,'expected_output_present':expected_present,'recursive_transition_present':recursive_transition_present,'contract_pass':contract_pass,'elapsed_seconds':round(elapsed,3),'calls':calls,'cost':round(cost,6),'tokens':tokens,'max_rss_kib':rss}
 (out/'meta.json').write_text(json.dumps(meta,indent=2)+'\n')
 print(json.dumps(meta))
 PY

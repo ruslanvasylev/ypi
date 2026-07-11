@@ -289,7 +289,8 @@ testing between changes. One variable at a time.
 | `RLM_JJ` | Require jj workspace isolation; set `0` as an explicit read-only no-jj choice | `1` |
 | `RLM_UNSAFE_NO_JJ_WRITE` | Explicitly allow writable children in the current checkout when jj is unavailable/disabled | `0` |
 | `RLM_SHARED_SESSIONS` | Allow child agents to write trace-named Pi sessions | `1` (set `0` for `--no-session`) |
-| `RLM_CHILD_DISCOVERY` | Set to `0` to disable child Pi non-extension skill/template/theme/context/approval discovery; with `RLM_CHILD_EXTENSIONS=0`, use private Pi roots and offline package resolution for full isolation | enabled by default |
+| `RLM_CHILD_DISCOVERY` | Set to `0` to disable child Pi non-extension skill/template/theme/context/approval discovery; with `RLM_CHILD_EXTENSIONS=0`, use a private Pi agent/config root and offline resolution while preserving Pi's shipped package assets | enabled by default |
+| `RLM_AMBIENT_EXTENSIONS` | Set to `1` to opt into other ambient Pi extensions alongside canonical ypi; this can reintroduce conflicts with old ypi copies | `0` |
 | `YPI_SHELL_HELPER` | Expose the shell `rlm_query` helper (its dir on `PATH` + its source in the prompt); the `ypi` wrapper sets this | `0` (a bare `pi -e` / npm install uses the native tool only) |
 
 ## Bugs We've Found (and must not re-introduce)

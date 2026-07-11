@@ -6,13 +6,24 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 ROOT="${2:-${YPI_EVAL_OUTPUT_ROOT:-$REPO/tmp/depth-ablation}}"
 OUT="$ROOT/depth-$DEPTH"
+rm -rf "$OUT/sessions"
 mkdir -p "$OUT/sessions"
 rm -f "$OUT"/{counter,cost.jsonl,trace.log,stdout.json,stderr.log,time.txt,meta.json,score.json,prompt.txt}
 sed "s|__FIXTURE_DIR__|$SCRIPT_DIR/fixture|g" "$SCRIPT_DIR/prompt.txt" > "$OUT/prompt.txt"
 PROMPT="$(cat "$OUT/prompt.txt")"
+RLM_QUERY_BIN="${YPI_RLM_QUERY_BIN:-$REPO/rlm_query}"
+TIME_PREFIX=()
+if /usr/bin/time -v true >/dev/null 2>&1; then
+  TIME_PREFIX=(/usr/bin/time -v -o "$OUT/time.txt")
+elif command -v gtime >/dev/null 2>&1; then
+  TIME_PREFIX=(gtime -v -o "$OUT/time.txt")
+fi
 START_NS="$(python3 -c 'import time; print(time.monotonic_ns())')"
 set +e
 env -u CONTEXT -u RLM_ROOT_PROMPT_FILE -u RLM_BUDGET -u RLM_CALL_COUNT -u RLM_START_TIME \
+  -u RLM_CHILD_MODEL -u RLM_CHILD_PROVIDER -u RLM_CHILD_THINKING_LEVEL \
+  -u RLM_CHILD_MODELS -u RLM_CHILD_PROVIDERS -u RLM_CHILD_THINKING_LEVELS \
+  -u RLM_CHILD_EXTENSIONS -u RLM_EXTENSIONS -u RLM_AMBIENT_EXTENSIONS -u YPI_LEGACY_IMPL \
   YPI_PI_BIN="${YPI_PI_BIN:-$(command -v pi)}" \
   RLM_PROVIDER="${PI_E2E_PROVIDER:-openai-codex}" RLM_MODEL="${PI_E2E_MODEL:-gpt-5.6-sol}" \
   RLM_THINKING_LEVEL="${PI_E2E_THINKING:-max}" \
@@ -21,12 +32,15 @@ env -u CONTEXT -u RLM_ROOT_PROMPT_FILE -u RLM_BUDGET -u RLM_CALL_COUNT -u RLM_ST
   RLM_SHARED_SESSIONS=1 RLM_SESSION_DIR="$OUT/sessions" RLM_CHILD_DISCOVERY=0 \
   RLM_TRACE_ID="depth-ablation-$DEPTH" RLM_CALL_COUNTER_FILE="$OUT/counter" \
   RLM_COST_FILE="$OUT/cost.jsonl" PI_TRACE_FILE="$OUT/trace.log" \
-  /usr/bin/time -v -o "$OUT/time.txt" "$REPO/rlm_query" "$PROMPT" \
+  "${TIME_PREFIX[@]}" "$RLM_QUERY_BIN" "$PROMPT" \
   >"$OUT/stdout.json" 2>"$OUT/stderr.log"
 RC=$?
 set -e
 END_NS="$(python3 -c 'import time; print(time.monotonic_ns())')"
-python3 "$SCRIPT_DIR/score.py" "$OUT/stdout.json" --output "$OUT/score.json" >/dev/null 2>&1 || true
+set +e
+python3 "$SCRIPT_DIR/score.py" "$OUT/stdout.json" --output "$OUT/score.json" >/dev/null 2>&1
+SCORE_RC=$?
+set -e
 python3 - "$OUT" "$DEPTH" "$RC" "$START_NS" "$END_NS" <<'PY'
 import json, pathlib, re, sys
 out=pathlib.Path(sys.argv[1]); depth=int(sys.argv[2]); rc=int(sys.argv[3]); elapsed=(int(sys.argv[5])-int(sys.argv[4]))/1e9
@@ -53,4 +67,8 @@ meta={'condition_depth':depth,'exit_code':rc,'elapsed_seconds':round(elapsed,3),
 (out/'meta.json').write_text(json.dumps(meta,indent=2)+'\n')
 print(json.dumps(meta))
 PY
+if [ "$RC" -eq 0 ] && [ "$SCORE_RC" -ne 0 ]; then
+  echo "depth condition returned an invalid or incorrectly scored answer: $OUT/score.json" >&2
+  exit 1
+fi
 exit "$RC"

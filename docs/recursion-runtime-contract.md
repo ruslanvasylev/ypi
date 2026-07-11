@@ -24,7 +24,7 @@ Both adapters must resolve the same behavior for:
 - file-backed delegated prompt transport, root-human-request capture, and optional context artifacts, including exact child-visible paths and task-context precedence over unrelated retrieval
 - child session and fork behavior, including immutable async root/context/session snapshots
 - child environment allowlisting
-- extension and non-extension discovery policy, including private offline Pi roots when full resource isolation is requested
+- exact ypi extension ownership by default, explicit ambient-extension opt-in, and non-extension discovery policy, including a private offline Pi agent/config root when full resource isolation is requested without replacing Pi's shipped assets
 - writable jj workspace or explicit no-jj read-only/current-checkout behavior; automatic jj failure may not silently downgrade capability
 - child process cancellation, exit classification, output bounds, and cleanup
 
@@ -52,7 +52,7 @@ budget admission fails closed rather than treating unknown spend as zero.
   budget limits when those dimensions are measurable.
 - `$RLM_ROOT_PROMPT_FILE` captures the active root human request before the root
   agent starts; standalone shell calls fall back to their first delegation.
-  Child prompts are passed through Pi's `@file` input and must echo applicable
+  Child prompts are passed through Pi's exact non-interactive stdin input while remaining file-backed for symbolic access, and must echo applicable
   goal/scope/acceptance; parents validate results before absorption.
 
 ## Adapter-owned responsibilities

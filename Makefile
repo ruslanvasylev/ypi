@@ -1,4 +1,4 @@
-.PHONY: test test-unit test-guardrails test-native test-runtime-contract typecheck-runtime build-runtime-cli check-runtime-cli test-provider-allowlist test-extensions test-consumer-pack test-pi-recursive-pack build-pi-recursive test-e2e test-recursion-e2e test-extension-recursion-e2e test-parity-e2e eval-depth-ablation eval-runtime-parity test-fast doctor test-doctor check-release-consistency test-release-consistency test-install-from-registry publish publish-dry pre-push-checks check-upstream install-hooks release-preflight land ci-status ci-last-failure clean
+.PHONY: test test-unit test-guardrails test-native test-runtime-contract test-eval-contracts typecheck-runtime build-runtime-cli check-runtime-cli test-provider-allowlist test-extensions test-consumer-pack test-pi-recursive-pack build-pi-recursive test-e2e test-recursion-e2e test-extension-recursion-e2e test-parity-e2e eval-depth-ablation eval-runtime-parity test-fast doctor test-doctor check-release-consistency test-release-consistency test-install-from-registry publish publish-dry pre-push-checks check-upstream install-hooks release-preflight land ci-status ci-last-failure clean
 
 # Fast tests — no LLM calls, uses mock pi
 test-unit:
@@ -19,6 +19,10 @@ test-native:
 test-runtime-contract:
 	@echo "Running recursion runtime contract tests..."
 	@bash tests/test_runtime_contract.sh
+
+test-eval-contracts:
+	@echo "Running evaluation contract tests..."
+	@bash tests/test_eval_contracts.sh
 
 typecheck-runtime:
 	@bunx --bun tsc -p tsconfig.runtime.json
@@ -51,7 +55,7 @@ test-release-consistency:
 	@bash tests/test_release_consistency.sh
 
 # All fast tests (no LLM calls)
-test-fast: typecheck-runtime check-runtime-cli test-unit test-guardrails test-native test-runtime-contract test-provider-allowlist test-doctor test-release-consistency
+test-fast: typecheck-runtime check-runtime-cli test-unit test-guardrails test-native test-runtime-contract test-eval-contracts test-provider-allowlist test-doctor test-release-consistency
 
 # Extension compatibility — requires real pi installed
 test-extensions:
