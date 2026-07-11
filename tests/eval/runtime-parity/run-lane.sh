@@ -66,8 +66,14 @@ if (out/'time.txt').exists():
   if m: rss=int(m.group(1))
 text=(out/'output.txt').read_text(errors='replace') if (out/'output.txt').exists() else ''
 expected='RESULT=803 EVIDENCE=KEY_ALPHA,KEY_BETA,KEY_GAMMA' if lane.endswith('-cli') else 'E9: full ypi recursive child call'
-meta={'lane':lane,'exit_code':rc,'expected_output_present':expected in text,'elapsed_seconds':round(elapsed,3),'calls':calls,'cost':round(cost,6),'tokens':tokens,'max_rss_kib':rss}
+expected_present=expected in text
+contract_pass=rc == 0 and expected_present and (calls == 2 if lane.endswith('-cli') else True)
+meta={'lane':lane,'exit_code':rc,'expected_output_present':expected_present,'contract_pass':contract_pass,'elapsed_seconds':round(elapsed,3),'calls':calls,'cost':round(cost,6),'tokens':tokens,'max_rss_kib':rss}
 (out/'meta.json').write_text(json.dumps(meta,indent=2)+'\n')
 print(json.dumps(meta))
 PY
+if [ "$RC" -eq 0 ] && ! python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["contract_pass"] else 1)' "$OUT/meta.json"; then
+  echo "lane contract failed: $OUT/meta.json" >&2
+  exit 1
+fi
 exit "$RC"

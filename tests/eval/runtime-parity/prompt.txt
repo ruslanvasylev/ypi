@@ -1,1 +1,1 @@
-Read the external CONTEXT file. Find KEY_ALPHA, KEY_BETA, and KEY_GAMMA, add their integer values, and return exactly: RESULT=803 EVIDENCE=KEY_ALPHA,KEY_BETA,KEY_GAMMA
+Read the external CONTEXT file. You must delegate extraction of KEY_BETA to exactly one grandchild through the native rlm_query tool while you extract KEY_ALPHA and KEY_GAMMA yourself. Add the three integer values and return exactly: RESULT=803 EVIDENCE=KEY_ALPHA,KEY_BETA,KEY_GAMMA
