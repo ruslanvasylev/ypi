@@ -1427,7 +1427,7 @@ async function runRecursiveChild(runtime, request) {
   const callCount = await allocateCallCount(counterDeadlineMilliseconds);
   assertWithinMaxCalls(callCount);
   const setupRemainingSeconds = timeoutOrThrow();
-  const extensionsEnabled = childExtensionsEnabled(childDepth);
+  const extensionsEnabled = requestedMode === "implement" ? true : childExtensionsEnabled(childDepth);
   const fullResourceIsolation = !extensionsEnabled && process.env.RLM_CHILD_DISCOVERY === "0";
   const resources = acquireChildResources({
     prompt: request.prompt,
@@ -1450,6 +1450,9 @@ async function runRecursiveChild(runtime, request) {
       throw new RecursiveChildError("Child Pi cancelled during admission before work started", 130);
     const { provider, model, thinkingLevel } = resolveChildRoute(request.parent, childDepth);
     const extensionPath = request.extensionPath === null ? "" : request.extensionPath || runtime.extensionPath;
+    if (requestedMode === "implement" && (!extensionPath || !existsSync8(extensionPath))) {
+      throw new RecursiveChildError("Implement mode requires the exact canonical ypi extension so checkout write confinement cannot be bypassed. Continue implementation in the root session.", 1);
+    }
     const env = buildChildEnvironment(process.env, {
       RLM_DEPTH: String(childDepth),
       RLM_MAX_DEPTH: String(limit),

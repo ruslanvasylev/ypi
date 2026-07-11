@@ -340,6 +340,7 @@ async function run(): Promise<void> {
 	process.env.RLM_DEPTH = "0";
 	process.env.RLM_MAX_DEPTH = "2";
 	process.env.RLM_JSON = "0";
+	process.env.RLM_CHILD_EXTENSIONS = "0";
 	process.env.YPI_FAKE_PI_MODE = "write-file";
 	ensureEnvironment(runtime, context(implementRoot));
 	if (!tool) throw new Error("native tool was not registered");
@@ -349,6 +350,8 @@ async function run(): Promise<void> {
 	assertContains("N5a: implementer result reports changed path", implementText, "implemented.txt");
 	record(implementResult.details?.workspace?.workspaceMode === "git-shared" && implementResult.details?.workspace?.reportComplete === true, "N5a: implementer returns complete structured workspace report", JSON.stringify(implementResult.details));
 	assertContains("N5a: implementer excludes process-spawning bash", readLog(), "--exclude-tools bash");
+	assertContains("N5a: implementer forces canonical-only extension mode", readLog(), "--no-extensions");
+	assertContains("N5a: implementer forces exact confinement extension", readLog(), `-e ${runtime.extensionPath}`);
 	assertContains("N5a: implementer receives its exact write-scope root", readLog(), `YPI_IMPLEMENT_ROOT=${implementRoot}`);
 	assertNotContains("N5a: implementer retains edit/write built-ins", readLog(), "--exclude-tools bash,edit,write");
 	const implementLock = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-path", "ypi-shared-writer.lock"], { cwd: implementRoot, encoding: "utf8" }).stdout.trim();
