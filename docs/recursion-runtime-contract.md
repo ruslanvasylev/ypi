@@ -21,7 +21,7 @@ Both adapters must resolve the same behavior for:
 - budget preflight and cost-ledger updates
 - provider, model, and thinking-level routing by child depth
 - trace identity and path-safe session naming
-- prompt and optional context artifacts
+- prompt and optional context artifacts, including exact child-visible context-path projection and task-context precedence over unrelated retrieval
 - child session and fork behavior
 - child environment allowlisting
 - extension and non-extension discovery policy

@@ -235,6 +235,13 @@ async function run(): Promise<void> {
 	contains("wrapper prompt exposes internal runtime owners", selfHostingPrompt, "// child-process.ts");
 	contains("wrapper prompt exposes CLI adapter source", selfHostingPrompt, "export async function main");
 	record(!selfHostingPrompt.includes("# rlm_query — Recursive Language Model sub-call for Pi."), "wrapper prompt does not promote retained legacy CLI as an active owner");
+	process.env.CONTEXT = contextFile;
+	process.env.RLM_PROMPT_FILE = staleRootPromptFile;
+	const taskFilePrompt = buildYpiPrompt(runtime);
+	contains("dynamic prompt exposes exact external context path", taskFilePrompt, `External task context: \`${contextFile}\``);
+	contains("dynamic prompt prioritizes task context over persistent memory", taskFilePrompt, "Inspect it before using persistent memory");
+	delete process.env.CONTEXT;
+	delete process.env.RLM_PROMPT_FILE;
 
 	const prompt = "CONTRACT_PROMPT";
 	const nativeDefault = await invokeNative(baseEnv("native-default"), prompt, "CONTRACT_CONTEXT");

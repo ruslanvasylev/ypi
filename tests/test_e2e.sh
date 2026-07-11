@@ -325,7 +325,7 @@ if should_run "E9"; then
         # still projects parsed child text back to the root agent. E9 owns an
         # isolated call counter so ambient sessions and earlier E2E cases cannot
         # change its one-child assertion.
-        unset RLM_CALL_COUNT
+        unset CONTEXT RLM_CALL_COUNT
         export RLM_CALL_COUNTER_FILE="$TEST_TMP/e9.counter"
         rm -f "$RLM_CALL_COUNTER_FILE"
         START=$(date +%s)
