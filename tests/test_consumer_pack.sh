@@ -115,11 +115,13 @@ printf 'PACKED_CHILD_OK implementation=%s\n' "${YPI_RLM_IMPLEMENTATION:-unset}"
 MOCK_PI
 chmod +x "$TEST_TMP/mock-bin/pi"
 set +e
-PACKED_RLM_OUTPUT="$(env \
+PACKED_RLM_OUTPUT="$(env -u RLM_BUDGET -u RLM_COST_FILE -u RLM_TIMEOUT -u RLM_START_TIME \
 	HOME="$TEST_TMP/home" \
 	PATH="$TEST_TMP/mock-bin:$(dirname "$(command -v node)"):/usr/bin:/bin" \
 	YPI_PI_BIN="$TEST_TMP/mock-bin/pi" \
-	RLM_DEPTH=0 RLM_MAX_DEPTH=2 RLM_JSON=0 RLM_JJ=0 \
+	RLM_DEPTH=0 RLM_MAX_DEPTH=2 RLM_CALL_COUNT=0 RLM_MAX_CALLS=8 \
+	RLM_CALL_COUNTER_FILE="$TEST_TMP/packed-canonical.counter" RLM_TRACE_ID=packed-canonical \
+	RLM_JSON=0 RLM_JJ=0 \
 	RLM_UNSAFE_NO_JJ_WRITE=1 RLM_SHARED_SESSIONS=0 \
 	"$RLM_BIN" "Packed runtime smoke" 2>&1)"
 PACKED_RLM_RC=$?
@@ -127,11 +129,13 @@ set -e
 if [ "$PACKED_RLM_RC" -eq 0 ]; then pass "installed canonical CLI exits cleanly"; else fail "installed canonical CLI exits cleanly" "rc=$PACKED_RLM_RC $PACKED_RLM_OUTPUT"; fi
 assert_contains "installed rlm_query executes canonical runtime" "PACKED_CHILD_OK implementation=canonical" "$PACKED_RLM_OUTPUT"
 set +e
-PACKED_LEGACY_OUTPUT="$(env \
+PACKED_LEGACY_OUTPUT="$(env -u RLM_BUDGET -u RLM_COST_FILE -u RLM_TIMEOUT -u RLM_START_TIME \
 	HOME="$TEST_TMP/home" \
 	PATH="$TEST_TMP/mock-bin:$(dirname "$(command -v node)"):/usr/bin:/bin" \
 	YPI_PI_BIN="$TEST_TMP/mock-bin/pi" YPI_LEGACY_IMPL=1 \
-	RLM_DEPTH=0 RLM_MAX_DEPTH=2 RLM_JSON=0 RLM_JJ=0 \
+	RLM_DEPTH=0 RLM_MAX_DEPTH=2 RLM_CALL_COUNT=0 RLM_MAX_CALLS=8 \
+	RLM_CALL_COUNTER_FILE="$TEST_TMP/packed-legacy.counter" RLM_TRACE_ID=packed-legacy \
+	RLM_JSON=0 RLM_JJ=0 \
 	RLM_UNSAFE_NO_JJ_WRITE=1 RLM_SHARED_SESSIONS=0 \
 	"$RLM_BIN" "Packed legacy smoke" 2>&1)"
 PACKED_LEGACY_RC=$?
@@ -193,8 +197,11 @@ else
 fi
 
 DIRECT_BUNDLE_OUTPUT="$(env -u YPI_EXTENSION_ROOT -u YPI_EXTENSION_PATH -u RLM_SYSTEM_PROMPT \
+	-u RLM_BUDGET -u RLM_COST_FILE -u RLM_TIMEOUT -u RLM_START_TIME \
 	YPI_PI_BIN="$TEST_TMP/mock-bin/pi" CONTEXT="$TEST_TMP/ctx.txt" \
-	RLM_DEPTH=0 RLM_MAX_DEPTH=2 RLM_JSON=0 RLM_JJ=0 \
+	RLM_DEPTH=0 RLM_MAX_DEPTH=2 RLM_CALL_COUNT=0 RLM_MAX_CALLS=8 \
+	RLM_CALL_COUNTER_FILE="$TEST_TMP/direct-bundle.counter" RLM_TRACE_ID=direct-bundle \
+	RLM_JSON=0 RLM_JJ=0 \
 	RLM_UNSAFE_NO_JJ_WRITE=1 RLM_SHARED_SESSIONS=0 \
 	node "$UNPACKED/dist/rlm_query.mjs" "Direct bundle root smoke" 2>&1 || true)"
 assert_contains "direct generated bundle resolves its packaged root" "PACKED_CHILD_OK" "$DIRECT_BUNDLE_OUTPUT"
