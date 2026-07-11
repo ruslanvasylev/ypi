@@ -728,6 +728,12 @@ ${output.stderr}` : output.text.trim();
 
 // extensions/ypi/internal/child-process.ts
 import { spawn as spawn2 } from "node:child_process";
+import { constants as osConstants } from "node:os";
+function signalledExitCode(signal) {
+  if (!signal)
+    return 1;
+  return 128 + (osConstants.signals[signal] || 0);
+}
 function runChildProcess(options) {
   return new Promise((resolve, reject) => {
     const child = spawn2(process.env.YPI_PI_BIN || "pi", options.args, {
@@ -801,7 +807,7 @@ function runChildProcess(options) {
       jsonDecoder.finish();
       const json = jsonDecoder.result();
       resolve({
-        code: timedOut ? 124 : cancelled ? 130 : code ?? (childSignal ? 128 : 1),
+        code: timedOut ? 124 : cancelled ? 130 : code ?? signalledExitCode(childSignal),
         signal: childSignal,
         stdout: rawStdout.text(),
         stderr: rawStderr.text(),

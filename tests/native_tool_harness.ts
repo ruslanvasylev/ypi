@@ -75,6 +75,8 @@ writeFileSync(fakePi, `#!/usr/bin/env bash
 if [ "\${YPI_FAKE_PI_MODE:-ok}" = "fail" ]; then
   echo "fake child failure" >&2
   exit 42
+elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "signal" ]; then
+  kill -TERM $$
 elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "huge" ]; then
   head -c $((17 * 1024 * 1024)) /dev/zero | tr '\\0' X
 elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "json" ]; then
@@ -228,6 +230,14 @@ async function run(): Promise<void> {
 	process.env.YPI_FAKE_PI_MODE = "fail";
 	ensureEnvironment(runtime, context());
 	await expectThrow("N4: nonzero child exit throws", "Child Pi exited with 42", () => invoke());
+
+	clearYpiEnv();
+	resetLog();
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	process.env.YPI_FAKE_PI_MODE = "signal";
+	ensureEnvironment(runtime, context());
+	await expectThrow("N4b: signalled child uses conventional exit status", "Child Pi exited with 143", () => invoke());
 
 	clearYpiEnv();
 	resetLog();

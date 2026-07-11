@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { constants as osConstants } from "node:os";
 import type { CostSummary } from "../guardrails.ts";
 import {
 	createBoundedCapture,
@@ -24,6 +25,11 @@ export interface ChildProcessResult extends ChildOutputSnapshot {
 	cost?: CostSummary;
 	timedOut: boolean;
 	cancelled: boolean;
+}
+
+function signalledExitCode(signal: NodeJS.Signals | null): number {
+	if (!signal) return 1;
+	return 128 + (osConstants.signals[signal] || 0);
 }
 
 export function runChildProcess(options: ChildProcessOptions): Promise<ChildProcessResult> {
@@ -84,7 +90,7 @@ export function runChildProcess(options: ChildProcessOptions): Promise<ChildProc
 			jsonDecoder.finish();
 			const json = jsonDecoder.result();
 			resolve({
-				code: timedOut ? 124 : cancelled ? 130 : code ?? (childSignal ? 128 : 1),
+				code: timedOut ? 124 : cancelled ? 130 : code ?? signalledExitCode(childSignal),
 				signal: childSignal,
 				stdout: rawStdout.text(),
 				stderr: rawStderr.text(),
