@@ -27,6 +27,7 @@ export RLM_PROVIDER="${RLM_PROVIDER:-openrouter}"
 export RLM_MODEL="${RLM_MODEL:-google/gemini-3-flash-preview}"
 export RLM_MAX_DEPTH="${RLM_MAX_DEPTH:-3}"
 export RLM_MAX_CALLS="${RLM_MAX_CALLS:-128}"
+E2E_MAX_CALLS_DEFAULT="$RLM_MAX_CALLS"
 # E2E tasks are read-only probes; choose no-jj mode explicitly.
 export RLM_JJ=0
 
@@ -46,6 +47,10 @@ should_run() {
 
 # Temp dir for test artifacts
 TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/rlm_e2e.XXXXXX")
+unset RLM_CALL_COUNT RLM_START_TIME RLM_ROOT_PROMPT_FILE
+export RLM_TRACE_ID="e2e-$$"
+export RLM_CALL_COUNTER_FILE="$TEST_TMP/suite.counter"
+rm -f "$RLM_CALL_COUNTER_FILE"
 export PI_TRACE_FILE="$TEST_TMP/trace.log"
 trap 'rm -rf "$TEST_TMP"' EXIT
 
@@ -189,9 +194,8 @@ EOF
 
         unset RLM_TIMEOUT
 
-        # Kill any orphan pi/parser processes left by the timeout
-        pkill -f "rlm_parse_json" 2>/dev/null || true
-        sleep 1  # Let any orphan output drain
+        # The runtime must terminate only the process group it launched. This
+        # harness never uses broad pkill/killall cleanup against user processes.
     else
         skip "E5: timeout enforcement" "RLM_TIMEOUT not implemented yet"
     fi
@@ -204,8 +208,10 @@ if should_run "E6"; then
         echo "--- E6: Max calls enforcement ---"
         export CONTEXT="$TEST_TMP/ctx_e4.txt"
         export RLM_DEPTH=0
-        export RLM_CALL_COUNT=99
+        export RLM_CALL_COUNT=100
         export RLM_MAX_CALLS=100
+        export RLM_CALL_COUNTER_FILE="$TEST_TMP/e6.counter"
+        rm -f "$RLM_CALL_COUNTER_FILE"
 
         START=$(date +%s)
         OUTPUT=$(rlm_query "This should be blocked." 2>&1 || true)
@@ -217,7 +223,9 @@ if should_run "E6"; then
             fail "E6: max calls" "expected error about max calls, got: $(echo "$OUTPUT" | head -3)"
         fi
 
-        unset RLM_CALL_COUNT RLM_MAX_CALLS
+        unset RLM_CALL_COUNT
+        export RLM_MAX_CALLS="$E2E_MAX_CALLS_DEFAULT"
+        export RLM_CALL_COUNTER_FILE="$TEST_TMP/suite.counter"
     else
         skip "E6: max calls enforcement" "RLM_MAX_CALLS not implemented yet"
     fi
@@ -237,6 +245,8 @@ EOF
     export RLM_DEPTH=0
     export RLM_MAX_CALLS=2  # Permit calls 1..2; trace inspection below still detects an unwanted sub-call
     unset RLM_CALL_COUNT 2>/dev/null || true
+    export RLM_CALL_COUNTER_FILE="$TEST_TMP/e7.counter"
+    rm -f "$RLM_CALL_COUNTER_FILE"
 
     TRACE_E7="$TEST_TMP/trace_e7.log"
     export PI_TRACE_FILE="$TRACE_E7"
@@ -262,7 +272,9 @@ EOF
     fi
 
     export PI_TRACE_FILE="$TEST_TMP/trace.log"
-    unset RLM_MAX_CALLS RLM_CALL_COUNT 2>/dev/null || true
+    unset RLM_CALL_COUNT 2>/dev/null || true
+    export RLM_MAX_CALLS="$E2E_MAX_CALLS_DEFAULT"
+    export RLM_CALL_COUNTER_FILE="$TEST_TMP/suite.counter"
 fi
 
 # ─── E8: Architectural invariant — self-similarity across depths ────────
@@ -310,7 +322,12 @@ if should_run "E9"; then
         PROMPT_E9="Use the rlm_query tool exactly once with this exact prompt: Reply with exactly CHILD_OK. Then reply with exactly the child answer and no other text."
 
         # JSON mode keeps configured cost budgets measurable while the runtime
-        # still projects parsed child text back to the root agent.
+        # still projects parsed child text back to the root agent. E9 owns an
+        # isolated call counter so ambient sessions and earlier E2E cases cannot
+        # change its one-child assertion.
+        unset RLM_CALL_COUNT
+        export RLM_CALL_COUNTER_FILE="$TEST_TMP/e9.counter"
+        rm -f "$RLM_CALL_COUNTER_FILE"
         START=$(date +%s)
         set +e
         RLM_DEPTH=0 \
@@ -345,6 +362,7 @@ if should_run "E9"; then
         fi
 
         export PI_TRACE_FILE="$TEST_TMP/trace.log"
+        export RLM_CALL_COUNTER_FILE="$TEST_TMP/suite.counter"
     fi
 fi
 # ─── Summary ──────────────────────────────────────────────────────────────
