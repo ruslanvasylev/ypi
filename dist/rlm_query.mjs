@@ -702,8 +702,8 @@ function createJsonDecoder(onText) {
 }
 function normalizeChildOutput(result) {
   const warnings = [
-    result.stdoutTruncated ? `Child stdout diagnostic capture exceeded ${MAX_CHILD_STREAM_CHARS} characters; remainder discarded` : "",
-    result.stderrTruncated ? `Child stderr capture exceeded ${MAX_CHILD_STREAM_CHARS} characters; remainder discarded` : "",
+    result.stdoutTruncated ? `Child stdout stream exceeded ${MAX_CHILD_STREAM_CHARS} characters; raw diagnostics were not retained` : "",
+    result.stderrTruncated ? `Child stderr exceeded ${MAX_TOOL_OUTPUT_CHARS} characters; remainder discarded` : "",
     result.textTruncated ? `Child answer exceeded ${MAX_TOOL_OUTPUT_CHARS} characters; remainder discarded` : "",
     result.jsonEventTruncated ? `Oversized Pi JSON event exceeded ${MAX_JSON_EVENT_CHARS} characters and was skipped` : "",
     result.jsonCostIncomplete ? "Cost accounting is incomplete because an oversized turn_end or unclassified Pi JSON event was skipped" : ""
@@ -742,8 +742,8 @@ function runChildProcess(options) {
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32"
     });
-    const rawStdout = createBoundedCapture(MAX_CHILD_STREAM_CHARS);
-    const rawStderr = createBoundedCapture(MAX_CHILD_STREAM_CHARS);
+    let stdoutCharacters = 0;
+    const rawStderr = createBoundedCapture(MAX_TOOL_OUTPUT_CHARS);
     const plainText = createBoundedCapture(MAX_TOOL_OUTPUT_CHARS);
     const jsonDecoder = createJsonDecoder(options.onText);
     let timedOut = false;
@@ -754,7 +754,7 @@ function runChildProcess(options) {
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
-      rawStdout.append(chunk);
+      stdoutCharacters += chunk.length;
       if (options.jsonMode)
         jsonDecoder.append(chunk);
       else {
@@ -809,11 +809,10 @@ function runChildProcess(options) {
       resolve({
         code: timedOut ? 124 : cancelled ? 130 : code ?? signalledExitCode(childSignal),
         signal: childSignal,
-        stdout: rawStdout.text(),
         stderr: rawStderr.text(),
         text: options.jsonMode ? json.text : plainText.text(),
         cost: options.jsonMode ? json.cost : undefined,
-        stdoutTruncated: rawStdout.truncated,
+        stdoutTruncated: stdoutCharacters > MAX_CHILD_STREAM_CHARS,
         stderrTruncated: rawStderr.truncated,
         textTruncated: options.jsonMode ? json.textTruncated : plainText.truncated,
         jsonEventTruncated: options.jsonMode ? json.jsonEventTruncated : false,

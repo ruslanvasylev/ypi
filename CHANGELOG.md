@@ -17,7 +17,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - `ypi`, `rlm_query`, and `ypi-doctor` prefer the package-local exact Pi dependency over a stale PATH binary. The pure `pi-recursive` package follows Pi's package contract by declaring host-provided Pi and `typebox` as `"*"` peers.
 
 ### Fixed
-- Native child stdout and stderr are retained through bounded streaming capture instead of unbounded string concatenation, preventing large Pi JSON streams from reaching V8's maximum string length before final tool-output truncation.
+- Native child answers and stderr are retained through bounded streaming capture while raw stdout is counted but not retained; incremental JSON events are parsed as they arrive, preventing large Pi streams from reaching V8's maximum string length before final tool-output truncation.
 - CLI `rlm_query --async` closes the background worker's inherited stdio so documented `JOB=$(rlm_query --async ...)` capture returns immediately; sentinels now record the eventual child exit code and cleanup runs even when the child fails.
 - Native recursion depth parsing now rejects integer prefixes such as `0junk` and values outside the safe-integer range instead of silently accepting the numeric prefix.
 - Native and CLI explicit no-jj children now share the same built-in mutator exclusion policy without a global tool allowlist; requested-but-unavailable jj fails with explicit choices instead of silently downgrading task capability. Extension-isolated children keep the standalone ypi system prompt through both adapters.

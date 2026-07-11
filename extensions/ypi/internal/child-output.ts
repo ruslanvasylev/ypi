@@ -5,7 +5,6 @@ export const MAX_CHILD_STREAM_CHARS = 16 * 1024 * 1024;
 const MAX_JSON_EVENT_CHARS = 1024 * 1024;
 
 export interface ChildOutputSnapshot {
-	stdout: string;
 	stderr: string;
 	text: string;
 	cost?: CostSummary;
@@ -147,8 +146,8 @@ export function createJsonDecoder(onText?: (text: string) => void): JsonStreamDe
 
 export function normalizeChildOutput(result: ChildOutputSnapshot): NormalizedChildOutput {
 	const warnings = [
-		result.stdoutTruncated ? `Child stdout diagnostic capture exceeded ${MAX_CHILD_STREAM_CHARS} characters; remainder discarded` : "",
-		result.stderrTruncated ? `Child stderr capture exceeded ${MAX_CHILD_STREAM_CHARS} characters; remainder discarded` : "",
+		result.stdoutTruncated ? `Child stdout stream exceeded ${MAX_CHILD_STREAM_CHARS} characters; raw diagnostics were not retained` : "",
+		result.stderrTruncated ? `Child stderr exceeded ${MAX_TOOL_OUTPUT_CHARS} characters; remainder discarded` : "",
 		result.textTruncated ? `Child answer exceeded ${MAX_TOOL_OUTPUT_CHARS} characters; remainder discarded` : "",
 		result.jsonEventTruncated ? `Oversized Pi JSON event exceeded ${MAX_JSON_EVENT_CHARS} characters and was skipped` : "",
 		result.jsonCostIncomplete ? "Cost accounting is incomplete because an oversized turn_end or unclassified Pi JSON event was skipped" : "",

@@ -40,8 +40,8 @@ export function runChildProcess(options: ChildProcessOptions): Promise<ChildProc
 			stdio: ["ignore", "pipe", "pipe"],
 			detached: process.platform !== "win32",
 		});
-		const rawStdout = createBoundedCapture(MAX_CHILD_STREAM_CHARS);
-		const rawStderr = createBoundedCapture(MAX_CHILD_STREAM_CHARS);
+		let stdoutCharacters = 0;
+		const rawStderr = createBoundedCapture(MAX_TOOL_OUTPUT_CHARS);
 		const plainText = createBoundedCapture(MAX_TOOL_OUTPUT_CHARS);
 		const jsonDecoder = createJsonDecoder(options.onText);
 		let timedOut = false;
@@ -53,7 +53,7 @@ export function runChildProcess(options: ChildProcessOptions): Promise<ChildProc
 		child.stdout.setEncoding("utf8");
 		child.stderr.setEncoding("utf8");
 		child.stdout.on("data", (chunk: string) => {
-			rawStdout.append(chunk);
+			stdoutCharacters += chunk.length;
 			if (options.jsonMode) jsonDecoder.append(chunk);
 			else {
 				const accepted = plainText.append(chunk);
@@ -92,11 +92,10 @@ export function runChildProcess(options: ChildProcessOptions): Promise<ChildProc
 			resolve({
 				code: timedOut ? 124 : cancelled ? 130 : code ?? signalledExitCode(childSignal),
 				signal: childSignal,
-				stdout: rawStdout.text(),
 				stderr: rawStderr.text(),
 				text: options.jsonMode ? json.text : plainText.text(),
 				cost: options.jsonMode ? json.cost : undefined,
-				stdoutTruncated: rawStdout.truncated,
+				stdoutTruncated: stdoutCharacters > MAX_CHILD_STREAM_CHARS,
 				stderrTruncated: rawStderr.truncated,
 				textTruncated: options.jsonMode ? json.textTruncated : plainText.truncated,
 				jsonEventTruncated: options.jsonMode ? json.jsonEventTruncated : false,

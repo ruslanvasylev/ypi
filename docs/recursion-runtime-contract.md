@@ -104,8 +104,8 @@ Resolved stabilization gaps remain part of the evidence history:
 - explicit `RLM_JJ=0` children exclude built-in mutators through both adapters
   without a global allowlist that could hide installed package tools;
   requested-but-unavailable jj fails with explicit read-only/initialize/unsafe-write choices
-- native stdout and stderr are now bounded while the child stream is drained;
-  the final result reports when raw capture was truncated
+- native answer/stderr retention is bounded while stdout is drained and parsed;
+  raw stdout is counted rather than retained, and the result reports threshold crossings
 - command substitution around CLI `--async` now returns job metadata without
   waiting for the child; the sentinel records the eventual child exit code and
   cleanup runs for success and failure

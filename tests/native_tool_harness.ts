@@ -263,7 +263,7 @@ async function run(): Promise<void> {
 	process.env.YPI_FAKE_PI_MODE = "huge";
 	ensureEnvironment(runtime, context());
 	const oversizedText = await invoke();
-	assertContains("N5b: oversized stdout reports streaming capture bound", oversizedText, "Child stdout diagnostic capture exceeded 16777216 characters");
+	assertContains("N5b: oversized stdout reports streaming bound", oversizedText, "Child stdout stream exceeded 16777216 characters");
 	record(oversizedText.length < 70 * 1024, "N5b: oversized stdout result stays near final tool-output cap", `length=${oversizedText.length}`);
 
 	clearYpiEnv();
