@@ -1327,6 +1327,11 @@ FAILPI
     if [ "$REJECT_RC" -ne 0 ]; then pass "G53c: async guardrail rejection returns nonzero"; else fail "G53c: async guardrail rejection returns nonzero" "$REJECTED"; fi
     assert_contains "G53c: async rejection reports depth guard" "Max depth exceeded" "$REJECTED"
     assert_not_contains "G53c: rejected async call emits no accepted job metadata" '"job_id"' "$REJECTED"
+    if find "$TEST_TMP" -maxdepth 1 -type d -name "rlm_async_async_reject_*" -print -quit | grep -q .; then
+        fail "G53c: rejected async job directory is removed" "stale private job directory"
+    else
+        pass "G53c: rejected async job directory is removed"
+    fi
 
     # G53d: inherited context is snapshotted at invocation time, not read from a
     # mutable caller path after metadata returns.

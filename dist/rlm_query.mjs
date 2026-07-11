@@ -157,33 +157,38 @@ function createAsyncJob(input) {
   const outputPath = path3.join(jobDir, "output.txt");
   const sentinelPath = path3.join(jobDir, "done");
   const admissionPath = path3.join(jobDir, "admitted");
-  writeFileSync(outputPath, "", { flag: "wx", mode: 384 });
-  let ownedContextPath;
-  if (input.context !== undefined) {
-    ownedContextPath = path3.join(jobDir, "context.txt");
-    writeFileSync(ownedContextPath, input.context, { flag: "wx", mode: 384 });
-  } else if (input.contextPath && existsSync2(input.contextPath)) {
-    ownedContextPath = snapshotFile(input.contextPath, path3.join(jobDir, "context.txt"));
+  try {
+    writeFileSync(outputPath, "", { flag: "wx", mode: 384 });
+    let ownedContextPath;
+    if (input.context !== undefined) {
+      ownedContextPath = path3.join(jobDir, "context.txt");
+      writeFileSync(ownedContextPath, input.context, { flag: "wx", mode: 384 });
+    } else if (input.contextPath && existsSync2(input.contextPath)) {
+      ownedContextPath = snapshotFile(input.contextPath, path3.join(jobDir, "context.txt"));
+    }
+    let parentSessionSnapshot;
+    if (input.fork && process.env.RLM_SESSION_FILE && existsSync2(process.env.RLM_SESSION_FILE)) {
+      parentSessionSnapshot = snapshotFile(process.env.RLM_SESSION_FILE, path3.join(jobDir, "parent-session.jsonl"));
+    }
+    return {
+      prompt: input.prompt,
+      fork: input.fork,
+      notifyPid: input.notifyPid,
+      cwd: input.cwd,
+      contextPath: ownedContextPath,
+      ownedContextPath,
+      parentSessionSnapshot,
+      outputPath,
+      sentinelPath,
+      admissionPath,
+      jobPath,
+      extensionPath: input.extensionPath,
+      treeStartTimeSeconds: input.treeStartTimeSeconds
+    };
+  } catch (error) {
+    rmSync(jobDir, { recursive: true, force: true });
+    throw error;
   }
-  let parentSessionSnapshot;
-  if (input.fork && process.env.RLM_SESSION_FILE && existsSync2(process.env.RLM_SESSION_FILE)) {
-    parentSessionSnapshot = snapshotFile(process.env.RLM_SESSION_FILE, path3.join(jobDir, "parent-session.jsonl"));
-  }
-  return {
-    prompt: input.prompt,
-    fork: input.fork,
-    notifyPid: input.notifyPid,
-    cwd: input.cwd,
-    contextPath: ownedContextPath,
-    ownedContextPath,
-    parentSessionSnapshot,
-    outputPath,
-    sentinelPath,
-    admissionPath,
-    jobPath,
-    extensionPath: input.extensionPath,
-    treeStartTimeSeconds: input.treeStartTimeSeconds
-  };
 }
 function launchAsyncWorker(job, cliPath) {
   writeFileSync(job.jobPath, `${JSON.stringify(job)}
@@ -210,6 +215,15 @@ function readAsyncJob(jobPath) {
 function markAsyncJobAdmitted(job) {
   writeFileSync(job.admissionPath, `accepted
 `, { flag: "wx", mode: 384 });
+}
+function discardAsyncJob(job, workerPid = 0) {
+  if (workerPid > 0 && !existsSync2(job.admissionPath) && !existsSync2(job.sentinelPath)) {
+    const target = process.platform === "win32" ? workerPid : -workerPid;
+    try {
+      process.kill(target, "SIGTERM");
+    } catch {}
+  }
+  rmSync(path3.dirname(job.jobPath), { recursive: true, force: true });
 }
 async function waitForAsyncAdmission(job, timeoutMilliseconds = 5000) {
   const deadline = Date.now() + timeoutMilliseconds;
@@ -1183,8 +1197,10 @@ async function main(args = process.argv.slice(2)) {
   const flags = parseFlags(args);
   const source = await resolveContextSource();
   if (flags.async) {
+    let job;
+    let pid = 0;
     try {
-      const job = createAsyncJob({
+      job = createAsyncJob({
         prompt: flags.prompt,
         fork: flags.fork,
         notifyPid: flags.notifyPid,
@@ -1194,7 +1210,7 @@ async function main(args = process.argv.slice(2)) {
         extensionPath,
         treeStartTimeSeconds: invocationStartedAt
       });
-      const pid = launchAsyncWorker(job, fileURLToPath2(import.meta.url));
+      pid = launchAsyncWorker(job, fileURLToPath2(import.meta.url));
       await waitForAsyncAdmission(job);
       process.stdout.write(`${JSON.stringify({
         job_id: path8.basename(path8.dirname(job.jobPath)),
@@ -1205,6 +1221,8 @@ async function main(args = process.argv.slice(2)) {
 `);
       return 0;
     } catch (error) {
+      if (job)
+        discardAsyncJob(job, pid);
       console.error(cliErrorText(error));
       return errorExitCode(error);
     } finally {

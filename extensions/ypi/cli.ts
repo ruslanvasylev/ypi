@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ensureEnvironment } from "./env.ts";
-import { createAsyncJob, finishAsyncJob, launchAsyncWorker, markAsyncJobAdmitted, readAsyncJob, waitForAsyncAdmission } from "./internal/cli-async.ts";
+import { createAsyncJob, discardAsyncJob, finishAsyncJob, launchAsyncWorker, markAsyncJobAdmitted, readAsyncJob, waitForAsyncAdmission } from "./internal/cli-async.ts";
 import { resolveContextSource, type ContextSource } from "./internal/cli-input.ts";
 import { formatRecursiveResultForTool, RecursiveChildError, runRecursiveChild } from "./runtime-core.ts";
 import { resolveRuntime, type YpiRuntime } from "./runtime.ts";
@@ -159,8 +159,10 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
 	const source = await resolveContextSource();
 
 	if (flags.async) {
+		let job: ReturnType<typeof createAsyncJob> | undefined;
+		let pid = 0;
 		try {
-			const job = createAsyncJob({
+			job = createAsyncJob({
 				prompt: flags.prompt,
 				fork: flags.fork,
 				notifyPid: flags.notifyPid,
@@ -170,7 +172,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
 				extensionPath,
 				treeStartTimeSeconds: invocationStartedAt,
 			});
-			const pid = launchAsyncWorker(job, fileURLToPath(import.meta.url));
+			pid = launchAsyncWorker(job, fileURLToPath(import.meta.url));
 			await waitForAsyncAdmission(job);
 			process.stdout.write(`${JSON.stringify({
 				job_id: path.basename(path.dirname(job.jobPath)),
@@ -180,6 +182,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
 			})}\n`);
 			return 0;
 		} catch (error) {
+			if (job) discardAsyncJob(job, pid);
 			console.error(cliErrorText(error));
 			return errorExitCode(error);
 		} finally {

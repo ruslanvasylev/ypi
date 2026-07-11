@@ -61,36 +61,41 @@ export function createAsyncJob(input: AsyncJobInput): AsyncJob {
 	const outputPath = path.join(jobDir, "output.txt");
 	const sentinelPath = path.join(jobDir, "done");
 	const admissionPath = path.join(jobDir, "admitted");
-	writeFileSync(outputPath, "", { flag: "wx", mode: 0o600 });
+	try {
+		writeFileSync(outputPath, "", { flag: "wx", mode: 0o600 });
 
-	let ownedContextPath: string | undefined;
-	if (input.context !== undefined) {
-		ownedContextPath = path.join(jobDir, "context.txt");
-		writeFileSync(ownedContextPath, input.context, { flag: "wx", mode: 0o600 });
-	} else if (input.contextPath && existsSync(input.contextPath)) {
-		ownedContextPath = snapshotFile(input.contextPath, path.join(jobDir, "context.txt"));
+		let ownedContextPath: string | undefined;
+		if (input.context !== undefined) {
+			ownedContextPath = path.join(jobDir, "context.txt");
+			writeFileSync(ownedContextPath, input.context, { flag: "wx", mode: 0o600 });
+		} else if (input.contextPath && existsSync(input.contextPath)) {
+			ownedContextPath = snapshotFile(input.contextPath, path.join(jobDir, "context.txt"));
+		}
+
+		let parentSessionSnapshot: string | undefined;
+		if (input.fork && process.env.RLM_SESSION_FILE && existsSync(process.env.RLM_SESSION_FILE)) {
+			parentSessionSnapshot = snapshotFile(process.env.RLM_SESSION_FILE, path.join(jobDir, "parent-session.jsonl"));
+		}
+
+		return {
+			prompt: input.prompt,
+			fork: input.fork,
+			notifyPid: input.notifyPid,
+			cwd: input.cwd,
+			contextPath: ownedContextPath,
+			ownedContextPath,
+			parentSessionSnapshot,
+			outputPath,
+			sentinelPath,
+			admissionPath,
+			jobPath,
+			extensionPath: input.extensionPath,
+			treeStartTimeSeconds: input.treeStartTimeSeconds,
+		};
+	} catch (error) {
+		rmSync(jobDir, { recursive: true, force: true });
+		throw error;
 	}
-
-	let parentSessionSnapshot: string | undefined;
-	if (input.fork && process.env.RLM_SESSION_FILE && existsSync(process.env.RLM_SESSION_FILE)) {
-		parentSessionSnapshot = snapshotFile(process.env.RLM_SESSION_FILE, path.join(jobDir, "parent-session.jsonl"));
-	}
-
-	return {
-		prompt: input.prompt,
-		fork: input.fork,
-		notifyPid: input.notifyPid,
-		cwd: input.cwd,
-		contextPath: ownedContextPath,
-		ownedContextPath,
-		parentSessionSnapshot,
-		outputPath,
-		sentinelPath,
-		admissionPath,
-		jobPath,
-		extensionPath: input.extensionPath,
-		treeStartTimeSeconds: input.treeStartTimeSeconds,
-	};
 }
 
 export function launchAsyncWorker(job: AsyncJob, cliPath: string): number {
@@ -116,6 +121,14 @@ export function readAsyncJob(jobPath: string): AsyncJob {
 
 export function markAsyncJobAdmitted(job: AsyncJob): void {
 	writeFileSync(job.admissionPath, "accepted\n", { flag: "wx", mode: 0o600 });
+}
+
+export function discardAsyncJob(job: AsyncJob, workerPid = 0): void {
+	if (workerPid > 0 && !existsSync(job.admissionPath) && !existsSync(job.sentinelPath)) {
+		const target = process.platform === "win32" ? workerPid : -workerPid;
+		try { process.kill(target, "SIGTERM"); } catch { /* worker already exited */ }
+	}
+	rmSync(path.dirname(job.jobPath), { recursive: true, force: true });
 }
 
 export async function waitForAsyncAdmission(job: AsyncJob, timeoutMilliseconds = 5_000): Promise<void> {
