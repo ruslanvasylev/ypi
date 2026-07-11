@@ -49,6 +49,8 @@ cp -R "$PROJECT_DIR/extensions/ypi" "$MINIMAL_ROOT/extensions/ypi"
 EXTENSION="$MINIMAL_ROOT/extensions/recursive.ts"
 
 TRACE="$TEST_TMP/pure-extension.trace"
+COUNTER_FILE="$TEST_TMP/pure-extension.counter"
+COST_FILE="$TEST_TMP/pure-extension.cost.jsonl"
 STDOUT_FILE="$TEST_TMP/pure-extension.stdout"
 STDERR_FILE="$TEST_TMP/pure-extension.stderr"
 STATUS_FILE="$TEST_TMP/pure-extension.status"
@@ -69,12 +71,14 @@ else
 fi
 
 set +e
-env -u RLM_PROVIDER -u RLM_MODEL \
+env -u RLM_PROVIDER -u RLM_MODEL -u RLM_CALL_COUNT -u RLM_START_TIME -u RLM_ROOT_PROMPT_FILE \
 	YPI_EXTENSION_ROOT="$MINIMAL_ROOT" \
 	YPI_EXTENSION_DEBUG=1 \
-	RLM_MAX_DEPTH=2 \
+	RLM_TRACE_ID=pure-extension-e2e \
+	RLM_CALL_COUNTER_FILE="$COUNTER_FILE" RLM_COST_FILE="$COST_FILE" \
+	RLM_MAX_CALLS=4 RLM_MAX_DEPTH=2 \
 	RLM_JJ=0 \
-	RLM_JSON=0 \
+	RLM_JSON=1 \
 	PI_TRACE_FILE="$TRACE" \
 	timeout 120 pi -p --no-session \
 		--provider "$PI_E2E_PROVIDER" \
