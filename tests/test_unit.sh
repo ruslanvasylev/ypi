@@ -89,6 +89,14 @@ echo "RLM_MODEL=$RLM_MODEL"
 echo "RLM_THINKING_LEVEL=${RLM_THINKING_LEVEL:-}"
 echo "RLM_SYSTEM_PROMPT=$RLM_SYSTEM_PROMPT"
 echo "RLM_PROMPT_FILE=$RLM_PROMPT_FILE"
+PREVIOUS=""
+for ARG in "$@"; do
+    if [ "$PREVIOUS" = "--system-prompt" ] && [ -f "$ARG" ]; then
+        grep -q '# rlm_query — Recursive Language Model sub-call for Pi.' "$ARG" && echo "LEGACY_SELF_SOURCE=1" || true
+        grep -q '# rlm_query — thin CLI adapter' "$ARG" && echo "THIN_SELF_SOURCE=1" || true
+    fi
+    PREVIOUS="$ARG"
+done
 if [ -n "${RLM_PROMPT_FILE:-}" ] && [ -f "${RLM_PROMPT_FILE:-}" ]; then
     echo "PROMPT_CONTENT=$(cat "$RLM_PROMPT_FILE")"
 fi
@@ -283,6 +291,15 @@ OUTPUT=$(
 )
 assert_contains "T8b: ypi extension passed to child" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
 assert_not_contains "T8b: no duplicate system prompt with extension" "--system-prompt" "$OUTPUT"
+
+# T8c: the retained fallback embeds its own active implementation when it must
+# self-host without the canonical extension, not the thin canonical launcher.
+OUTPUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" YPI_LEGACY_IMPL=1 RLM_EXTENSIONS=0 \
+    RLM_DEPTH=0 RLM_MAX_DEPTH=3 rlm_query "Legacy self-host source?"
+)
+assert_contains "T8c: retained fallback embeds active legacy source" "LEGACY_SELF_SOURCE=1" "$OUTPUT"
+assert_not_contains "T8c: retained fallback does not embed thin launcher" "THIN_SELF_SOURCE=1" "$OUTPUT"
 
 # T9: missing system prompt file → no --system-prompt arg
 OUTPUT=$(
