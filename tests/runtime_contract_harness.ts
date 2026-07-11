@@ -15,9 +15,11 @@ const scratch = mkdtempSync(path.join(tmpdir(), "ypi_runtime_contract."));
 const fakePi = path.join(scratch, "pi");
 const logFile = path.join(scratch, "fake-pi.log");
 const contextFile = path.join(scratch, "context.txt");
+const staleRootPromptFile = path.join(scratch, "stale-root-prompt.txt");
 const sessionDir = path.join(scratch, "sessions");
 mkdirSync(sessionDir, { recursive: true });
 writeFileSync(contextFile, "CONTRACT_CONTEXT");
+writeFileSync(staleRootPromptFile, "STALE_ROOT_PROMPT");
 
 let pass = 0;
 let fail = 0;
@@ -135,6 +137,7 @@ function baseEnv(label: string): Record<string, string> {
 		RLM_MODEL: "contract-model",
 		RLM_THINKING_LEVEL: "contract-thinking",
 		RLM_SYSTEM_PROMPT: runtime.systemPromptPath,
+		RLM_ROOT_PROMPT_FILE: staleRootPromptFile,
 		RLM_TRACE_ID: `contract-${label}`,
 		RLM_CALL_COUNTER_FILE: path.join(scratch, `${label}.counter`),
 		CONTEXT: contextFile,

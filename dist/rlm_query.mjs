@@ -981,7 +981,7 @@ async function runRecursiveChild(runtime, request) {
       RLM_THINKING_LEVEL: thinkingLevel,
       RLM_SYSTEM_PROMPT: runtime.systemPromptPath,
       RLM_PROMPT_FILE: resources.promptFile,
-      RLM_ROOT_PROMPT_FILE: process.env.RLM_ROOT_PROMPT_FILE || resources.promptFile,
+      RLM_ROOT_PROMPT_FILE: depth === 0 ? resources.promptFile : process.env.RLM_ROOT_PROMPT_FILE || resources.promptFile,
       RLM_SESSION_DIR: process.env.RLM_SESSION_DIR || "",
       RLM_SESSION_FILE: resources.childSession || "",
       YPI_EXTENSION_ROOT: runtime.root,
