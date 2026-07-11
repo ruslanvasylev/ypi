@@ -141,6 +141,83 @@ set -e
 if [ "$EXTRA_CLI_RC" -ne 0 ]; then pass "CLI parity rejects an extra blocked call attempt"; else fail "CLI parity rejects an extra blocked call attempt" "three attempts passed"; fi
 if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["recursive_transition_present"] and not d["call_count_contract_pass"] and not d["contract_pass"]' "$PARITY_ROOT/canonical-cli/meta.json"; then pass "CLI parity separates transition proof from exact call count"; else fail "CLI parity separates transition proof from exact call count" "bad metadata"; fi
 
+cat > "$TEST_TMP/fake-clean-env-cli" <<'MOCK'
+#!/usr/bin/env bash
+env | sort > "$PARITY_ENV_PROBE"
+printf '2\n' > "$RLM_CALL_COUNTER_FILE"
+printf '%s\n' \
+  '[00:00:00.000] depth=0→1 PID=1 call=1 trace=test caller=cli prompt: root' \
+  '[00:00:00.001] depth=1→2 PID=2 call=2 trace=test caller=tool prompt: child' > "$PI_TRACE_FILE"
+printf '%s' 'RESULT=803 EVIDENCE=KEY_ALPHA,KEY_BETA,KEY_GAMMA'
+MOCK
+chmod +x "$TEST_TMP/fake-clean-env-cli"
+set +e
+RLM_CHILD_MODEL=ambient-model RLM_CHILD_PROVIDER=ambient-provider RLM_SESSION_DIR=/poison/session \
+RLM_AMBIENT_EXTENSIONS=1 RLM_CALL_COUNT=99 RLM_CALL_COUNTER_FILE=/poison/counter \
+RLM_COST_FILE=/poison/cost RLM_TRACE_ID=poison RLM_ROOT_PROMPT_FILE=/poison/root \
+YPI_EXTENSION_ROOT=/poison/root YPI_CLI_ROOT_OVERRIDE=/poison/cli YPI_EXTENSION_PROMPT_MODE=replace \
+CONTEXT=/poison/context PI_TRACE_FILE=/poison/trace PARITY_ENV_PROBE="$TEST_TMP/parity-env.txt" \
+YPI_RLM_QUERY_BIN="$TEST_TMP/fake-clean-env-cli" YPI_EVAL_OUTPUT_ROOT="$PARITY_ROOT" \
+YPI_PI_BIN="${YPI_PI_BIN:-$(command -v pi)}" \
+"$PROJECT_DIR/tests/eval/runtime-parity/run-lane.sh" canonical-cli >"$TEST_TMP/clean-cli.out" 2>"$TEST_TMP/clean-cli.err"
+CLEAN_CLI_RC=$?
+set -e
+if [ "$CLEAN_CLI_RC" -eq 0 ]; then pass "CLI parity runs through sanitized recursive environment"; else fail "CLI parity runs through sanitized recursive environment" "rc=$CLEAN_CLI_RC"; fi
+if PARITY_ROOT="$PARITY_ROOT" python3 - "$TEST_TMP/parity-env.txt" <<'PY'
+import os, sys
+values = {}
+for line in open(sys.argv[1]):
+    key, _, value = line.rstrip("\n").partition("=")
+    values[key] = value
+for key in ("RLM_CHILD_MODEL", "RLM_CHILD_PROVIDER", "RLM_SESSION_DIR", "RLM_AMBIENT_EXTENSIONS", "RLM_ROOT_PROMPT_FILE", "YPI_EXTENSION_ROOT", "YPI_CLI_ROOT_OVERRIDE", "YPI_EXTENSION_PROMPT_MODE"):
+    assert key not in values, (key, values.get(key))
+out = os.path.join(os.environ["PARITY_ROOT"], "canonical-cli")
+assert values["CONTEXT"] == os.path.join(out, "context.txt")
+assert values["PI_TRACE_FILE"] == os.path.join(out, "trace.log")
+assert values["RLM_CALL_COUNTER_FILE"] == os.path.join(out, "counter")
+assert values["RLM_COST_FILE"] == os.path.join(out, "cost.jsonl")
+assert values["RLM_TRACE_ID"] == "parity-canonical-cli"
+PY
+then pass "CLI parity replaces poisoned parent namespace with private lane state"; else fail "CLI parity replaces poisoned parent namespace with private lane state" "$(cat "$TEST_TMP/parity-env.txt")"; fi
+
+RUNBOOK_TMP="$TEST_TMP/runbook"
+mkdir -p "$RUNBOOK_TMP/repo"
+python3 - "$PROJECT_DIR/docs/bounded-recursive-development.md" "$RUNBOOK_TMP/init.sh" "$RUNBOOK_TMP/resume.sh" <<'PY'
+import re, sys
+blocks = re.findall(r"```bash\n(.*?)```", open(sys.argv[1]).read(), re.S)
+assert len(blocks) >= 2
+open(sys.argv[2], "w").write(blocks[0])
+open(sys.argv[3], "w").write(blocks[1])
+PY
+(
+  cd "$RUNBOOK_TMP/repo"
+  git init -q
+  git switch -q -c feature/test
+  YPI_RUN_BUDGET=2 YPI_RUN_DEADLINE_EPOCH=$(( $(date +%s) + 3600 )) bash "$RUNBOOK_TMP/init.sh"
+)
+RUNBOOK_ENVELOPE="$(find "$RUNBOOK_TMP/repo/tmp" -name envelope.sh -print)"
+RUNBOOK_RUN_DIR="${RUNBOOK_ENVELOPE%/envelope.sh}"
+if [ -f "$RUNBOOK_RUN_DIR/envelope.sh" ] && ! grep -Eq 'API_KEY|OAUTH_TOKEN|SECRET_ACCESS' "$RUNBOOK_RUN_DIR/envelope.sh"; then pass "bounded runbook persists only non-secret envelope controls"; else fail "bounded runbook persists only non-secret envelope controls" "missing or unsafe envelope"; fi
+printf '7\n' > "$RUNBOOK_RUN_DIR/calls"
+printf '%s\n' '{"cost":0.5,"tokens":10}' > "$RUNBOOK_RUN_DIR/cost.jsonl"
+python3 - "$RUNBOOK_TMP/resume.sh" "$RUNBOOK_RUN_DIR" <<'PY'
+import sys
+path, run_dir = sys.argv[1:]
+text = open(path).read().replace("<exact run directory from the continuation brief>", run_dir)
+open(path, "w").write(text + '\nprintf "RESUMED_COUNT=%s\\n" "$RLM_CALL_COUNT"\n')
+PY
+RUNBOOK_RESUME="$(bash "$RUNBOOK_TMP/resume.sh")"
+if [ "$RUNBOOK_RESUME" = "RESUMED_COUNT=7" ] && [ "$(cat "$RUNBOOK_RUN_DIR/calls")" = 7 ] && grep -q '"cost":0.5' "$RUNBOOK_RUN_DIR/cost.jsonl"; then pass "bounded runbook continuation preserves call and cost ledgers"; else fail "bounded runbook continuation preserves call and cost ledgers" "$RUNBOOK_RESUME"; fi
+set +e
+(
+  cd "$RUNBOOK_TMP/repo"
+  git branch -m master
+  YPI_RUN_BUDGET=2 YPI_RUN_DEADLINE_EPOCH=$(( $(date +%s) + 3600 )) bash "$RUNBOOK_TMP/init.sh"
+) >/dev/null 2>&1
+RUNBOOK_TRUNK_RC=$?
+set -e
+if [ "$RUNBOOK_TRUNK_RC" -ne 0 ]; then pass "bounded runbook refuses shared trunk"; else fail "bounded runbook refuses shared trunk" "rc=0"; fi
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

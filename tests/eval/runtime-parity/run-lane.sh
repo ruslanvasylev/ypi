@@ -13,6 +13,18 @@ LEGACY=0
 [[ "$LANE" == legacy-* ]] && LEGACY=1
 RLM_QUERY_BIN="${YPI_RLM_QUERY_BIN:-$REPO/rlm_query}"
 MAKE_BIN="${YPI_MAKE_BIN:-make}"
+# Preserve provider credentials and normal host configuration while removing
+# every ambient recursive/ypi namespace. Explicit lane values below are the
+# only recursive state admitted into the child, avoiding parent-tree counter,
+# route, session, and extension contamination without hand-maintaining a second
+# provider credential allowlist.
+CLEAN_ENV=(env -u CONTEXT -u PI_TRACE_FILE)
+while IFS='=' read -r key _; do
+  case "$key" in
+    RLM_*|YPI_*) CLEAN_ENV+=(-u "$key") ;;
+  esac
+done < <(env)
+
 TIME_PREFIX=()
 if /usr/bin/time -v true >/dev/null 2>&1; then
   TIME_PREFIX=(/usr/bin/time -v -o "$OUT/time.txt")
@@ -32,7 +44,7 @@ START_NS="$(python3 -c 'import time; print(time.monotonic_ns())')"
 set +e
 if [[ "$LANE" == *-cli ]]; then
   PROMPT="$(cat "$SCRIPT_DIR/prompt.txt")"
-  env -u RLM_ROOT_PROMPT_FILE -u RLM_START_TIME -u RLM_CALL_COUNT \
+  "${CLEAN_ENV[@]}" \
     YPI_LEGACY_IMPL="$LEGACY" YPI_PI_BIN="${YPI_PI_BIN:-$(command -v pi)}" \
     CONTEXT="$OUT/context.txt" RLM_PROVIDER="${PI_E2E_PROVIDER:-openai-codex}" \
     RLM_MODEL="${PI_E2E_MODEL:-gpt-5.6-sol}" RLM_THINKING_LEVEL="${PI_E2E_THINKING:-max}" \
@@ -44,7 +56,7 @@ if [[ "$LANE" == *-cli ]]; then
     >"$OUT/output.txt" 2>"$OUT/stderr.txt"
   RC=$?
 else
-  env -u RLM_ROOT_PROMPT_FILE -u RLM_START_TIME -u RLM_CALL_COUNT -u RLM_BUDGET -u RLM_COST_FILE \
+  "${CLEAN_ENV[@]}" \
     YPI_LEGACY_IMPL="$LEGACY" YPI_PI_BIN="${YPI_PI_BIN:-$(command -v pi)}" \
     RLM_PROVIDER="${PI_E2E_PROVIDER:-openai-codex}" RLM_MODEL="${PI_E2E_MODEL:-gpt-5.6-sol}" \
     RLM_THINKING_LEVEL="${PI_E2E_THINKING:-max}" RLM_DEPTH=0 RLM_MAX_DEPTH=2 RLM_MAX_CALLS=4 \
