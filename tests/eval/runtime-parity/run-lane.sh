@@ -74,7 +74,7 @@ if (out/'time.txt').exists():
   if m: rss=int(m.group(1))
 text=(out/'output.txt').read_text(errors='replace') if (out/'output.txt').exists() else ''
 trace=(out/'trace.log').read_text(errors='replace') if (out/'trace.log').exists() else ''
-spawned_transitions=len(re.findall(r'depth=\d+→\d+.*caller=',trace))
+spawned_transitions=len(re.findall(r'depth=\d+→\d+',trace))
 expected='RESULT=803 EVIDENCE=KEY_ALPHA,KEY_BETA,KEY_GAMMA' if lane.endswith('-cli') else 'E9: full ypi recursive child call'
 expected_present=expected in text
 recursive_transition_present=(

@@ -36,8 +36,8 @@ run() {  # $1=root, $2=optional flag -> sets RC, OUT
     set -e
 }
 
-# 1. fully consistent (caret peerDep, undated changelog) -> PASS in default mode
-R="$(mkfix good 0.6.0 0.6.0 0.79.4 ^0.79.4 0.79.4 '## [0.6.0] - Unreleased')"
+# 1. fully consistent (pinned ypi dep, unrestricted host peer, undated changelog) -> PASS in default mode
+R="$(mkfix good 0.6.0 0.6.0 0.79.4 '*' 0.79.4 '## [0.6.0] - Unreleased')"
 run "$R"
 [ "$RC" -eq 0 ] && pass "consistent repo passes (default mode)" || fail "consistent passes" "rc=$RC out=$OUT"
 
@@ -46,22 +46,27 @@ run "$R" --require-dated
 if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -qi 'dated'; then pass "--require-dated fails on Unreleased heading"; else fail "--require-dated fails undated" "rc=$RC out=$OUT"; fi
 
 # 3. dated changelog -> PASS even with --require-dated
-R2="$(mkfix dated 0.6.0 0.6.0 0.79.4 ^0.79.4 0.79.4 '## [0.6.0] - 2026-06-22')"
+R2="$(mkfix dated 0.6.0 0.6.0 0.79.4 '*' 0.79.4 '## [0.6.0] - 2026-06-22')"
 run "$R2" --require-dated
 [ "$RC" -eq 0 ] && pass "dated changelog passes --require-dated" || fail "dated passes" "rc=$RC out=$OUT"
 
 # 4. version skew between ypi and pi-recursive -> FAIL
-R="$(mkfix skew 0.6.0 0.6.1 0.79.4 ^0.79.4 0.79.4 '## [0.6.0] - 2026-06-22')"
+R="$(mkfix skew 0.6.0 0.6.1 0.79.4 '*' 0.79.4 '## [0.6.0] - 2026-06-22')"
 run "$R"
 if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -qi 'lockstep'; then pass "ypi/pi-recursive version skew fails"; else fail "version skew fails" "rc=$RC out=$OUT"; fi
 
 # 5. pinned-pi skew (.pi-version diverges from deps) -> FAIL
-R="$(mkfix piskew 0.6.0 0.6.0 0.79.4 ^0.79.4 0.79.10 '## [0.6.0] - 2026-06-22')"
+R="$(mkfix piskew 0.6.0 0.6.0 0.79.4 '*' 0.79.10 '## [0.6.0] - 2026-06-22')"
 run "$R"
 if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -qi 'pinned pi'; then pass "pinned-pi skew fails"; else fail "pinned-pi skew fails" "rc=$RC out=$OUT"; fi
 
-# 6. missing CHANGELOG entry for the version -> FAIL
-R="$(mkfix nocl 0.6.0 0.6.0 0.79.4 ^0.79.4 0.79.4 '## [0.5.0] - 2026-01-01')"
+# 6. a narrowed pi-recursive peer would install or bind a second Pi runtime -> FAIL
+R="$(mkfix narrowpeer 0.6.0 0.6.0 0.79.4 ^0.79.4 0.79.4 '## [0.6.0] - 2026-06-22')"
+run "$R"
+if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -qi 'unrestricted'; then pass "narrowed host Pi peer fails"; else fail "narrowed host Pi peer fails" "rc=$RC out=$OUT"; fi
+
+# 7. missing CHANGELOG entry for the version -> FAIL
+R="$(mkfix nocl 0.6.0 0.6.0 0.79.4 '*' 0.79.4 '## [0.5.0] - 2026-01-01')"
 run "$R"
 if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -qi 'CHANGELOG'; then pass "missing changelog entry fails"; else fail "missing changelog entry fails" "rc=$RC out=$OUT"; fi
 

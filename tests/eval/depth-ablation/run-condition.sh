@@ -55,7 +55,7 @@ if (out/'cost.jsonl').exists():
       row=json.loads(line); cost+=float(row.get('cost',0)); tokens+=int(row.get('tokens',0)); cost_incomplete |= row.get('incomplete') is True
     except Exception: pass
 trace=(out/'trace.log').read_text(errors='replace') if (out/'trace.log').exists() else ''
-spawned_transitions=len(re.findall(r'depth=\d+→\d+.*caller=',trace))
+spawned_transitions=len(re.findall(r'depth=\d+→\d+',trace))
 max_observed=0
 for p in (out/'sessions').glob('*.jsonl'):
   m=re.search(r'_d(\d+)_c',p.name)

@@ -88,6 +88,24 @@ CLI_RC=$?
 set -e
 if [ "$CLI_RC" -ne 0 ]; then pass "CLI parity lane requires two recursive calls, not answer text alone"; else fail "CLI parity lane requires two recursive calls, not answer text alone" "answer-only fake passed"; fi
 
+cat > "$TEST_TMP/fake-legacy-trace-cli" <<'MOCK'
+#!/usr/bin/env bash
+printf '2\n' > "$RLM_CALL_COUNTER_FILE"
+printf '%s\n' \
+  '[00:00:00.000] depth=0→1 PID=1 PPID=0 call=1 trace=test fork=false prompt: root' \
+  '[00:00:00.001] depth=1→2 PID=2 call=2 trace=test caller=tool prompt: child' > "$PI_TRACE_FILE"
+printf '%s' 'RESULT=803 EVIDENCE=KEY_ALPHA,KEY_BETA,KEY_GAMMA'
+MOCK
+chmod +x "$TEST_TMP/fake-legacy-trace-cli"
+set +e
+YPI_RLM_QUERY_BIN="$TEST_TMP/fake-legacy-trace-cli" YPI_EVAL_OUTPUT_ROOT="$PARITY_ROOT" \
+YPI_PI_BIN="${YPI_PI_BIN:-$(command -v pi)}" \
+"$PROJECT_DIR/tests/eval/runtime-parity/run-lane.sh" legacy-cli >"$TEST_TMP/legacy-cli.out" 2>"$TEST_TMP/legacy-cli.err"
+LEGACY_CLI_RC=$?
+set -e
+if [ "$LEGACY_CLI_RC" -eq 0 ]; then pass "CLI parity accepts two observed legacy trace transitions"; else fail "CLI parity accepts two observed legacy trace transitions" "rc=$LEGACY_CLI_RC"; fi
+if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["spawned_trace_transitions"] == 2 and d["recursive_transition_present"]' "$PARITY_ROOT/legacy-cli/meta.json"; then pass "legacy trace metadata counts both transition formats"; else fail "legacy trace metadata counts both transition formats" "bad metadata"; fi
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

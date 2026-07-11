@@ -19,13 +19,15 @@ We use [semver](https://semver.org/):
 - **major** (0.x → 1.0): breaking changes to CLI args, env vars, or rlm_query interface
 
 **Lockstep policy:** `package.json` and `pi-recursive/package.json` must always carry the
-**same `version`**. The pinned Pi version must also stay in sync across:
+**same `version`**. The tested Pi version must stay in sync between:
 - `package.json` → `dependencies["@earendil-works/pi-coding-agent"]`
-- `pi-recursive/package.json` → `peerDependencies["@earendil-works/pi-coding-agent"]`
 - `.pi-version`
 
-A release that bumps Pi compatibility in one package without the other ships a mismatched
-pair — do not do this.
+`pi-recursive` is a pure extension that executes inside the host Pi process. Its
+`peerDependencies["@earendil-works/pi-coding-agent"]` and `peerDependencies.typebox`
+must remain unrestricted (`"*"`) so installation does not select a second runtime
+copy. Host compatibility is proven by the extension and packed-consumer gates,
+not by pinning those peers.
 
 ## How to Release
 
@@ -43,8 +45,8 @@ make land                # preflight + encryption check + push + CI status (+age
 Edit `package.json` **and** `pi-recursive/package.json` and set the same new version in
 both. Don't use `npm version` — it calls git directly which conflicts with jj.
 
-While here, confirm the pinned Pi version is consistent across `package.json`,
-`pi-recursive/package.json` (the `peerDependencies` range), and `.pi-version`.
+While here, confirm the pinned Pi version is consistent between `package.json`
+and `.pi-version`, and confirm both `pi-recursive` host peers remain `"*"`.
 
 ### 3. Update CHANGELOG.md
 Add an entry under the new version. Follow the format already in the file. Note both
