@@ -5,6 +5,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+PINNED_PI="$(tr -d '[:space:]' < "$PROJECT_DIR/.pi-version")"
 
 if ! command -v bun >/dev/null 2>&1; then
 	echo "SKIP: bun not installed"
@@ -156,7 +157,7 @@ if env -u YPI_PI_BIN \
 else
 	fail "global ypi resolves package-local pi without system pi on PATH" "$(cat "$RUN_LOG")"
 fi
-assert_contains "global ypi executes its exact package-local Pi dependency" "0.79.4" "$(cat "$RUN_LOG")"
+assert_contains "global ypi executes its exact package-local Pi dependency" "$PINNED_PI" "$(cat "$RUN_LOG")"
 
 STALE_LOG="$TEST_TMP/ypi-stale-path.log"
 if env -u YPI_PI_BIN \
@@ -167,7 +168,7 @@ if env -u YPI_PI_BIN \
 else
 	fail "global ypi ignores an incompatible PATH Pi when package-local Pi exists" "$(cat "$STALE_LOG")"
 fi
-assert_contains "PATH shadow probe still uses package-local Pi" "0.79.4" "$(cat "$STALE_LOG")"
+assert_contains "PATH shadow probe still uses package-local Pi" "$PINNED_PI" "$(cat "$STALE_LOG")"
 assert_not_contains "PATH shadow probe does not execute stale Pi" "PACKED_CHILD_OK" "$(cat "$STALE_LOG")"
 
 DOCTOR_LOG="$TEST_TMP/installed-doctor.log"
@@ -178,7 +179,7 @@ if env -u YPI_PI_BIN HOME="$TEST_TMP/home" \
 else
 	fail "installed ypi-doctor validates package-local Pi despite PATH shadow" "$(cat "$DOCTOR_LOG")"
 fi
-assert_contains "installed doctor reads packaged Pi pin" "satisfies pinned 0.79.4" "$(cat "$DOCTOR_LOG")"
+assert_contains "installed doctor reads packaged Pi pin" "satisfies pinned $PINNED_PI" "$(cat "$DOCTOR_LOG")"
 
 RLM_RESOLVE_LOG="$TEST_TMP/rlm-local-pi-resolution.log"
 set +e
