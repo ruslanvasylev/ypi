@@ -52,6 +52,48 @@ function removePathEntry(currentPath: string | undefined, entry: string): string
 	return currentPath.split(path.delimiter).filter((candidate) => candidate && candidate !== entry).join(path.delimiter);
 }
 
+// Full-isolation children retain only environment values used by their selected
+// provider. Keep provider aliases/config companions beside the credential owner;
+// the flat allowlist below remains the parity surface for normal children.
+const PROVIDER_ENV_KEYS: Readonly<Record<string, readonly string[]>> = {
+	anthropic: ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"],
+	"github-copilot": ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"],
+	huggingface: ["HF_TOKEN"],
+	"ant-ling": ["ANT_LING_API_KEY"],
+	openai: ["OPENAI_API_KEY"],
+	"azure-openai-responses": ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_RESOURCE_NAME", "AZURE_OPENAI_API_VERSION", "AZURE_OPENAI_DEPLOYMENT_NAME_MAP", "AZURE_API_VERSION"],
+	deepseek: ["DEEPSEEK_API_KEY"],
+	nvidia: ["NVIDIA_API_KEY"],
+	google: ["GEMINI_API_KEY"],
+	"google-vertex": ["GOOGLE_CLOUD_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"],
+	groq: ["GROQ_API_KEY"],
+	cerebras: ["CEREBRAS_API_KEY"],
+	xai: ["XAI_API_KEY"],
+	fireworks: ["FIREWORKS_API_KEY"],
+	together: ["TOGETHER_API_KEY"],
+	openrouter: ["OPENROUTER_API_KEY"],
+	"vercel-ai-gateway": ["AI_GATEWAY_API_KEY"],
+	zai: ["ZAI_API_KEY"],
+	"zai-coding-cn": ["ZAI_CODING_CN_API_KEY"],
+	mistral: ["MISTRAL_API_KEY"],
+	minimax: ["MINIMAX_API_KEY"],
+	"minimax-cn": ["MINIMAX_CN_API_KEY"],
+	moonshotai: ["MOONSHOT_API_KEY"],
+	"moonshotai-cn": ["MOONSHOT_API_KEY"],
+	opencode: ["OPENCODE_API_KEY"],
+	"opencode-go": ["OPENCODE_API_KEY"],
+	"kimi-coding": ["KIMI_API_KEY"],
+	"cloudflare-workers-ai": ["CLOUDFLARE_API_KEY", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_HOST", "CLOUDFLARE_WORKERS_AI_BASE_URL"],
+	"cloudflare-ai-gateway": ["CLOUDFLARE_API_KEY", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID", "CLOUDFLARE_API_HOST", "CLOUDFLARE_AI_GATEWAY_HOST", "CLOUDFLARE_AI_GATEWAY_ANTHROPIC_BASE_URL", "CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL", "CLOUDFLARE_AI_GATEWAY_COMPAT_BASE_URL"],
+	xiaomi: ["XIAOMI_API_KEY"],
+	"xiaomi-token-plan-cn": ["XIAOMI_TOKEN_PLAN_CN_API_KEY"],
+	"xiaomi-token-plan-ams": ["XIAOMI_TOKEN_PLAN_AMS_API_KEY"],
+	"xiaomi-token-plan-sgp": ["XIAOMI_TOKEN_PLAN_SGP_API_KEY"],
+	"amazon-bedrock": ["AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_BEARER_TOKEN_BEDROCK", "AWS_REGION", "AWS_DEFAULT_REGION", "AWS_ENDPOINT_URL_BEDROCK_RUNTIME", "AWS_CONTAINER_CREDENTIALS_FULL_URI", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_WEB_IDENTITY_TOKEN_FILE"],
+	ollama: ["OLLAMA_API_KEY"],
+	portkey: ["PORTKEY_API_KEY"],
+};
+
 // Keep in sync with Pi's provider credential source of truth. The provider
 // allowlist test derives completeness from pinned pi-mono when available.
 export const PROVIDER_ENV_ALLOWLIST = new Set([
@@ -67,6 +109,13 @@ export const PROVIDER_ENV_ALLOWLIST = new Set([
 	"AZURE_API_VERSION", "CLOUDFLARE_API_HOST", "CLOUDFLARE_AI_GATEWAY_HOST", "CLOUDFLARE_AI_GATEWAY_ANTHROPIC_BASE_URL", "CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL",
 	"CLOUDFLARE_AI_GATEWAY_COMPAT_BASE_URL", "CLOUDFLARE_WORKERS_AI_BASE_URL",
 ]);
+
+export function retainSelectedProviderEnvironment(env: NodeJS.ProcessEnv, selectedProvider: string): void {
+	const retained = new Set(PROVIDER_ENV_KEYS[selectedProvider] || []);
+	for (const key of PROVIDER_ENV_ALLOWLIST) {
+		if (!retained.has(key)) delete env[key];
+	}
+}
 
 export function buildChildEnvironment(baseEnv: NodeJS.ProcessEnv, overrides: NodeJS.ProcessEnv, runtime: YpiRuntime, childDepth: number): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = {};

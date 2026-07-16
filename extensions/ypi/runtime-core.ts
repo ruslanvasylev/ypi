@@ -13,6 +13,7 @@ import {
 	childExtensionsEnabled,
 	READ_ONLY_EXCLUDED_BUILTINS,
 	resolveChildRoute,
+	retainSelectedProviderEnvironment,
 } from "./internal/child-config.ts";
 import { formatCombinedChildOutput, normalizeChildOutput, type ChildToolActivity } from "./internal/child-output.ts";
 import { runChildProcess } from "./internal/child-process.ts";
@@ -142,6 +143,7 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 	// cannot be disabled by a review-oriented child-extension override.
 	const extensionsEnabled = requestedMode === "implement" ? true : childExtensionsEnabled(childDepth);
 	const fullResourceIsolation = !extensionsEnabled && process.env.RLM_CHILD_DISCOVERY === "0";
+	const { provider, model, thinkingLevel } = resolveChildRoute(request.parent, childDepth);
 	const resources = acquireChildResources({
 		prompt: request.prompt,
 		context: request.context,
@@ -156,12 +158,12 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 		rootPromptPath: process.env.RLM_ROOT_PROMPT_FILE,
 		setupDeadlineMilliseconds: setupRemainingSeconds === undefined ? undefined : Date.now() + setupRemainingSeconds * 1000,
 		fullResourceIsolation,
+		selectedProvider: provider,
 		mode: requestedMode,
 	});
 
 	try {
 		if (request.signal?.aborted) throw new RecursiveChildError("Child Pi cancelled during admission before work started", 130);
-		const { provider, model, thinkingLevel } = resolveChildRoute(request.parent, childDepth);
 		const extensionPath = request.extensionPath === null ? "" : request.extensionPath || runtime.extensionPath;
 		if (requestedMode === "implement" && (!extensionPath || !existsSync(extensionPath))) {
 			throw new RecursiveChildError("Implement mode requires the exact canonical ypi extension so checkout write confinement cannot be bypassed. Continue implementation in the root session.", 1);
@@ -185,6 +187,7 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 			RLM_WRITE_MODE_CEILING: "review",
 			...(requestedMode === "implement" ? { RLM_AMBIENT_EXTENSIONS: "0" } : {}),
 		}, runtime, childDepth);
+		if (fullResourceIsolation) retainSelectedProviderEnvironment(env, provider);
 		if (resources.contextFile) env.CONTEXT = resources.contextFile;
 		if (resources.isolatedPiRoot) {
 			env.PI_CODING_AGENT_DIR = path.join(resources.isolatedPiRoot, "agent");

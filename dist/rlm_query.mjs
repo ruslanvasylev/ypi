@@ -577,6 +577,44 @@ function removePathEntry(currentPath, entry) {
     return currentPath;
   return currentPath.split(path6.delimiter).filter((candidate) => candidate && candidate !== entry).join(path6.delimiter);
 }
+var PROVIDER_ENV_KEYS = {
+  anthropic: ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"],
+  "github-copilot": ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"],
+  huggingface: ["HF_TOKEN"],
+  "ant-ling": ["ANT_LING_API_KEY"],
+  openai: ["OPENAI_API_KEY"],
+  "azure-openai-responses": ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_RESOURCE_NAME", "AZURE_OPENAI_API_VERSION", "AZURE_OPENAI_DEPLOYMENT_NAME_MAP", "AZURE_API_VERSION"],
+  deepseek: ["DEEPSEEK_API_KEY"],
+  nvidia: ["NVIDIA_API_KEY"],
+  google: ["GEMINI_API_KEY"],
+  "google-vertex": ["GOOGLE_CLOUD_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"],
+  groq: ["GROQ_API_KEY"],
+  cerebras: ["CEREBRAS_API_KEY"],
+  xai: ["XAI_API_KEY"],
+  fireworks: ["FIREWORKS_API_KEY"],
+  together: ["TOGETHER_API_KEY"],
+  openrouter: ["OPENROUTER_API_KEY"],
+  "vercel-ai-gateway": ["AI_GATEWAY_API_KEY"],
+  zai: ["ZAI_API_KEY"],
+  "zai-coding-cn": ["ZAI_CODING_CN_API_KEY"],
+  mistral: ["MISTRAL_API_KEY"],
+  minimax: ["MINIMAX_API_KEY"],
+  "minimax-cn": ["MINIMAX_CN_API_KEY"],
+  moonshotai: ["MOONSHOT_API_KEY"],
+  "moonshotai-cn": ["MOONSHOT_API_KEY"],
+  opencode: ["OPENCODE_API_KEY"],
+  "opencode-go": ["OPENCODE_API_KEY"],
+  "kimi-coding": ["KIMI_API_KEY"],
+  "cloudflare-workers-ai": ["CLOUDFLARE_API_KEY", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_HOST", "CLOUDFLARE_WORKERS_AI_BASE_URL"],
+  "cloudflare-ai-gateway": ["CLOUDFLARE_API_KEY", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID", "CLOUDFLARE_API_HOST", "CLOUDFLARE_AI_GATEWAY_HOST", "CLOUDFLARE_AI_GATEWAY_ANTHROPIC_BASE_URL", "CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL", "CLOUDFLARE_AI_GATEWAY_COMPAT_BASE_URL"],
+  xiaomi: ["XIAOMI_API_KEY"],
+  "xiaomi-token-plan-cn": ["XIAOMI_TOKEN_PLAN_CN_API_KEY"],
+  "xiaomi-token-plan-ams": ["XIAOMI_TOKEN_PLAN_AMS_API_KEY"],
+  "xiaomi-token-plan-sgp": ["XIAOMI_TOKEN_PLAN_SGP_API_KEY"],
+  "amazon-bedrock": ["AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_BEARER_TOKEN_BEDROCK", "AWS_REGION", "AWS_DEFAULT_REGION", "AWS_ENDPOINT_URL_BEDROCK_RUNTIME", "AWS_CONTAINER_CREDENTIALS_FULL_URI", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_WEB_IDENTITY_TOKEN_FILE"],
+  ollama: ["OLLAMA_API_KEY"],
+  portkey: ["PORTKEY_API_KEY"]
+};
 var PROVIDER_ENV_ALLOWLIST = new Set([
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_OAUTH_TOKEN",
@@ -641,6 +679,13 @@ var PROVIDER_ENV_ALLOWLIST = new Set([
   "CLOUDFLARE_AI_GATEWAY_COMPAT_BASE_URL",
   "CLOUDFLARE_WORKERS_AI_BASE_URL"
 ]);
+function retainSelectedProviderEnvironment(env, selectedProvider) {
+  const retained = new Set(PROVIDER_ENV_KEYS[selectedProvider] || []);
+  for (const key of PROVIDER_ENV_ALLOWLIST) {
+    if (!retained.has(key))
+      delete env[key];
+  }
+}
 function buildChildEnvironment(baseEnv, overrides, runtime, childDepth) {
   const env = {};
   for (const key of ["HOME", "PATH", "TMPDIR", "TEMP", "TMP", "SHELL", "USER", "LOGNAME"]) {
@@ -995,8 +1040,8 @@ function runChildProcess(options) {
 }
 
 // extensions/ypi/internal/child-resources.ts
-import { copyFileSync as copyFileSync2, existsSync as existsSync7, mkdirSync as mkdirSync4, mkdtempSync as mkdtempSync4, readFileSync as readFileSync4, rmSync as rmSync5, writeFileSync as writeFileSync4 } from "node:fs";
-import { tmpdir as tmpdir6 } from "node:os";
+import { chmodSync as chmodSync3, copyFileSync as copyFileSync2, existsSync as existsSync7, mkdirSync as mkdirSync4, mkdtempSync as mkdtempSync4, readFileSync as readFileSync4, rmSync as rmSync5, writeFileSync as writeFileSync4 } from "node:fs";
+import { homedir, tmpdir as tmpdir6 } from "node:os";
 import path8 from "node:path";
 
 // extensions/ypi/internal/task-files.ts
@@ -1327,6 +1372,52 @@ function removeArtifact(filePath) {
   if (filePath)
     rmSync5(path8.dirname(filePath), { recursive: true, force: true });
 }
+function configuredParentAgentDir() {
+  const home = process.env.HOME || homedir();
+  const configured = process.env.PI_CODING_AGENT_DIR;
+  if (!configured)
+    return path8.join(home, ".pi", "agent");
+  if (configured === "~")
+    return home;
+  if (configured.startsWith("~/") || configured.startsWith("~\\")) {
+    return path8.join(home, configured.slice(2));
+  }
+  return configured;
+}
+function projectSelectedProviderAuth(agentDir, selectedProvider) {
+  if (!selectedProvider)
+    return;
+  const parentAgentDir = configuredParentAgentDir();
+  const sourceAuthPath = path8.join(parentAgentDir, "auth.json");
+  if (!existsSync7(sourceAuthPath))
+    return;
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync4(sourceAuthPath, "utf8"));
+  } catch {
+    throw new Error("Full child isolation could not project selected provider authentication: parent auth.json is malformed");
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("Full child isolation could not project selected provider authentication: parent auth.json must be an object");
+  }
+  if (!Object.hasOwn(parsed, selectedProvider))
+    return;
+  const credential = parsed[selectedProvider];
+  if (typeof credential !== "object" || credential === null || Array.isArray(credential)) {
+    throw new Error("Full child isolation could not project selected provider authentication: selected provider entry is invalid");
+  }
+  const projected = Object.create(null);
+  Object.defineProperty(projected, selectedProvider, {
+    value: credential,
+    enumerable: true,
+    configurable: false,
+    writable: false
+  });
+  const targetAuthPath = path8.join(agentDir, "auth.json");
+  writeFileSync4(targetAuthPath, `${JSON.stringify(projected, null, 2)}
+`, { flag: "wx", mode: 384 });
+  chmodSync3(targetAuthPath, 384);
+}
 function acquireChildResources(input) {
   let promptFile;
   let contextFile;
@@ -1339,7 +1430,11 @@ function acquireChildResources(input) {
     standaloneSystemPromptFile = createStandaloneSystemPrompt(input, promptFile, contextFile);
     if (input.fullResourceIsolation) {
       isolatedPiRoot = mkdtempSync4(path8.join(tmpdir6(), "ypi_isolated_pi_"));
-      mkdirSync4(path8.join(isolatedPiRoot, "agent"), { recursive: true, mode: 448 });
+      chmodSync3(isolatedPiRoot, 448);
+      const isolatedAgentDir = path8.join(isolatedPiRoot, "agent");
+      mkdirSync4(isolatedAgentDir, { recursive: true, mode: 448 });
+      chmodSync3(isolatedAgentDir, 448);
+      projectSelectedProviderAuth(isolatedAgentDir, input.selectedProvider);
     }
     const childSession = childSessionFile(input);
     copyForkSession(input, childSession);
@@ -1439,6 +1534,7 @@ async function runRecursiveChild(runtime, request) {
   const setupRemainingSeconds = timeoutOrThrow();
   const extensionsEnabled = requestedMode === "implement" ? true : childExtensionsEnabled(childDepth);
   const fullResourceIsolation = !extensionsEnabled && process.env.RLM_CHILD_DISCOVERY === "0";
+  const { provider, model, thinkingLevel } = resolveChildRoute(request.parent, childDepth);
   const resources = acquireChildResources({
     prompt: request.prompt,
     context: request.context,
@@ -1453,12 +1549,12 @@ async function runRecursiveChild(runtime, request) {
     rootPromptPath: process.env.RLM_ROOT_PROMPT_FILE,
     setupDeadlineMilliseconds: setupRemainingSeconds === undefined ? undefined : Date.now() + setupRemainingSeconds * 1000,
     fullResourceIsolation,
+    selectedProvider: provider,
     mode: requestedMode
   });
   try {
     if (request.signal?.aborted)
       throw new RecursiveChildError("Child Pi cancelled during admission before work started", 130);
-    const { provider, model, thinkingLevel } = resolveChildRoute(request.parent, childDepth);
     const extensionPath = request.extensionPath === null ? "" : request.extensionPath || runtime.extensionPath;
     if (requestedMode === "implement" && (!extensionPath || !existsSync8(extensionPath))) {
       throw new RecursiveChildError("Implement mode requires the exact canonical ypi extension so checkout write confinement cannot be bypassed. Continue implementation in the root session.", 1);
@@ -1482,6 +1578,8 @@ async function runRecursiveChild(runtime, request) {
       RLM_WRITE_MODE_CEILING: "review",
       ...requestedMode === "implement" ? { RLM_AMBIENT_EXTENSIONS: "0" } : {}
     }, runtime, childDepth);
+    if (fullResourceIsolation)
+      retainSelectedProviderEnvironment(env, provider);
     if (resources.contextFile)
       env.CONTEXT = resources.contextFile;
     if (resources.isolatedPiRoot) {

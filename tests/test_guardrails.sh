@@ -1134,6 +1134,17 @@ echo "RLM_MODEL=$RLM_MODEL"
 echo "PI_CODING_AGENT_DIR=${PI_CODING_AGENT_DIR:-unset}"
 echo "PI_PACKAGE_DIR=${PI_PACKAGE_DIR:-unset}"
 echo "PI_OFFLINE=${PI_OFFLINE:-unset}"
+if [ -f "${PI_CODING_AGENT_DIR:-}/auth.json" ]; then
+	echo "AUTH_FILE=present"
+	echo "AUTH_MODE=$(stat -c '%a' "$PI_CODING_AGENT_DIR/auth.json")"
+	grep -q '"anthropic"' "$PI_CODING_AGENT_DIR/auth.json" && echo "AUTH_SELECTED=present" || echo "AUTH_SELECTED=absent"
+	grep -q '"other"' "$PI_CODING_AGENT_DIR/auth.json" && echo "AUTH_OTHER=present" || echo "AUTH_OTHER=absent"
+	[ -e "$PI_CODING_AGENT_DIR/settings.json" ] && echo "SETTINGS_FILE=present" || echo "SETTINGS_FILE=absent"
+else
+	echo "AUTH_FILE=absent"
+fi
+[ -n "${ANTHROPIC_API_KEY:-}" ] && echo "ANTHROPIC_ENV=present" || echo "ANTHROPIC_ENV=absent"
+[ -n "${OPENAI_API_KEY:-}" ] && echo "OPENAI_ENV=present" || echo "OPENAI_ENV=absent"
 MOCK_PI
 chmod +x "$MOCK_BIN/pi"
 
@@ -1215,11 +1226,20 @@ assert_contains "G38b: child discovery off retains canonical-only extension mode
 assert_contains "G38b: child discovery off still loads exact ypi" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
 
 # G38c: combine child discovery and extension opt-outs for full package/resource isolation
+G38C_PARENT_AGENT="$TEST_TMP/g38c-parent-agent"
+mkdir -m 700 "$G38C_PARENT_AGENT"
+printf '%s\n' '{"anthropic":{"type":"oauth","access":"G38C_SECRET_MUST_NOT_LEAK"},"other":{"type":"api_key","key":"OTHER_SECRET_MUST_NOT_LEAK"}}' > "$G38C_PARENT_AGENT/auth.json"
+chmod 600 "$G38C_PARENT_AGENT/auth.json"
+printf '%s\n' '{"packages":["ambient-must-not-project"]}' > "$G38C_PARENT_AGENT/settings.json"
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
+    HOME="$TEST_TMP" \
+    PI_CODING_AGENT_DIR="~/g38c-parent-agent" \
+    ANTHROPIC_API_KEY="SELECTED_ENV_CANARY_MUST_NOT_LEAK" \
+    OPENAI_API_KEY="OTHER_ENV_CANARY_MUST_NOT_LEAK" \
     RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
     YPI_EXTENSION_PATH="$PROJECT_DIR/extensions/recursive.ts" \
-    RLM_PROVIDER=test RLM_MODEL=test \
+    RLM_PROVIDER=anthropic RLM_MODEL=test \
     RLM_CHILD_DISCOVERY=0 \
     RLM_CHILD_EXTENSIONS=0 \
     rlm_query "Full child isolation"
@@ -1227,8 +1247,17 @@ OUTPUT=$(
 assert_contains "G38c: full child isolation disables extensions" "--no-extensions" "$OUTPUT"
 assert_contains "G38c: full child isolation disables non-extension skills" "--no-skills" "$OUTPUT"
 assert_not_contains "G38c: full child isolation avoids explicit ypi extension" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
-assert_not_contains "G38c: full isolation replaces the ambient Pi agent root" "PI_CODING_AGENT_DIR=unset" "$OUTPUT"
+assert_not_contains "G38c: full isolation replaces the ambient Pi agent root" "PI_CODING_AGENT_DIR=~/g38c-parent-agent" "$OUTPUT"
 assert_contains "G38c: full isolation prevents package installation" "PI_OFFLINE=1" "$OUTPUT"
+assert_contains "G38c: selected provider auth is projected" "AUTH_SELECTED=present" "$OUTPUT"
+assert_contains "G38c: projected auth is private" "AUTH_MODE=600" "$OUTPUT"
+assert_contains "G38c: unselected provider auth is excluded" "AUTH_OTHER=absent" "$OUTPUT"
+assert_contains "G38c: selected provider environment is retained" "ANTHROPIC_ENV=present" "$OUTPUT"
+assert_contains "G38c: other provider environment is excluded" "OPENAI_ENV=absent" "$OUTPUT"
+assert_contains "G38c: ambient settings are excluded" "SETTINGS_FILE=absent" "$OUTPUT"
+assert_not_contains "G38c: auth secret is absent from child diagnostics" "G38C_SECRET_MUST_NOT_LEAK" "$OUTPUT"
+assert_not_contains "G38c: selected environment secret is absent from child diagnostics" "SELECTED_ENV_CANARY_MUST_NOT_LEAK" "$OUTPUT"
+assert_not_contains "G38c: other environment secret is absent from child diagnostics" "OTHER_ENV_CANARY_MUST_NOT_LEAK" "$OUTPUT"
 
 # G39: root launcher ambient-extension auto-detection.
 # The `ypi` wrapper allows the user's ambient toolbelt unless a conflicting

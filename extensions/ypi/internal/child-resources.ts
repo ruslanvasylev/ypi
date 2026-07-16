@@ -1,5 +1,5 @@
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { safeTraceId, sharedSessionsEnabled } from "../env.ts";
 import { renderActiveTaskFilesSection } from "./task-files.ts";
@@ -19,6 +19,7 @@ export interface ChildResourceInput {
 	rootPromptPath?: string;
 	setupDeadlineMilliseconds?: number;
 	fullResourceIsolation?: boolean;
+	selectedProvider?: string;
 	mode: ChildMode;
 }
 
@@ -85,6 +86,50 @@ function removeArtifact(filePath: string | undefined): void {
 	if (filePath) rmSync(path.dirname(filePath), { recursive: true, force: true });
 }
 
+function configuredParentAgentDir(): string {
+	const home = process.env.HOME || homedir();
+	const configured = process.env.PI_CODING_AGENT_DIR;
+	if (!configured) return path.join(home, ".pi", "agent");
+	if (configured === "~") return home;
+	if (configured.startsWith("~/") || configured.startsWith("~\\")) {
+		return path.join(home, configured.slice(2));
+	}
+	return configured;
+}
+
+function projectSelectedProviderAuth(agentDir: string, selectedProvider: string | undefined): void {
+	if (!selectedProvider) return;
+	const parentAgentDir = configuredParentAgentDir();
+	const sourceAuthPath = path.join(parentAgentDir, "auth.json");
+	if (!existsSync(sourceAuthPath)) return;
+
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(readFileSync(sourceAuthPath, "utf8"));
+	} catch {
+		throw new Error("Full child isolation could not project selected provider authentication: parent auth.json is malformed");
+	}
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error("Full child isolation could not project selected provider authentication: parent auth.json must be an object");
+	}
+	if (!Object.hasOwn(parsed, selectedProvider)) return;
+	const credential = (parsed as Record<string, unknown>)[selectedProvider];
+	if (typeof credential !== "object" || credential === null || Array.isArray(credential)) {
+		throw new Error("Full child isolation could not project selected provider authentication: selected provider entry is invalid");
+	}
+
+	const projected: Record<string, unknown> = Object.create(null);
+	Object.defineProperty(projected, selectedProvider, {
+		value: credential,
+		enumerable: true,
+		configurable: false,
+		writable: false,
+	});
+	const targetAuthPath = path.join(agentDir, "auth.json");
+	writeFileSync(targetAuthPath, `${JSON.stringify(projected, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+	chmodSync(targetAuthPath, 0o600);
+}
+
 export function acquireChildResources(input: ChildResourceInput): ChildResourceLease {
 	let promptFile: string | undefined;
 	let contextFile: string | undefined;
@@ -97,7 +142,11 @@ export function acquireChildResources(input: ChildResourceInput): ChildResourceL
 		standaloneSystemPromptFile = createStandaloneSystemPrompt(input, promptFile, contextFile);
 		if (input.fullResourceIsolation) {
 			isolatedPiRoot = mkdtempSync(path.join(tmpdir(), "ypi_isolated_pi_"));
-			mkdirSync(path.join(isolatedPiRoot, "agent"), { recursive: true, mode: 0o700 });
+			chmodSync(isolatedPiRoot, 0o700);
+			const isolatedAgentDir = path.join(isolatedPiRoot, "agent");
+			mkdirSync(isolatedAgentDir, { recursive: true, mode: 0o700 });
+			chmodSync(isolatedAgentDir, 0o700);
+			projectSelectedProviderAuth(isolatedAgentDir, input.selectedProvider);
 		}
 		const childSession = childSessionFile(input);
 		copyForkSession(input, childSession);
