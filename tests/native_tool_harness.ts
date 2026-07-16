@@ -55,7 +55,7 @@ function fixtureGitEnv(): NodeJS.ProcessEnv {
 
 function clearYpiEnv(): void {
 	for (const key of Object.keys(process.env)) {
-		if (key.startsWith("RLM_") || key.startsWith("YPI_") || key === "CONTEXT" || key === "PI_TRACE_FILE" || key === "SECRET_TOKEN" || key.startsWith("GIT_")) {
+		if (key.startsWith("RLM_") || key.startsWith("YPI_") || key === "CONTEXT" || key === "PI_TRACE_FILE" || key === "PI_CODING_AGENT_DIR" || key === "ANTHROPIC_API_KEY" || key === "OPENAI_API_KEY" || key === "SECRET_TOKEN" || key.startsWith("GIT_")) {
 			delete process.env[key];
 		}
 	}
@@ -101,6 +101,17 @@ done
   echo "PI_CODING_AGENT_DIR=\${PI_CODING_AGENT_DIR:-unset}"
   echo "PI_PACKAGE_DIR=\${PI_PACKAGE_DIR:-unset}"
   echo "PI_OFFLINE=\${PI_OFFLINE:-unset}"
+  if [ -f "\${PI_CODING_AGENT_DIR:-}/auth.json" ]; then
+    echo "AUTH_FILE=present"
+    echo "AUTH_MODE=$(stat -c '%a' "$PI_CODING_AGENT_DIR/auth.json")"
+    grep -q '"anthropic"' "$PI_CODING_AGENT_DIR/auth.json" && echo "AUTH_SELECTED=present" || echo "AUTH_SELECTED=absent"
+    grep -q '"other-provider"' "$PI_CODING_AGENT_DIR/auth.json" && echo "AUTH_OTHER=present" || echo "AUTH_OTHER=absent"
+    [ -e "$PI_CODING_AGENT_DIR/settings.json" ] && echo "SETTINGS_FILE=present" || echo "SETTINGS_FILE=absent"
+  else
+    echo "AUTH_FILE=absent"
+  fi
+  [ -n "\${ANTHROPIC_API_KEY:-}" ] && echo "ANTHROPIC_ENV=present" || echo "ANTHROPIC_ENV=absent"
+  [ -n "\${OPENAI_API_KEY:-}" ] && echo "OPENAI_ENV=present" || echo "OPENAI_ENV=absent"
   echo "CHILD_PID=$$"
   echo "SYSTEM_PROMPT_CONTEXT=$(grep -E 'External task context:|Current delegated charter:' "$SYSTEM_PROMPT_FILE" 2>/dev/null | head -1 || true)"
 } >> "$YPI_FAKE_PI_LOG"
@@ -554,21 +565,54 @@ async function run(): Promise<void> {
 
 	clearYpiEnv();
 	resetLog();
+	const fullIsolationParentAgent = path.join(scratch, "full-isolation-parent-agent");
+	mkdirSync(fullIsolationParentAgent, { recursive: true, mode: 0o700 });
+	const originalHome = process.env.HOME;
+	const authCanary = "AUTH_SECRET_CANARY_MUST_NOT_LEAK";
+	writeFileSync(
+		path.join(fullIsolationParentAgent, "auth.json"),
+		`${JSON.stringify({
+			anthropic: { type: "oauth", access: authCanary },
+			"other-provider": { type: "api_key", key: "OTHER_SECRET_MUST_NOT_LEAK" },
+		}, null, 2)}\n`,
+		{ mode: 0o600 },
+	);
+	writeFileSync(path.join(fullIsolationParentAgent, "settings.json"), '{"packages":["ambient-must-not-project"]}\n');
+	process.env.HOME = scratch;
+	process.env.PI_CODING_AGENT_DIR = "~/full-isolation-parent-agent";
+	process.env.ANTHROPIC_API_KEY = "SELECTED_ENV_CANARY_MUST_NOT_LEAK";
+	process.env.OPENAI_API_KEY = "OTHER_ENV_CANARY_MUST_NOT_LEAK";
 	process.env.RLM_DEPTH = "0";
 	process.env.RLM_MAX_DEPTH = "2";
+	process.env.RLM_CHILD_MODEL = "test-child-model";
+	process.env.RLM_CHILD_PROVIDER = "anthropic";
 	process.env.RLM_CHILD_DISCOVERY = "0";
 	process.env.RLM_CHILD_EXTENSIONS = "0";
 	process.env.RLM_JSON = "0";
 	ensureEnvironment(runtime, context());
 	await invoke();
-	assertContains("N8d: full child isolation disables extensions", readLog(), "--no-extensions");
-	assertContains("N8d: full child isolation disables non-extension skills", readLog(), "--no-skills");
-	assertContains("N8d: full child isolation keeps generated system prompt", readLog(), "--system-prompt ");
-	assertContains("N8d: full child isolation exposes delegated charter", readLog(), "SYSTEM_PROMPT_CONTEXT=- Current delegated charter: `");
-	assertContains("N8d: full child isolation uses a private Pi agent root", readLog(), "PI_CODING_AGENT_DIR=");
-	assertNotContains("N8d: private Pi agent root is not the ambient default", readLog(), "PI_CODING_AGENT_DIR=unset");
-	assertContains("N8d: full child isolation forces offline package resolution", readLog(), "PI_OFFLINE=1");
-	assertNotContains("N8d: full child isolation avoids explicit ypi extension", readLog(), "-e ");
+	if (originalHome === undefined) delete process.env.HOME;
+	else process.env.HOME = originalHome;
+	const fullIsolationLog = readLog();
+	assertContains("N8d: full child isolation disables extensions", fullIsolationLog, "--no-extensions");
+	assertContains("N8d: full child isolation disables non-extension skills", fullIsolationLog, "--no-skills");
+	assertContains("N8d: full child isolation keeps generated system prompt", fullIsolationLog, "--system-prompt ");
+	assertContains("N8d: full child isolation exposes delegated charter", fullIsolationLog, "SYSTEM_PROMPT_CONTEXT=- Current delegated charter: `");
+	assertContains("N8d: full child isolation uses a private Pi agent root", fullIsolationLog, "PI_CODING_AGENT_DIR=");
+	assertNotContains("N8d: private Pi agent root is not the ambient default", fullIsolationLog, "PI_CODING_AGENT_DIR=~/full-isolation-parent-agent");
+	assertContains("N8d: full child isolation forces offline package resolution", fullIsolationLog, "PI_OFFLINE=1");
+	assertNotContains("N8d: full child isolation avoids explicit ypi extension", fullIsolationLog, "-e ");
+	assertContains("N8d: selected provider auth is projected", fullIsolationLog, "AUTH_SELECTED=present");
+	assertContains("N8d: projected auth is private", fullIsolationLog, "AUTH_MODE=600");
+	assertContains("N8d: unselected provider auth is excluded", fullIsolationLog, "AUTH_OTHER=absent");
+	assertContains("N8d: selected provider environment is retained", fullIsolationLog, "ANTHROPIC_ENV=present");
+	assertContains("N8d: other provider environment is excluded", fullIsolationLog, "OPENAI_ENV=absent");
+	assertContains("N8d: ambient settings are excluded", fullIsolationLog, "SETTINGS_FILE=absent");
+	assertNotContains("N8d: auth secret is absent from child diagnostics", fullIsolationLog, authCanary);
+	assertNotContains("N8d: selected environment secret is absent from child diagnostics", fullIsolationLog, "SELECTED_ENV_CANARY_MUST_NOT_LEAK");
+	assertNotContains("N8d: other environment secret is absent from child diagnostics", fullIsolationLog, "OTHER_ENV_CANARY_MUST_NOT_LEAK");
+	const isolatedAgentMatch = /^PI_CODING_AGENT_DIR=(.+)$/m.exec(fullIsolationLog);
+	record(Boolean(isolatedAgentMatch && !existsSync(path.dirname(isolatedAgentMatch[1]))), "N8d: isolated auth root is removed after child completion");
 
 	clearYpiEnv();
 	resetLog();
