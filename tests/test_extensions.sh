@@ -35,6 +35,12 @@ echo ""
 
 echo "--- Pi version pin ---"
 
+if "$PROJECT_DIR/scripts/check-pi-version-alignment" >/dev/null; then
+    pass "repository Pi identities align exactly"
+else
+    fail "repository Pi identities align exactly" "run scripts/check-pi-version-alignment for details"
+fi
+
 KNOWN_GOOD=$(tr -d '[:space:]' < "$PROJECT_DIR/.pi-version")
 PINNED=$(node -e "const p=require('$PROJECT_DIR/package.json'); console.log(p.dependencies['@earendil-works/pi-coding-agent'] || '')")
 PI_MANIFEST=$(node -e "const p=require('$PROJECT_DIR/package.json'); console.log((p.pi?.extensions || []).join('\\n'))")

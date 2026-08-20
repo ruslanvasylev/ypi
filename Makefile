@@ -1,4 +1,4 @@
-.PHONY: test test-unit test-guardrails test-timeout-range test-native test-runtime-contract test-eval-contracts test-concurrency test-atomic-file test-cli-async test-cost-ledger test-child-process test-transcripts test-session-tools test-private-path-ownership test-implementer-registry-generation test-workspace-retirement-generation test-workspace-policy test-parallel-workspace test-implementer-recovery test-workspace-crash test-workspace-concurrent-crash test-write-scope test-publication-policy test-config-surface typecheck-runtime build-runtime-cli check-runtime-cli test-provider-allowlist test-extensions test-e2e test-recursion-e2e test-extensions-e2e eval-depth-ablation eval-runtime-parity test-fast doctor test-doctor pre-push-checks check-upstream install-hooks land ci-status ci-last-failure clean
+.PHONY: test test-unit test-guardrails test-timeout-range test-native test-runtime-contract test-eval-contracts test-concurrency test-atomic-file test-cli-async test-cost-ledger test-child-process test-transcripts test-session-tools test-private-path-ownership test-implementer-registry-generation test-workspace-retirement-generation test-workspace-policy test-parallel-workspace test-implementer-recovery test-workspace-crash test-workspace-concurrent-crash test-write-scope test-publication-policy test-config-surface typecheck-runtime build-runtime-cli check-runtime-cli test-provider-allowlist test-pi-version-alignment test-extensions test-e2e test-recursion-e2e test-extensions-e2e eval-depth-ablation eval-runtime-parity test-fast doctor test-doctor pre-push-checks check-upstream install-hooks land ci-status ci-last-failure clean
 
 # Fast tests — no LLM calls, uses mock pi
 test-unit:
@@ -135,6 +135,10 @@ test-provider-allowlist:
 	@echo "Running provider allowlist tests..."
 	@bash tests/test_provider_allowlist.sh
 
+test-pi-version-alignment:
+	@echo "Running Pi version alignment tests..."
+	@bash tests/test_pi_version_alignment.sh
+
 # Host pi runtime health (no LLM) — catches a wrong/stale pi before it "seems broken"
 doctor:
 	@scripts/doctor
@@ -144,7 +148,7 @@ test-doctor:
 	@bash tests/test_doctor.sh
 
 # All fast tests (no LLM calls)
-test-fast: typecheck-runtime check-runtime-cli test-unit test-guardrails test-timeout-range test-native test-runtime-contract test-eval-contracts test-concurrency test-atomic-file test-cli-async test-cost-ledger test-child-process test-cross-depth-cancellation test-transcripts test-session-tools test-private-path-ownership test-implementer-registry-generation test-workspace-retirement-generation test-workspace-policy test-parallel-workspace test-implementer-recovery test-workspace-crash test-workspace-concurrent-crash test-write-scope test-publication-policy test-config-surface test-provider-allowlist test-doctor
+test-fast: typecheck-runtime check-runtime-cli test-unit test-guardrails test-timeout-range test-native test-runtime-contract test-eval-contracts test-concurrency test-atomic-file test-cli-async test-cost-ledger test-child-process test-cross-depth-cancellation test-transcripts test-session-tools test-private-path-ownership test-implementer-registry-generation test-workspace-retirement-generation test-workspace-policy test-parallel-workspace test-implementer-recovery test-workspace-crash test-workspace-concurrent-crash test-write-scope test-publication-policy test-config-surface test-provider-allowlist test-pi-version-alignment test-doctor
 
 # Extension compatibility — requires real pi installed
 test-extensions:

@@ -295,6 +295,20 @@ make test-recursion-e2e
 make test-extensions-e2e
 ```
 
+For a Pi upgrade, synchronize the repository dependency, `bun.lock`,
+`.pi-version`, and the `pi-mono` tag before testing. The fail-closed identity
+check prevents tests from certifying a stale source tree or PATH binary:
+
+```bash
+scripts/check-pi-version-alignment
+scripts/check-upstream --dry-run
+scripts/check-upstream
+```
+
+`check-upstream` never installs or replaces the host Pi. It tests the exact
+repository binary; promote the host only after those gates and the configured
+extension canaries pass.
+
 Before pushing an owned feature branch:
 
 ```bash
