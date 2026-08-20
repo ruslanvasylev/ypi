@@ -64,7 +64,8 @@ function expectedTranscripts(traceFile: string): ExpectedTranscript[] {
 	const terminals = new Map<string, TraceResult>();
 	const cleanupFailedCalls = new Set<number>();
 	const start = /\bdepth=(\d+)→(\d+)\b.*\bcall=(\d+)\s+trace=([^\s]+)/;
-	const completion = /\bdepth=(\d+)\s+child_depth=(\d+)\s+COMPLETED\s+exit=(\d+)\b.*\bcall=(\d+)\b.*\btrace=([^\s]+)\s+.*\btranscript=(verified|failed|not-required)\b/;
+	const completion = /\bdepth=(\d+)\s+COMPLETED\s+child_depth=(\d+)\s+exit=(\d+)\b.*\bcall=(\d+)\b.*\btrace=([^\s]+)\s+.*\btranscript=(verified|failed|not-required)\b/;
+	const legacyCompletion = /\bdepth=(\d+)\s+child_depth=(\d+)\s+COMPLETED\s+exit=(\d+)\b.*\bcall=(\d+)\b.*\btrace=([^\s]+)\s+.*\btranscript=(verified|failed|not-required)\b/;
 	const terminal = /\bdepth=(\d+)\s+child_depth=(\d+)\s+LIFECYCLE_TERMINAL\s+exit=(\d+)\b.*\bcall=(\d+)\b.*\btrace=([^\s]+)\s+.*\btranscript=(verified|failed|not-required)\b.*\bcleanup=verified\b/;
 	const cleanupFailed = /\bCLEANUP_FAILED\b.*\bcall=(\d+)\b/;
 	for (const line of readFileSync(traceFile, "utf8").split(/\r?\n/)) {
@@ -85,7 +86,7 @@ function expectedTranscripts(traceFile: string): ExpectedTranscript[] {
 			starts.set(key, value);
 			continue;
 		}
-		const completionMatch = completion.exec(line);
+		const completionMatch = completion.exec(line) ?? legacyCompletion.exec(line);
 		if (completionMatch) {
 			const completedIdentity: ExpectedTranscript = {
 				traceId: safeTraceId(completionMatch[5]),

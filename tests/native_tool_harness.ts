@@ -1156,9 +1156,12 @@ async function run(): Promise<void> {
 	assertContains("N10: native onUpdate receives bounded child progress", progressUpdates.join("\n"), "JSON_CHILD_OK");
 	const costFile = process.env.RLM_COST_FILE || "";
 	const traceFile = process.env.PI_TRACE_FILE || "";
+	const lifecycleTrace = readFileSync(traceFile, "utf8");
 	assertContains("N10: JSON child cost recorded without a budget", existsSync(costFile) ? readFileSync(costFile, "utf8") : "", '"cost":0.123');
 	record((statSync(costFile).mode & 0o777) === 0o600 && (statSync(traceFile).mode & 0o777) === 0o600, "N10: automatic telemetry files are private");
-	assertNotContains("N10: lifecycle trace excludes delegated prompt text", readFileSync(traceFile, "utf8"), "PRIVATE_PROMPT_MUST_NOT_ENTER_TRACE");
+	assertNotContains("N10: lifecycle trace excludes delegated prompt text", lifecycleTrace, "PRIVATE_PROMPT_MUST_NOT_ENTER_TRACE");
+	assertContains("N10: lifecycle trace preserves read-only absorption posture", lifecycleTrace, "mode=review workspace=read-only jj=off");
+	assertContains("N10: lifecycle completion keeps the parent-depth prefix parseable", lifecycleTrace, "depth=0 COMPLETED child_depth=1 exit=0");
 	assertContains("N10: child never receives dollar cap", readLog(), "RLM_BUDGET=unset");
 
 	clearYpiEnv();

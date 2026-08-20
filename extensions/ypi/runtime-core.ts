@@ -390,7 +390,11 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 			signal: request.signal,
 		});
 		request.onAdmitted?.(callCount);
-		trace(`[${nowTraceTime()}] depth=${depth}→${childDepth} PID=${process.pid} call=${callCount} trace=${traceId} caller=${request.caller} fork=${request.fork === true} mode=${requestedMode} workspace=${resources.workspace.mode}`);
+		// Keep the legacy jj posture token and completion prefix parseable by the
+		// Agent Protocol parent-absorption importer. The richer mode/workspace and
+		// child_depth fields remain additive trace metadata.
+		const legacyJjPosture = resources.workspace.readOnly ? "off" : "on";
+		trace(`[${nowTraceTime()}] depth=${depth}→${childDepth} PID=${process.pid} call=${callCount} trace=${traceId} caller=${request.caller} fork=${request.fork === true} mode=${requestedMode} workspace=${resources.workspace.mode} jj=${legacyJjPosture}`);
 		const started = Date.now();
 		resources.workspace.prepareChildLaunch();
 		const processResult = await runChildProcess({
@@ -457,7 +461,7 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 			exitCode: processResult.code,
 			transcriptStatus,
 		};
-		trace(`[${new Date().toISOString()}] depth=${depth} child_depth=${childDepth} COMPLETED exit=${processResult.code} elapsed=${elapsed}s caller=${request.caller} call=${callCount} trace=${traceId} cost=${processResult.jsonCostIncomplete ? "incomplete" : output.cost?.cost ?? "untracked"} tokens=${processResult.jsonCostIncomplete ? "incomplete" : output.cost?.tokens ?? "untracked"} cancelled=${processResult.cancelled} timeout=${processResult.timedOut} truncated=${processResult.textTruncated || processResult.jsonEventTruncated} transcript=${transcriptStatus} changed_paths=${workspace.changedPaths.length}`);
+		trace(`[${new Date().toISOString()}] depth=${depth} COMPLETED child_depth=${childDepth} exit=${processResult.code} elapsed=${elapsed}s caller=${request.caller} call=${callCount} trace=${traceId} cost=${processResult.jsonCostIncomplete ? "incomplete" : output.cost?.cost ?? "untracked"} tokens=${processResult.jsonCostIncomplete ? "incomplete" : output.cost?.tokens ?? "untracked"} cancelled=${processResult.cancelled} timeout=${processResult.timedOut} truncated=${processResult.textTruncated || processResult.jsonEventTruncated} transcript=${transcriptStatus} changed_paths=${workspace.changedPaths.length}`);
 		const details: RecursiveChildDetails = {
 			implementation: "canonical",
 			depth,
