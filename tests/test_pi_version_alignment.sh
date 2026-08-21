@@ -19,6 +19,13 @@ else
 	fail "exact repository candidate passes"
 fi
 
+if sed -n '/uses: actions\/checkout@v4/,/uses: oven-sh\/setup-bun@v2/p' "$PROJECT_DIR/.github/workflows/ci.yml" \
+	| grep -Eq '^[[:space:]]+submodules:[[:space:]]+(true|recursive)[[:space:]]*$'; then
+	pass "CI initializes the pinned Pi source submodule"
+else
+	fail "CI initializes the pinned Pi source submodule"
+fi
+
 mkdir -p "$TMP_ROOT/bin"
 printf '#!/bin/sh\nprintf "0.83.0\\n"\n' > "$TMP_ROOT/bin/pi"
 chmod 700 "$TMP_ROOT/bin/pi"
