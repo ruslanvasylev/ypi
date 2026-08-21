@@ -26,6 +26,16 @@ else
 	fail "CI initializes the pinned Pi source submodule"
 fi
 
+CI_PI_SOURCE_BLOCK="$(sed -n '/name: Fetch pinned Pi source tag/,/uses: oven-sh\/setup-bun@v2/p' \
+	"$PROJECT_DIR/.github/workflows/ci.yml")"
+if printf '%s\n' "$CI_PI_SOURCE_BLOCK" | grep -q 'git -C pi-mono fetch' \
+	&& printf '%s\n' "$CI_PI_SOURCE_BLOCK" | grep -q 'refs/tags/' \
+	&& printf '%s\n' "$CI_PI_SOURCE_BLOCK" | grep -q 'rev-parse HEAD'; then
+	pass "CI fetches and verifies the pinned Pi source tag"
+else
+	fail "CI fetches and verifies the pinned Pi source tag"
+fi
+
 mkdir -p "$TMP_ROOT/bin"
 printf '#!/bin/sh\nprintf "0.83.0\\n"\n' > "$TMP_ROOT/bin/pi"
 chmod 700 "$TMP_ROOT/bin/pi"
