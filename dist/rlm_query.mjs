@@ -1273,7 +1273,37 @@ function inheritedAuthority() {
 async function requestCoordinator(operation, options = {}, fields = {}) {
   const local = localCoordinator;
   if (local && local.generation === process.env.YPI_TREE_GENERATION && local.status === "starting") {
-    await local.ready;
+    await new Promise((resolve, reject) => {
+      let settled = false;
+      let timer;
+      const finish = (error) => {
+        if (settled)
+          return;
+        settled = true;
+        if (timer)
+          clearTimeout(timer);
+        options.signal?.removeEventListener("abort", onAbort);
+        if (error)
+          reject(error);
+        else
+          resolve();
+      };
+      const onAbort = () => finish(new TreeCoordinatorError("Recursive child cancelled while waiting for tree authority.", 130));
+      if (options.signal?.aborted) {
+        onAbort();
+        return;
+      }
+      if (options.deadlineMilliseconds !== undefined) {
+        const remaining = options.deadlineMilliseconds - Date.now();
+        if (remaining <= 0) {
+          finish(new TreeCoordinatorError("RLM_TIMEOUT expired while waiting for tree authority.", 124));
+          return;
+        }
+        timer = setTimeout(() => finish(new TreeCoordinatorError("RLM_TIMEOUT expired while waiting for tree authority.", 124)), remaining);
+      }
+      options.signal?.addEventListener("abort", onAbort, { once: true });
+      local.ready.then(() => finish(), (error) => finish(error));
+    });
   }
   if (options.signal?.aborted) {
     throw new TreeCoordinatorError("Recursive child cancelled while waiting for tree authority.", 130);
@@ -2335,10 +2365,13 @@ var CHILD_RUNTIME_EXCLUDED_KEYS = [
 ];
 var CHILD_RUNTIME_EXCLUDED_PREFIXES = ["YPI_EXPLICIT_"];
 var PROVIDER_ENV_KEYS = {
-  anthropic: ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"],
+  anthropic: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_OAUTH_TOKEN"],
   "github-copilot": ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"],
   huggingface: ["HF_TOKEN"],
   "ant-ling": ["ANT_LING_API_KEY"],
+  "qwen-token-plan": ["QWEN_TOKEN_PLAN_API_KEY"],
+  "qwen-token-plan-cn": ["QWEN_TOKEN_PLAN_CN_API_KEY"],
+  "qwen-token-plan-individual": ["QWEN_TOKEN_PLAN_API_KEY"],
   openai: ["OPENAI_API_KEY"],
   "azure-openai-responses": ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_RESOURCE_NAME", "AZURE_OPENAI_API_VERSION", "AZURE_OPENAI_DEPLOYMENT_NAME_MAP", "AZURE_API_VERSION"],
   deepseek: ["DEEPSEEK_API_KEY"],
@@ -2348,8 +2381,10 @@ var PROVIDER_ENV_KEYS = {
   groq: ["GROQ_API_KEY"],
   cerebras: ["CEREBRAS_API_KEY"],
   xai: ["XAI_API_KEY"],
+  radius: ["RADIUS_API_KEY"],
   fireworks: ["FIREWORKS_API_KEY"],
   together: ["TOGETHER_API_KEY"],
+  baseten: ["BASETEN_API_KEY"],
   openrouter: ["OPENROUTER_API_KEY"],
   "vercel-ai-gateway": ["AI_GATEWAY_API_KEY"],
   zai: ["ZAI_API_KEY"],
@@ -2374,7 +2409,9 @@ var PROVIDER_ENV_KEYS = {
 };
 var PROVIDER_ENV_ALLOWLIST = new Set([
   "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
   "ANTHROPIC_OAUTH_TOKEN",
+  "BASETEN_API_KEY",
   "COPILOT_GITHUB_TOKEN",
   "GH_TOKEN",
   "GITHUB_TOKEN",
@@ -2406,6 +2443,9 @@ var PROVIDER_ENV_ALLOWLIST = new Set([
   "CLOUDFLARE_API_KEY",
   "CLOUDFLARE_ACCOUNT_ID",
   "CLOUDFLARE_GATEWAY_ID",
+  "QWEN_TOKEN_PLAN_API_KEY",
+  "QWEN_TOKEN_PLAN_CN_API_KEY",
+  "RADIUS_API_KEY",
   "XIAOMI_API_KEY",
   "XIAOMI_TOKEN_PLAN_CN_API_KEY",
   "XIAOMI_TOKEN_PLAN_AMS_API_KEY",
@@ -5332,6 +5372,14 @@ function timeoutOrThrow() {
     throw new RecursiveChildError(message, message.startsWith("Invalid ") ? 1 : 124);
   }
 }
+function normalizeAdmissionCancellation(error, signal) {
+  if (!signal?.aborted)
+    return error;
+  if (error instanceof RecursiveChildError && error.message.includes("Child Pi cancelled")) {
+    return error;
+  }
+  return new RecursiveChildError("Child Pi cancelled during admission before work started", 130);
+}
 async function runRecursiveChild(runtime, request) {
   if (request.signal?.aborted)
     throw new RecursiveChildError("Child Pi cancelled before admission", 130);
@@ -5388,7 +5436,7 @@ async function runRecursiveChild(runtime, request) {
     setupDeadlineMilliseconds = setupRemainingSeconds === undefined ? undefined : Date.now() + setupRemainingSeconds * 1000;
   } catch (error) {
     removeRootAbortListener();
-    throw error;
+    throw normalizeAdmissionCancellation(error, request.signal);
   }
   let parentSlotSuspension;
   let concurrencySlot;
@@ -5410,14 +5458,15 @@ async function runRecursiveChild(runtime, request) {
         resumeFailure = cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError));
       }
     }
-    const primaryMessage = error instanceof Error ? error.message : String(error);
+    const primaryError = normalizeAdmissionCancellation(error, request.signal);
+    const primaryMessage = primaryError instanceof Error ? primaryError.message : String(primaryError);
     const message = resumeFailure ? `${primaryMessage}
 Inherited concurrency-slot resume also failed: ${resumeFailure.message}` : primaryMessage;
     if (resumeFailure) {
       trace(`[${new Date().toISOString()}] depth=${depth} child_depth=${childDepth} ADMISSION_RESUME_FAILED detail=${resumeFailure.message}`);
     }
     removeRootAbortListener();
-    const exitCode = error.exitCode || 1;
+    const exitCode = primaryError.exitCode || 1;
     throw new RecursiveChildError(message, exitCode);
   }
   const extensionsEnabled = requestedMode === "implement" ? true : childExtensionsEnabled(childDepth);
@@ -5534,12 +5583,17 @@ Inherited concurrency-slot resume also failed: ${resumeFailure.message}` : prima
     else if (resources.standaloneSystemPromptFile)
       args.push("--system-prompt", resources.standaloneSystemPromptFile);
     const timeoutSeconds = timeoutOrThrow();
-    await assertTreeCoordinatorActive({
-      deadlineMilliseconds: setupDeadlineMilliseconds,
-      signal: request.signal
-    });
+    try {
+      await assertTreeCoordinatorActive({
+        deadlineMilliseconds: setupDeadlineMilliseconds,
+        signal: request.signal
+      });
+    } catch (error) {
+      throw normalizeAdmissionCancellation(error, request.signal);
+    }
     request.onAdmitted?.(callCount);
-    trace(`[${nowTraceTime()}] depth=${depth}→${childDepth} PID=${process.pid} call=${callCount} trace=${traceId} caller=${request.caller} fork=${request.fork === true} mode=${requestedMode} workspace=${resources.workspace.mode}`);
+    const legacyJjPosture = resources.workspace.readOnly ? "off" : "on";
+    trace(`[${nowTraceTime()}] depth=${depth}→${childDepth} PID=${process.pid} call=${callCount} trace=${traceId} caller=${request.caller} fork=${request.fork === true} mode=${requestedMode} workspace=${resources.workspace.mode} jj=${legacyJjPosture}`);
     const started = Date.now();
     resources.workspace.prepareChildLaunch();
     const processResult = await runChildProcess({
@@ -5605,7 +5659,7 @@ Inherited concurrency-slot resume also failed: ${resumeFailure.message}` : prima
       exitCode: processResult.code,
       transcriptStatus
     };
-    trace(`[${new Date().toISOString()}] depth=${depth} child_depth=${childDepth} COMPLETED exit=${processResult.code} elapsed=${elapsed}s caller=${request.caller} call=${callCount} trace=${traceId} cost=${processResult.jsonCostIncomplete ? "incomplete" : output2.cost?.cost ?? "untracked"} tokens=${processResult.jsonCostIncomplete ? "incomplete" : output2.cost?.tokens ?? "untracked"} cancelled=${processResult.cancelled} timeout=${processResult.timedOut} truncated=${processResult.textTruncated || processResult.jsonEventTruncated} transcript=${transcriptStatus} changed_paths=${workspace.changedPaths.length}`);
+    trace(`[${new Date().toISOString()}] depth=${depth} COMPLETED child_depth=${childDepth} exit=${processResult.code} elapsed=${elapsed}s caller=${request.caller} call=${callCount} trace=${traceId} cost=${processResult.jsonCostIncomplete ? "incomplete" : output2.cost?.cost ?? "untracked"} tokens=${processResult.jsonCostIncomplete ? "incomplete" : output2.cost?.tokens ?? "untracked"} cancelled=${processResult.cancelled} timeout=${processResult.timedOut} truncated=${processResult.textTruncated || processResult.jsonEventTruncated} transcript=${transcriptStatus} changed_paths=${workspace.changedPaths.length}`);
     const details = {
       implementation: "canonical",
       depth,
@@ -5678,15 +5732,20 @@ ${report}`, error.exitCode || 1));
   } finally {
     removeRootAbortListener();
     const cleanupErrors2 = resources.cleanup();
-    try {
-      await concurrencySlot.release();
-    } catch (error) {
-      cleanupErrors2.push(error instanceof Error ? error : new Error(String(error)));
-    }
-    try {
-      await parentSlotSuspension.resume();
-    } catch (error) {
-      cleanupErrors2.push(error instanceof Error ? error : new Error(String(error)));
+    const rootCancellationTerminalizedCoordinator = depth === 0 && request.signal?.aborted;
+    if (rootCancellationTerminalizedCoordinator) {
+      trace(`[${new Date().toISOString()}] depth=${depth} child_depth=${childDepth} CONTROL_CLEANUP_SUPERSEDED call=${callCount} reason=root-request-cancelled`);
+    } else {
+      try {
+        await concurrencySlot.release();
+      } catch (error) {
+        cleanupErrors2.push(error instanceof Error ? error : new Error(String(error)));
+      }
+      try {
+        await parentSlotSuspension.resume();
+      } catch (error) {
+        cleanupErrors2.push(error instanceof Error ? error : new Error(String(error)));
+      }
     }
     if (cleanupErrors2.length > 0) {
       const detail = cleanupErrors2.map((error) => error.message).join("; ");

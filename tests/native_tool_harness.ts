@@ -766,7 +766,10 @@ async function run(): Promise<void> {
 	resetLog();
 	process.env.RLM_DEPTH = "0";
 	process.env.RLM_MAX_DEPTH = "2";
-	process.env.RLM_TIMEOUT = "2";
+	// Leave enough of the tree-wide deadline for worktree admission on slower CI
+	// runners; the 30-second fake child still deterministically exercises timeout
+	// finalization rather than admission-time expiry.
+	process.env.RLM_TIMEOUT = "5";
 	process.env.RLM_JSON = "0";
 	process.env.YPI_FAKE_PI_MODE = "write-then-sleep";
 	ensureEnvironment(runtime, context(timedImplementRoot));
@@ -1156,9 +1159,12 @@ async function run(): Promise<void> {
 	assertContains("N10: native onUpdate receives bounded child progress", progressUpdates.join("\n"), "JSON_CHILD_OK");
 	const costFile = process.env.RLM_COST_FILE || "";
 	const traceFile = process.env.PI_TRACE_FILE || "";
+	const lifecycleTrace = readFileSync(traceFile, "utf8");
 	assertContains("N10: JSON child cost recorded without a budget", existsSync(costFile) ? readFileSync(costFile, "utf8") : "", '"cost":0.123');
 	record((statSync(costFile).mode & 0o777) === 0o600 && (statSync(traceFile).mode & 0o777) === 0o600, "N10: automatic telemetry files are private");
-	assertNotContains("N10: lifecycle trace excludes delegated prompt text", readFileSync(traceFile, "utf8"), "PRIVATE_PROMPT_MUST_NOT_ENTER_TRACE");
+	assertNotContains("N10: lifecycle trace excludes delegated prompt text", lifecycleTrace, "PRIVATE_PROMPT_MUST_NOT_ENTER_TRACE");
+	assertContains("N10: lifecycle trace preserves read-only absorption posture", lifecycleTrace, "mode=review workspace=read-only jj=off");
+	assertContains("N10: lifecycle completion keeps the parent-depth prefix parseable", lifecycleTrace, "depth=0 COMPLETED child_depth=1 exit=0");
 	assertContains("N10: child never receives dollar cap", readLog(), "RLM_BUDGET=unset");
 
 	clearYpiEnv();
@@ -1344,6 +1350,33 @@ async function run(): Promise<void> {
 		"N13: sanitized trace identity also binds the receipt and completion",
 		String(hostileValidation.stderr || hostileValidation.stdout || ""),
 	);
+
+	// Cancellation can race the first coordinator round trip on a loaded host.
+	// Keep that pre-launch path on the same stable public error contract and do
+	// not misreport terminal tree accounting as a cleanup failure.
+	clearYpiEnv();
+	resetLog();
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	process.env.RLM_JSON = "0";
+	process.env.YPI_FAKE_PI_MODE = "sleep";
+	ensureEnvironment(runtime, context());
+	const admissionCancellation = new AbortController();
+	const admissionCancelled = invoke("cancel during admission", admissionCancellation.signal);
+	admissionCancellation.abort();
+	let admissionCancellationMessage = "";
+	try {
+		await admissionCancelled;
+	} catch (error) {
+		admissionCancellationMessage = error instanceof Error ? error.message : String(error);
+	}
+	record(
+		admissionCancellationMessage.includes("Child Pi cancelled")
+			&& !admissionCancellationMessage.includes("cleanup also failed"),
+		"N13b: admission-race cancellation keeps the stable public error",
+		admissionCancellationMessage,
+	);
+	assertNotContains("N13b: admission-race cancellation spawns no child", readLog(), "CHILD_PID=");
 
 	// N13b: cancellation crosses the adapter boundary and terminates the detached
 	// child process group instead of leaving paid or writable work orphaned.

@@ -21,6 +21,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Fetch pinned Pi source tag
+        shell: bash
+        run: |
+          PI_VERSION="$(tr -d '[:space:]' < .pi-version)"
+          PI_TAG="v${PI_VERSION}"
+          git -C pi-mono fetch --force --depth=1 origin \
+            "refs/tags/${PI_TAG}:refs/tags/${PI_TAG}"
+          test "$(git -C pi-mono rev-parse "${PI_TAG}^{commit}")" \
+            = "$(git -C pi-mono rev-parse HEAD)"
       - uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies

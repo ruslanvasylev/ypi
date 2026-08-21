@@ -96,5 +96,28 @@ record(
 	"full isolation preserves the selected Bedrock temporary credential triplet",
 );
 
+const providerCases = [
+	{ provider: "anthropic", retained: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_OAUTH_TOKEN"] },
+	{ provider: "qwen-token-plan", retained: ["QWEN_TOKEN_PLAN_API_KEY"] },
+	{ provider: "qwen-token-plan-cn", retained: ["QWEN_TOKEN_PLAN_CN_API_KEY"] },
+	{ provider: "radius", retained: ["RADIUS_API_KEY"] },
+	{ provider: "baseten", retained: ["BASETEN_API_KEY"] },
+] as const;
+for (const providerCase of providerCases) {
+	const providerBase = Object.fromEntries(
+		providerCases.flatMap((entry) => entry.retained.map((key) => [key, `credential-${key}`])),
+	);
+	const isolated = buildChildEnvironment(providerBase, {}, runtime, 1);
+	retainSelectedProviderEnvironment(isolated, providerCase.provider);
+	record(
+		providerCase.retained.every((key) => isolated[key] === providerBase[key])
+			&& providerCases
+				.flatMap((entry) => entry.retained)
+				.filter((key) => !providerCase.retained.includes(key as never))
+				.every((key) => isolated[key] === undefined),
+		`full isolation preserves only ${providerCase.provider} credentials`,
+	);
+}
+
 console.log(`\nResults: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

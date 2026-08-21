@@ -133,7 +133,7 @@ try {
 				trace,
 					[
 						"[2026-07-28 00:00:00] depth=0→1 PID=1 call=1 trace=positive caller=tool mode=review",
-						"[2026-07-28T00:00:01.000Z] depth=0 child_depth=1 COMPLETED exit=0 elapsed=1s caller=tool call=1 trace=positive transcript=verified",
+						"[2026-07-28T00:00:01.000Z] depth=0 COMPLETED child_depth=1 exit=0 elapsed=1s caller=tool call=1 trace=positive transcript=verified",
 						"[2026-07-28T00:00:02.000Z] depth=0 child_depth=1 LIFECYCLE_TERMINAL exit=0 call=1 trace=positive transcript=verified cleanup=verified",
 						"",
 				].join("\n"),

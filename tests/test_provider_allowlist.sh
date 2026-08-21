@@ -17,6 +17,7 @@ RUNTIME_CONFIG="$PROJECT_DIR/extensions/ypi/internal/child-config.ts"
 CLI_ADAPTER="$PROJECT_DIR/extensions/ypi/cli.ts"
 PI_MONO="$PROJECT_DIR/pi-mono"
 INSTALLED_PI_AI="$PROJECT_DIR/node_modules/@earendil-works/pi-ai/dist"
+ALIGNMENT_CHECK="$PROJECT_DIR/scripts/check-pi-version-alignment"
 
 PASS=0
 FAIL=0
@@ -26,6 +27,12 @@ fail() { FAIL=$((FAIL + 1)); echo "  ✗ $1: $2"; }
 
 echo ""
 echo "=== Provider env allowlist ==="
+
+if "$ALIGNMENT_CHECK" >/dev/null; then
+    pass "P0: Pi package, lock, binary, and source identities agree"
+else
+    fail "P0: Pi package, lock, binary, and source identities agree" "run scripts/check-pi-version-alignment for details"
+fi
 
 # ── Extract the native allowlist (the PROVIDER_ENV_ALLOWLIST Set) ──────────────
 NATIVE_KEYS="$(awk '/PROVIDER_ENV_ALLOWLIST = new Set\(\[/{f=1;next} /\]\);/{f=0} f' "$RUNTIME_CONFIG" \
@@ -45,21 +52,17 @@ else
 fi
 
 # ── Completeness vs pinned pi-mono (skips if submodule absent) ─────────────────
-# Source of truth is env-api-keys.ts: getEnvApiKey() reads some names directly
-# through process.env.KEY and maps others through envMap string values. We extract
-# those exact names directly (not by suffix regex), so credentials like
-# COPILOT_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN, and HF_TOKEN — which end in
-# neither _API_KEY nor _OAUTH_TOKEN — are still enforced.
+# Source of truth is env-api-keys.ts. Extract every uppercase environment-name
+# string, including exported constants such as ANTHROPIC_AUTH_TOKEN_ENV and
+# envMap values such as BASETEN_API_KEY. A suffix-only or object-value-only
+# parser silently misses valid provider credentials.
 ENV_KEY_SRC="$PI_MONO/packages/ai/src/env-api-keys.ts"
 if [ -f "$ENV_KEY_SRC" ]; then
     REAL_KEYS="$(node - "$ENV_KEY_SRC" <<'NODE'
 const fs = require("node:fs");
 const source = fs.readFileSync(process.argv[2], "utf8");
 const keys = new Set();
-for (const match of source.matchAll(/process\.env\.([A-Z][A-Z0-9_]+)/g)) {
-    keys.add(match[1]);
-}
-for (const match of source.matchAll(/:\s*"([A-Z][A-Z0-9_]+)"/g)) {
+for (const match of source.matchAll(/"([A-Z][A-Z0-9_]+)"/g)) {
     keys.add(match[1]);
 }
 console.log([...keys].sort().join("\n"));
@@ -72,7 +75,7 @@ NODE
             MISSING="$MISSING $key"
         fi
     done
-    if [ "$REAL_COUNT" -lt 20 ]; then
+    if [ "$REAL_COUNT" -lt 40 ]; then
         fail "C1: extracted provider credentials from env-api-keys.ts" "parsed only $REAL_COUNT — extraction likely broke"
     elif [ -z "$MISSING" ]; then
         pass "C1: allowlist covers every env-api-keys.ts provider credential ($REAL_COUNT names)"
@@ -83,17 +86,41 @@ else
     echo "  - C1 skipped (pi-mono env-api-keys.ts not present)"
 fi
 
+# The installed candidate must expose the same credential names as the exact
+# tagged source. This catches a stale or corrupt node_modules tree even when
+# package manifests happen to agree.
+INSTALLED_ENV_SRC="$INSTALLED_PI_AI/env-api-keys.js"
+if [ -f "$ENV_KEY_SRC" ] && [ -f "$INSTALLED_ENV_SRC" ]; then
+    INSTALLED_KEYS="$(node - "$INSTALLED_ENV_SRC" <<'NODE'
+const fs = require("node:fs");
+const source = fs.readFileSync(process.argv[2], "utf8");
+const keys = new Set();
+for (const match of source.matchAll(/"([A-Z][A-Z0-9_]+)"/g)) {
+    keys.add(match[1]);
+}
+console.log([...keys].sort().join("\n"));
+NODE
+)"
+    if [ "$INSTALLED_KEYS" = "$REAL_KEYS" ]; then
+        pass "C2: installed Pi credential source matches tagged source"
+    else
+        fail "C2: installed Pi credential source matches tagged source" "uppercase credential-name sets differ"
+    fi
+else
+    fail "C2: installed Pi credential source is inspectable" "missing source or installed env-api-keys implementation"
+fi
+
 # Bedrock's installed implementation consumes the temporary-credential session
 # token outside the older env-api-keys map.
 BEDROCK_SRC="$INSTALLED_PI_AI/api/bedrock-converse-stream.js"
 if [ -f "$BEDROCK_SRC" ] && grep -q '"AWS_SESSION_TOKEN"' "$BEDROCK_SRC"; then
     if printf '%s\n' "$NATIVE_KEYS" | grep -qx AWS_SESSION_TOKEN; then
-        pass "C2: allowlist covers installed Bedrock temporary session credentials"
+        pass "C3: allowlist covers installed Bedrock temporary session credentials"
     else
-        fail "C2: allowlist covers installed Bedrock temporary session credentials" "AWS_SESSION_TOKEN missing"
+        fail "C3: allowlist covers installed Bedrock temporary session credentials" "AWS_SESSION_TOKEN missing"
     fi
 else
-    fail "C2: installed Bedrock credential source is inspectable" "missing AWS_SESSION_TOKEN consumer"
+    fail "C3: installed Bedrock credential source is inspectable" "missing AWS_SESSION_TOKEN consumer"
 fi
 
 echo ""

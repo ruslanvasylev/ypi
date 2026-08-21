@@ -1,0 +1,113 @@
+#!/bin/bash
+# Fail closed unless every repository Pi identity resolves to one exact version.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+VERSION_FILE="${YPI_ALIGNMENT_VERSION_FILE:-$PROJECT_DIR/.pi-version}"
+PACKAGE_JSON="${YPI_ALIGNMENT_PACKAGE_JSON:-$PROJECT_DIR/package.json}"
+LOCK_FILE="${YPI_ALIGNMENT_LOCK_FILE:-$PROJECT_DIR/bun.lock}"
+SOURCE_ROOT="${YPI_ALIGNMENT_SOURCE_ROOT:-$PROJECT_DIR/pi-mono}"
+PI_BIN="${YPI_ALIGNMENT_PI_BIN:-$PROJECT_DIR/node_modules/.bin/pi}"
+EXPECTED="${YPI_EXPECTED_PI_VERSION:-}"
+
+FAILURES=0
+fail() {
+	printf '  x %s\n' "$1" >&2
+	FAILURES=$((FAILURES + 1))
+}
+
+read_json_field() {
+	local file="$1" expression="$2"
+	node -e 'const fs=require("node:fs"); const value=Function("p", "return " + process.argv[2])(JSON.parse(fs.readFileSync(process.argv[1], "utf8"))); process.stdout.write(value == null ? "" : String(value));' "$file" "$expression" 2>/dev/null || true
+}
+
+printf 'Pi version alignment\n'
+
+if [ ! -f "$VERSION_FILE" ]; then
+	fail "missing version file: $VERSION_FILE"
+	PINNED=""
+else
+	PINNED="$(tr -d '[:space:]' < "$VERSION_FILE")"
+fi
+
+PACKAGE_PIN=""
+if [ -f "$PACKAGE_JSON" ]; then
+	PACKAGE_PIN="$(read_json_field "$PACKAGE_JSON" 'p.dependencies?.["@earendil-works/pi-coding-agent"]')"
+else
+	fail "missing package manifest: $PACKAGE_JSON"
+fi
+
+LOCK_PIN=""
+if [ -f "$LOCK_FILE" ]; then
+	LOCK_PIN="$(node -e 'const fs=require("node:fs"); const text=fs.readFileSync(process.argv[1], "utf8"); const match=text.match(/"@earendil-works\/pi-coding-agent"\s*:\s*"([^"]+)"/); process.stdout.write(match?.[1] || "");' "$LOCK_FILE" 2>/dev/null || true)"
+else
+	fail "missing lockfile: $LOCK_FILE"
+fi
+
+LOCAL_VERSION=""
+if [ -x "$PI_BIN" ]; then
+	LOCAL_VERSION="$("$PI_BIN" --version 2>/dev/null | tr -d '[:space:]' || true)"
+else
+	fail "repository Pi is not executable: $PI_BIN"
+fi
+
+SOURCE_CODING_VERSION=""
+SOURCE_AI_VERSION=""
+if [ -f "$SOURCE_ROOT/packages/coding-agent/package.json" ]; then
+	SOURCE_CODING_VERSION="$(read_json_field "$SOURCE_ROOT/packages/coding-agent/package.json" 'p.version')"
+else
+	fail "missing Pi coding-agent source manifest under $SOURCE_ROOT"
+fi
+if [ -f "$SOURCE_ROOT/packages/ai/package.json" ]; then
+	SOURCE_AI_VERSION="$(read_json_field "$SOURCE_ROOT/packages/ai/package.json" 'p.version')"
+else
+	fail "missing Pi AI source manifest under $SOURCE_ROOT"
+fi
+
+SOURCE_TAG=""
+if git -C "$SOURCE_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+	SOURCE_TAG="$(git -C "$SOURCE_ROOT" describe --tags --exact-match HEAD 2>/dev/null || true)"
+else
+	fail "Pi source root is not a Git checkout: $SOURCE_ROOT"
+fi
+
+if [ -z "$PINNED" ]; then
+	fail ".pi-version is empty"
+fi
+if [ -n "$EXPECTED" ] && [ "$PINNED" != "$EXPECTED" ]; then
+	fail ".pi-version=$PINNED, expected target $EXPECTED"
+fi
+if [ "$PACKAGE_PIN" != "$PINNED" ]; then
+	fail "package.json=$PACKAGE_PIN, .pi-version=$PINNED"
+fi
+if [ "$LOCK_PIN" != "$PINNED" ]; then
+	fail "bun.lock=$LOCK_PIN, .pi-version=$PINNED"
+fi
+if [ "$LOCAL_VERSION" != "$PINNED" ]; then
+	fail "repository Pi binary=$LOCAL_VERSION, .pi-version=$PINNED"
+fi
+if [ "$SOURCE_CODING_VERSION" != "$PINNED" ]; then
+	fail "pi-mono coding-agent=$SOURCE_CODING_VERSION, .pi-version=$PINNED"
+fi
+if [ "$SOURCE_AI_VERSION" != "$PINNED" ]; then
+	fail "pi-mono pi-ai=$SOURCE_AI_VERSION, .pi-version=$PINNED"
+fi
+if [ "$SOURCE_TAG" != "v$PINNED" ]; then
+	fail "pi-mono tag=${SOURCE_TAG:-unavailable}, expected v$PINNED"
+fi
+
+printf '  target: %s\n' "${EXPECTED:-$PINNED}"
+printf '  package: %s\n' "${PACKAGE_PIN:-missing}"
+printf '  lock: %s\n' "${LOCK_PIN:-missing}"
+printf '  binary: %s\n' "${LOCAL_VERSION:-missing}"
+printf '  source: coding-agent=%s pi-ai=%s tag=%s\n' "${SOURCE_CODING_VERSION:-missing}" "${SOURCE_AI_VERSION:-missing}" "${SOURCE_TAG:-missing}"
+
+if [ "$FAILURES" -ne 0 ]; then
+	printf 'PI_VERSION_ALIGNMENT=FAIL failures=%d\n' "$FAILURES" >&2
+	exit 1
+fi
+
+printf 'PI_VERSION_ALIGNMENT=PASS version=%s\n' "$PINNED"

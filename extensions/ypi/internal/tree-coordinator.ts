@@ -714,7 +714,42 @@ async function requestCoordinator(
 		&& local.generation === process.env.YPI_TREE_GENERATION
 		&& local.status === "starting"
 	) {
-		await local.ready;
+		await new Promise<void>((resolve, reject) => {
+			let settled = false;
+			let timer: NodeJS.Timeout | undefined;
+			const finish = (error?: unknown) => {
+				if (settled) return;
+				settled = true;
+				if (timer) clearTimeout(timer);
+				options.signal?.removeEventListener("abort", onAbort);
+				if (error) reject(error);
+				else resolve();
+			};
+			const onAbort = () => finish(new TreeCoordinatorError(
+				"Recursive child cancelled while waiting for tree authority.",
+				130,
+			));
+			if (options.signal?.aborted) {
+				onAbort();
+				return;
+			}
+			if (options.deadlineMilliseconds !== undefined) {
+				const remaining = options.deadlineMilliseconds - Date.now();
+				if (remaining <= 0) {
+					finish(new TreeCoordinatorError(
+						"RLM_TIMEOUT expired while waiting for tree authority.",
+						124,
+					));
+					return;
+				}
+				timer = setTimeout(() => finish(new TreeCoordinatorError(
+					"RLM_TIMEOUT expired while waiting for tree authority.",
+					124,
+				)), remaining);
+			}
+			options.signal?.addEventListener("abort", onAbort, { once: true });
+			local.ready.then(() => finish(), (error) => finish(error));
+		});
 	}
 	if (options.signal?.aborted) {
 		throw new TreeCoordinatorError(
