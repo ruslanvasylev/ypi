@@ -163,6 +163,14 @@ function timeoutOrThrow(): number | undefined {
 	}
 }
 
+function normalizeAdmissionCancellation(error: unknown, signal?: AbortSignal): unknown {
+	if (!signal?.aborted) return error;
+	if (error instanceof RecursiveChildError && error.message.includes("Child Pi cancelled")) {
+		return error;
+	}
+	return new RecursiveChildError("Child Pi cancelled during admission before work started", 130);
+}
+
 export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveChildRequest): Promise<RecursiveChildResult> {
 	if (request.signal?.aborted) throw new RecursiveChildError("Child Pi cancelled before admission", 130);
 	const depth = currentDepth();
@@ -220,7 +228,7 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 			: Date.now() + setupRemainingSeconds * 1000;
 	} catch (error) {
 		removeRootAbortListener();
-		throw error;
+		throw normalizeAdmissionCancellation(error, request.signal);
 	}
 	let parentSlotSuspension;
 	let concurrencySlot;
@@ -244,7 +252,8 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 					: new Error(String(cleanupError));
 			}
 		}
-		const primaryMessage = error instanceof Error ? error.message : String(error);
+		const primaryError = normalizeAdmissionCancellation(error, request.signal);
+		const primaryMessage = primaryError instanceof Error ? primaryError.message : String(primaryError);
 		const message = resumeFailure
 			? `${primaryMessage}\nInherited concurrency-slot resume also failed: ${resumeFailure.message}`
 			: primaryMessage;
@@ -254,7 +263,7 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 			);
 		}
 		removeRootAbortListener();
-		const exitCode = (error as Error & { exitCode?: number }).exitCode || 1;
+		const exitCode = (primaryError as Error & { exitCode?: number }).exitCode || 1;
 		throw new RecursiveChildError(message, exitCode);
 	}
 	// Implementer confinement is enforced by the exact canonical extension and
@@ -385,10 +394,14 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 		else if (resources.standaloneSystemPromptFile) args.push("--system-prompt", resources.standaloneSystemPromptFile);
 
 		const timeoutSeconds = timeoutOrThrow();
-		await assertTreeCoordinatorActive({
-			deadlineMilliseconds: setupDeadlineMilliseconds,
-			signal: request.signal,
-		});
+		try {
+			await assertTreeCoordinatorActive({
+				deadlineMilliseconds: setupDeadlineMilliseconds,
+				signal: request.signal,
+			});
+		} catch (error) {
+			throw normalizeAdmissionCancellation(error, request.signal);
+		}
 		request.onAdmitted?.(callCount);
 		// Keep the legacy jj posture token and completion prefix parseable by the
 		// Agent Protocol parent-absorption importer. The richer mode/workspace and
@@ -547,19 +560,26 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 	} finally {
 		removeRootAbortListener();
 		const cleanupErrors = resources.cleanup();
-		try {
-			await concurrencySlot.release();
-		} catch (error) {
-			cleanupErrors.push(
-				error instanceof Error ? error : new Error(String(error)),
+		const rootCancellationTerminalizedCoordinator = depth === 0 && request.signal?.aborted;
+		if (rootCancellationTerminalizedCoordinator) {
+			trace(
+				`[${new Date().toISOString()}] depth=${depth} child_depth=${childDepth} CONTROL_CLEANUP_SUPERSEDED call=${callCount} reason=root-request-cancelled`,
 			);
-		}
-		try {
-			await parentSlotSuspension.resume();
-		} catch (error) {
-			cleanupErrors.push(
-				error instanceof Error ? error : new Error(String(error)),
-			);
+		} else {
+			try {
+				await concurrencySlot.release();
+			} catch (error) {
+				cleanupErrors.push(
+					error instanceof Error ? error : new Error(String(error)),
+				);
+			}
+			try {
+				await parentSlotSuspension.resume();
+			} catch (error) {
+				cleanupErrors.push(
+					error instanceof Error ? error : new Error(String(error)),
+				);
+			}
 		}
 		if (cleanupErrors.length > 0) {
 			const detail = cleanupErrors.map((error) => error.message).join("; ");

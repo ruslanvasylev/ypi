@@ -1273,7 +1273,37 @@ function inheritedAuthority() {
 async function requestCoordinator(operation, options = {}, fields = {}) {
   const local = localCoordinator;
   if (local && local.generation === process.env.YPI_TREE_GENERATION && local.status === "starting") {
-    await local.ready;
+    await new Promise((resolve, reject) => {
+      let settled = false;
+      let timer;
+      const finish = (error) => {
+        if (settled)
+          return;
+        settled = true;
+        if (timer)
+          clearTimeout(timer);
+        options.signal?.removeEventListener("abort", onAbort);
+        if (error)
+          reject(error);
+        else
+          resolve();
+      };
+      const onAbort = () => finish(new TreeCoordinatorError("Recursive child cancelled while waiting for tree authority.", 130));
+      if (options.signal?.aborted) {
+        onAbort();
+        return;
+      }
+      if (options.deadlineMilliseconds !== undefined) {
+        const remaining = options.deadlineMilliseconds - Date.now();
+        if (remaining <= 0) {
+          finish(new TreeCoordinatorError("RLM_TIMEOUT expired while waiting for tree authority.", 124));
+          return;
+        }
+        timer = setTimeout(() => finish(new TreeCoordinatorError("RLM_TIMEOUT expired while waiting for tree authority.", 124)), remaining);
+      }
+      options.signal?.addEventListener("abort", onAbort, { once: true });
+      local.ready.then(() => finish(), (error) => finish(error));
+    });
   }
   if (options.signal?.aborted) {
     throw new TreeCoordinatorError("Recursive child cancelled while waiting for tree authority.", 130);
@@ -5342,6 +5372,14 @@ function timeoutOrThrow() {
     throw new RecursiveChildError(message, message.startsWith("Invalid ") ? 1 : 124);
   }
 }
+function normalizeAdmissionCancellation(error, signal) {
+  if (!signal?.aborted)
+    return error;
+  if (error instanceof RecursiveChildError && error.message.includes("Child Pi cancelled")) {
+    return error;
+  }
+  return new RecursiveChildError("Child Pi cancelled during admission before work started", 130);
+}
 async function runRecursiveChild(runtime, request) {
   if (request.signal?.aborted)
     throw new RecursiveChildError("Child Pi cancelled before admission", 130);
@@ -5398,7 +5436,7 @@ async function runRecursiveChild(runtime, request) {
     setupDeadlineMilliseconds = setupRemainingSeconds === undefined ? undefined : Date.now() + setupRemainingSeconds * 1000;
   } catch (error) {
     removeRootAbortListener();
-    throw error;
+    throw normalizeAdmissionCancellation(error, request.signal);
   }
   let parentSlotSuspension;
   let concurrencySlot;
@@ -5420,14 +5458,15 @@ async function runRecursiveChild(runtime, request) {
         resumeFailure = cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError));
       }
     }
-    const primaryMessage = error instanceof Error ? error.message : String(error);
+    const primaryError = normalizeAdmissionCancellation(error, request.signal);
+    const primaryMessage = primaryError instanceof Error ? primaryError.message : String(primaryError);
     const message = resumeFailure ? `${primaryMessage}
 Inherited concurrency-slot resume also failed: ${resumeFailure.message}` : primaryMessage;
     if (resumeFailure) {
       trace(`[${new Date().toISOString()}] depth=${depth} child_depth=${childDepth} ADMISSION_RESUME_FAILED detail=${resumeFailure.message}`);
     }
     removeRootAbortListener();
-    const exitCode = error.exitCode || 1;
+    const exitCode = primaryError.exitCode || 1;
     throw new RecursiveChildError(message, exitCode);
   }
   const extensionsEnabled = requestedMode === "implement" ? true : childExtensionsEnabled(childDepth);
@@ -5544,10 +5583,14 @@ Inherited concurrency-slot resume also failed: ${resumeFailure.message}` : prima
     else if (resources.standaloneSystemPromptFile)
       args.push("--system-prompt", resources.standaloneSystemPromptFile);
     const timeoutSeconds = timeoutOrThrow();
-    await assertTreeCoordinatorActive({
-      deadlineMilliseconds: setupDeadlineMilliseconds,
-      signal: request.signal
-    });
+    try {
+      await assertTreeCoordinatorActive({
+        deadlineMilliseconds: setupDeadlineMilliseconds,
+        signal: request.signal
+      });
+    } catch (error) {
+      throw normalizeAdmissionCancellation(error, request.signal);
+    }
     request.onAdmitted?.(callCount);
     const legacyJjPosture = resources.workspace.readOnly ? "off" : "on";
     trace(`[${nowTraceTime()}] depth=${depth}→${childDepth} PID=${process.pid} call=${callCount} trace=${traceId} caller=${request.caller} fork=${request.fork === true} mode=${requestedMode} workspace=${resources.workspace.mode} jj=${legacyJjPosture}`);
@@ -5689,15 +5732,20 @@ ${report}`, error.exitCode || 1));
   } finally {
     removeRootAbortListener();
     const cleanupErrors2 = resources.cleanup();
-    try {
-      await concurrencySlot.release();
-    } catch (error) {
-      cleanupErrors2.push(error instanceof Error ? error : new Error(String(error)));
-    }
-    try {
-      await parentSlotSuspension.resume();
-    } catch (error) {
-      cleanupErrors2.push(error instanceof Error ? error : new Error(String(error)));
+    const rootCancellationTerminalizedCoordinator = depth === 0 && request.signal?.aborted;
+    if (rootCancellationTerminalizedCoordinator) {
+      trace(`[${new Date().toISOString()}] depth=${depth} child_depth=${childDepth} CONTROL_CLEANUP_SUPERSEDED call=${callCount} reason=root-request-cancelled`);
+    } else {
+      try {
+        await concurrencySlot.release();
+      } catch (error) {
+        cleanupErrors2.push(error instanceof Error ? error : new Error(String(error)));
+      }
+      try {
+        await parentSlotSuspension.resume();
+      } catch (error) {
+        cleanupErrors2.push(error instanceof Error ? error : new Error(String(error)));
+      }
     }
     if (cleanupErrors2.length > 0) {
       const detail = cleanupErrors2.map((error) => error.message).join("; ");
