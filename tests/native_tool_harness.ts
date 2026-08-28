@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ensureEnvironment } from "../extensions/ypi/env.ts";
 import { acquireConcurrencySlot } from "../extensions/ypi/internal/concurrency.ts";
+import { beginRootTreeCoordinator } from "../extensions/ypi/internal/tree-coordinator.ts";
 import { registerNativeRlmQueryTool } from "../extensions/ypi/native-tool.ts";
 import { resolveRuntime } from "../extensions/ypi/runtime.ts";
 
@@ -149,7 +150,7 @@ elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "huge" ]; then
   head -c $((17 * 1024 * 1024)) /dev/zero | tr '\\0' X
 elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "json" ]; then
   printf '%s\\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"JSON_CHILD_OK"}}'
-  printf '%s\\n' '{"type":"turn_end","message":{"usage":{"totalTokens":7,"cost":{"total":0.123}}},"toolResults":[]}'
+  printf '%s\\n' '{"type":"turn_end","message":{"usage":{"input":92026,"output":100,"cacheRead":200000,"cacheWrite":1000,"reasoning":50,"totalTokens":293126,"cost":{"total":0.123}}},"toolResults":[]}'
 elif [ "\${YPI_FAKE_PI_MODE:-ok}" = "json-cost-then-sleep" ]; then
   printf '%s\\n' '{"type":"turn_end","message":{"usage":{"totalTokens":5,"cost":{"total":0.25}}},"toolResults":[]}'
   printf '%s\\n' "$$" > "$YPI_FAKE_PID_FILE"
@@ -1156,11 +1157,18 @@ async function run(): Promise<void> {
 		progressUpdates.push(update.content?.find((item: any) => item.type === "text")?.text || "");
 	});
 	assertContains("N10: JSON child text parsed", jsonText, "JSON_CHILD_OK");
+	assertContains("N10: compact usage summary reaches the parent agent", jsonText, "[ypi usage:");
+	assertContains("N10: compact usage summary identifies cached context", jsonText, "cache-read=200000");
+	assertContains("N10: compact usage summary identifies long-context turns", jsonText, "over-272k=1");
 	assertContains("N10: native onUpdate receives bounded child progress", progressUpdates.join("\n"), "JSON_CHILD_OK");
 	const costFile = process.env.RLM_COST_FILE || "";
 	const traceFile = process.env.PI_TRACE_FILE || "";
 	const lifecycleTrace = readFileSync(traceFile, "utf8");
 	assertContains("N10: JSON child cost recorded without a budget", existsSync(costFile) ? readFileSync(costFile, "utf8") : "", '"cost":0.123');
+	const attributedUsage = existsSync(costFile) ? readFileSync(costFile, "utf8") : "";
+	assertContains("N10: usage ledger records the generation owner", attributedUsage, '"tree_generation":');
+	assertContains("N10: usage ledger records the exact child session", attributedUsage, '"session_file":');
+	assertContains("N10: usage ledger records prompt categories", attributedUsage, '"cacheRead":200000');
 	record((statSync(costFile).mode & 0o777) === 0o600 && (statSync(traceFile).mode & 0o777) === 0o600, "N10: automatic telemetry files are private");
 	assertNotContains("N10: lifecycle trace excludes delegated prompt text", lifecycleTrace, "PRIVATE_PROMPT_MUST_NOT_ENTER_TRACE");
 	assertContains("N10: lifecycle trace preserves read-only absorption posture", lifecycleTrace, "mode=review workspace=read-only jj=off");
@@ -1283,12 +1291,43 @@ async function run(): Promise<void> {
 	process.env.RLM_SESSION_DIR = sessionDir;
 	process.env.RLM_TRACE_ID = "parallel";
 	ensureEnvironment(runtime, context());
+	const firstTreeGeneration = process.env.YPI_TREE_GENERATION || "";
 	await Promise.all([invoke("first"), invoke("second")]);
 	const log = readLog();
 	assertContains("N11: first parallel call count appears", log, "RLM_CALL_COUNT=1");
 	assertContains("N11: second parallel call count appears", log, "RLM_CALL_COUNT=2");
-	assertContains("N11: first session file unique", log, "parallel_d1_c1.jsonl");
-	assertContains("N11: second session file unique", log, "parallel_d1_c2.jsonl");
+	assertContains("N11: first session file unique", log, `parallel_g${firstTreeGeneration}_d1_c1.jsonl`);
+	assertContains("N11: second session file unique", log, `parallel_g${firstTreeGeneration}_d1_c2.jsonl`);
+	beginRootTreeCoordinator("native-generation-rotation");
+	const secondTreeGeneration = process.env.YPI_TREE_GENERATION || "";
+	resetLog();
+	await invoke("next root turn");
+	const nextGenerationLog = readLog();
+	record(
+		firstTreeGeneration.length === 32
+			&& secondTreeGeneration.length === 32
+			&& firstTreeGeneration !== secondTreeGeneration,
+		"N11b: each root turn receives a distinct generation identity",
+	);
+	assertContains("N11b: reset call count uses the new generation", nextGenerationLog, `parallel_g${secondTreeGeneration}_d1_c1.jsonl`);
+	record(
+		existsSync(path.join(sessionDir, `parallel_g${firstTreeGeneration}_d1_c1.jsonl`))
+			&& existsSync(path.join(sessionDir, `parallel_g${secondTreeGeneration}_d1_c1.jsonl`)),
+		"N11b: generation reset preserves both independently owned sessions",
+	);
+
+	clearYpiEnv();
+	resetLog();
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	process.env.RLM_JSON = "0";
+	process.env.RLM_SESSION_DIR = sessionDir;
+	process.env.RLM_TRACE_ID = "reserved";
+	ensureEnvironment(runtime, context());
+	const reservedGeneration = process.env.YPI_TREE_GENERATION || "";
+	writeFileSync(path.join(sessionDir, `reserved_g${reservedGeneration}_d1_c1.jsonl`), "do-not-resume\n", { flag: "wx", mode: 0o600 });
+	await expectThrow("N11c: pre-existing session identity fails closed", "already exists", () => invoke("must not resume"));
+	record(readLog() === "", "N11c: pre-existing session identity spawns no child");
 
 	clearYpiEnv();
 	resetLog();
@@ -1330,12 +1369,13 @@ async function run(): Promise<void> {
 	process.env.RLM_TRACE_ID = "../../etc/evil";
 	process.env.YPI_FAKE_PI_MODE = "transcript";
 		ensureEnvironment(runtime, context());
+		const hostileGeneration = process.env.YPI_TREE_GENERATION || "";
 		await invoke("hostile");
 		const traceLog = readLog();
 		assertContains(
 			"N13: hostile trace id is sanitized in the session filename",
 			traceLog,
-			`${process.env.RLM_TRACE_ID}_d1_c1.jsonl`,
+			`${process.env.RLM_TRACE_ID}_g${hostileGeneration}_d1_c1.jsonl`,
 		);
 	assertNotContains("N13: hostile trace id cannot traverse out of the session dir", traceLog, "etc/evil");
 	const hostileValidation = spawnSync(process.execPath, [

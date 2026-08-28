@@ -16,6 +16,7 @@ import {
 	withPrivateUmask,
 } from "./private-path.ts";
 import { renderActiveTaskFilesSection } from "./task-files.ts";
+import { currentTreeGeneration } from "./tree-coordinator.ts";
 import {
 	abandonUnstartedTranscriptProof,
 	closeTranscriptProof,
@@ -132,6 +133,8 @@ function childSessionFile(input: ChildResourceInput): string | undefined {
 		}
 		return undefined;
 	}
+	const generation = currentTreeGeneration();
+	const filename = `${safeTraceId(process.env.RLM_TRACE_ID || "ypi")}_g${generation}_d${input.childDepth}_c${input.callCount}.jsonl`;
 	if (transcriptsRequired()) {
 		if (!path.isAbsolute(sessionDir)) {
 			throw new Error(
@@ -141,17 +144,20 @@ function childSessionFile(input: ChildResourceInput): string | undefined {
 		// Required mode validates and holds the existing private directory in
 		// prepareTranscriptProof. Creating it recursively here would permit
 		// symlinked ancestors and umask-dependent permissions.
-		return path.join(sessionDir, `${safeTraceId(process.env.RLM_TRACE_ID || "ypi")}_d${input.childDepth}_c${input.callCount}.jsonl`);
+		return path.join(sessionDir, filename);
 	}
 	withPrivateUmask(() => mkdirSync(sessionDir, { recursive: true, mode: 0o700 }));
-	return path.join(sessionDir, `${safeTraceId(process.env.RLM_TRACE_ID || "ypi")}_d${input.childDepth}_c${input.callCount}.jsonl`);
+	return path.join(sessionDir, filename);
 }
 
-function copyForkSession(input: ChildResourceInput, childSession: string | undefined): void {
+function initializeChildSession(input: ChildResourceInput, childSession: string | undefined): void {
+	if (!childSession) return;
 	const parentSession = input.parentSessionFile || process.env.RLM_SESSION_FILE;
-	if (input.fork && childSession && parentSession && existsSync(parentSession)) {
+	if (input.fork && parentSession && existsSync(parentSession)) {
 		atomicCopyFile(parentSession, childSession);
+		return;
 	}
+	atomicCreateFile(childSession, "");
 }
 
 function cleanupErrors(actions: Array<() => void>): Error[] {
@@ -285,7 +291,7 @@ export function acquireChildResources(input: ChildResourceInput): ChildResourceL
 			}
 			transcriptProof = prepareTranscriptProof({ childSession, forkSource });
 		} else {
-			copyForkSession(input, childSession);
+			initializeChildSession(input, childSession);
 		}
 		if (input.setupDeadlineMilliseconds !== undefined && Date.now() >= input.setupDeadlineMilliseconds) {
 			const error = new Error("RLM_TIMEOUT expired during recursive resource setup") as Error & { exitCode: number };

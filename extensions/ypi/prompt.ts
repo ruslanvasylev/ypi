@@ -19,9 +19,29 @@ You are Pi with a native \`rlm_query\` tool.
 - The shell command named \`rlm_query\` is optional compatibility glue. Do not require it for minimal recursion.
 `;
 
-function runtimeImplementationSection(runtime: YpiRuntime): string {
+function runtimeSourcePointers(runtime: YpiRuntime): string {
 	if (!shellHelperEnabled(runtime)) {
 		debug("__YPI_EXTENSION_NO_SHELL_HELPER__");
+		return "";
+	}
+	return `
+
+## Optional rlm_query Shell Helper
+
+The native tool is canonical. A shell-compatible helper is also available at
+\`${runtime.rlmQueryPath}\`. Its shared runtime can be inspected on demand at
+\`${runtime.runtimeCorePath}\`, \`${runtime.runtimeInternalDir}\`, and
+\`${runtime.cliAdapterPath}\`. Runtime source is not embedded in the prompt by
+default.
+`;
+}
+
+function diagnosticRuntimeImplementationSection(runtime: YpiRuntime): string {
+	if (
+		!shellHelperEnabled(runtime)
+		|| process.env.YPI_PROMPT_INCLUDE_RUNTIME_SOURCE !== "1"
+		|| (process.env.RLM_DEPTH || "0") !== "0"
+	) {
 		return "";
 	}
 
@@ -81,7 +101,7 @@ export function buildYpiPrompt(runtime: YpiRuntime): string {
 		contextPath: process.env.CONTEXT,
 		promptPath: process.env.RLM_PROMPT_FILE,
 		rootPromptPath: process.env.RLM_ROOT_PROMPT_FILE,
-	})}${runtimeImplementationSection(runtime)}`;
+	})}${runtimeSourcePointers(runtime)}${diagnosticRuntimeImplementationSection(runtime)}`;
 }
 
 export function patchSystemPrompt(runtime: YpiRuntime, event: BeforeAgentStartEvent): string {

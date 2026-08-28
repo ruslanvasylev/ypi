@@ -91,6 +91,23 @@ export interface CostSummary {
 	tokens: number;
 }
 
+export interface UsageAttribution {
+	trace_id: string;
+	tree_generation: string;
+	parent_depth: number;
+	child_depth: number;
+	call_count: number;
+	session_file?: string;
+	provider: string;
+	model: string;
+	thinking_level: string;
+	mode: string;
+	fork: boolean;
+	prompt_chars: number;
+	context_kind: "none" | "inline" | "path";
+	context_chars: number;
+}
+
 export interface CostLedgerSummary extends CostSummary {
 	incomplete: boolean;
 }
@@ -274,12 +291,31 @@ function appendTelemetryLine(line: string): void {
 	}
 }
 
-export function appendCostSummary(summary: CostSummary): void {
-	appendTelemetryLine(JSON.stringify(summary));
+export function appendCostSummary(
+	summary: CostSummary,
+	attribution?: UsageAttribution,
+): void {
+	appendTelemetryLine(JSON.stringify(attribution ? {
+		schema_version: 2,
+		type: "child_usage",
+		...attribution,
+		...summary,
+	} : summary));
 }
 
-export function appendIncompleteCostMarker(reason: string): void {
-	appendTelemetryLine(JSON.stringify({ incomplete: true, reason }));
+export function appendIncompleteCostMarker(
+	reason: string,
+	attribution?: UsageAttribution,
+): void {
+	appendTelemetryLine(JSON.stringify({
+		...(attribution ? {
+			schema_version: 2,
+			type: "child_usage_incomplete",
+			...attribution,
+		} : {}),
+		incomplete: true,
+		reason,
+	}));
 }
 
 export function canExecute(filePath: string): boolean {

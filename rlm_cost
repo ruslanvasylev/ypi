@@ -2,14 +2,14 @@
 # rlm_cost — Report observational cost for the current recursive tree.
 # Usage:
 #   rlm_cost          # prints "$0.042381" (and an incomplete qualifier if needed)
-#   rlm_cost --json   # prints cost, tokens, completed calls, and incompleteness
+#   rlm_cost --json   # prints totals, context categories, top nodes, and incompleteness
 
 set -euo pipefail
 
 MODE="${1:-}"
 if [ -z "${RLM_COST_FILE:-}" ] || [ ! -f "$RLM_COST_FILE" ]; then
     if [ "$MODE" = "--json" ]; then
-        echo '{"cost": 0, "tokens": 0, "calls": 0, "incomplete": false, "incomplete_markers": 0}'
+        echo '{"cost": 0, "tokens": 0, "input": 0, "output": 0, "cache_read": 0, "cache_write": 0, "reasoning": 0, "turns": 0, "over_272k_turns": 0, "peak_context_tokens": 0, "calls": 0, "incomplete": false, "incomplete_markers": 0, "top_nodes": []}'
     else
         echo '$0.000000'
     fi
@@ -27,6 +27,15 @@ total_cost = 0.0
 total_tokens = 0
 completed_calls = 0
 incomplete_markers = 0
+input_tokens = 0
+output_tokens = 0
+cache_read_tokens = 0
+cache_write_tokens = 0
+reasoning_tokens = 0
+turns = 0
+over_272k_turns = 0
+peak_context_tokens = 0
+nodes = []
 with open(ledger, encoding="utf-8") as stream:
     for line in stream:
         line = line.strip()
@@ -44,21 +53,72 @@ with open(ledger, encoding="utf-8") as stream:
         if "cost" not in record and "tokens" not in record:
             continue
         try:
-            total_cost += float(record.get("cost", 0) or 0)
-            total_tokens += int(record.get("tokens", 0) or 0)
+            record_cost = float(record.get("cost", 0) or 0)
+            record_tokens = int(record.get("tokens", 0) or 0)
+            record_input = int(record.get("input", 0) or 0)
+            record_output = int(record.get("output", 0) or 0)
+            record_cache_read = int(record.get("cacheRead", 0) or 0)
+            record_cache_write = int(record.get("cacheWrite", 0) or 0)
+            record_reasoning = int(record.get("reasoning", 0) or 0)
+            record_turns = int(record.get("turns", 0) or 0)
+            record_over_272k = int(record.get("over272kTurns", 0) or 0)
+            record_peak_context = int(record.get("peakContextTokens", 0) or 0)
         except (TypeError, ValueError, OverflowError):
             incomplete_markers += 1
             continue
+        total_cost += record_cost
+        total_tokens += record_tokens
+        input_tokens += record_input
+        output_tokens += record_output
+        cache_read_tokens += record_cache_read
+        cache_write_tokens += record_cache_write
+        reasoning_tokens += record_reasoning
+        turns += record_turns
+        over_272k_turns += record_over_272k
+        peak_context_tokens = max(peak_context_tokens, record_peak_context)
         completed_calls += 1
+        if record.get("type") == "child_usage":
+            nodes.append({
+                "trace_id": record.get("trace_id"),
+                "tree_generation": record.get("tree_generation"),
+                "child_depth": record.get("child_depth"),
+                "call_count": record.get("call_count"),
+                "session_file": record.get("session_file"),
+                "model": record.get("model"),
+                "thinking_level": record.get("thinking_level"),
+                "mode": record.get("mode"),
+                "fork": record.get("fork"),
+                "prompt_chars": record.get("prompt_chars"),
+                "context_kind": record.get("context_kind"),
+                "context_chars": record.get("context_chars"),
+                "tokens": record_tokens,
+                "input": record_input,
+                "output": record_output,
+                "cache_read": record_cache_read,
+                "cache_write": record_cache_write,
+                "reasoning": record_reasoning,
+                "turns": record_turns,
+                "over_272k_turns": record_over_272k,
+                "peak_context_tokens": record_peak_context,
+            })
 
 incomplete = incomplete_markers > 0
 if json_mode:
     print(json.dumps({
         "cost": round(total_cost, 6),
         "tokens": total_tokens,
+        "input": input_tokens,
+        "output": output_tokens,
+        "cache_read": cache_read_tokens,
+        "cache_write": cache_write_tokens,
+        "reasoning": reasoning_tokens,
+        "turns": turns,
+        "over_272k_turns": over_272k_turns,
+        "peak_context_tokens": peak_context_tokens,
         "calls": completed_calls,
         "incomplete": incomplete,
         "incomplete_markers": incomplete_markers,
+        "top_nodes": sorted(nodes, key=lambda node: node["tokens"], reverse=True)[:10],
     }))
 else:
     suffix = (

@@ -41,6 +41,7 @@ export interface TranscriptProofLease extends FileIdentity {
 
 export interface TranscriptProofIdentity {
 	traceId: string;
+	treeGeneration: string;
 	parentDepth: number;
 	childDepth: number;
 	callCount: number;
@@ -48,8 +49,9 @@ export interface TranscriptProofIdentity {
 }
 
 export interface TranscriptReceipt {
-	schema_version: 1;
+	schema_version: 1 | 2;
 	trace_id: string;
+	tree_generation?: string;
 	parent_depth: number;
 	child_depth: number;
 	call_count: number;
@@ -399,8 +401,9 @@ export function finalizeTranscriptProof(
 		true,
 	);
 	const receipt: TranscriptReceipt = {
-		schema_version: 1,
+		schema_version: 2,
 		trace_id: identity.traceId,
+		tree_generation: identity.treeGeneration,
 		parent_depth: identity.parentDepth,
 		child_depth: identity.childDepth,
 		call_count: identity.callCount,
@@ -496,10 +499,11 @@ function parseReceipt(receiptPath: string): TranscriptReceipt {
 			}
 			const parsed = JSON.parse(readFileSync(descriptor, "utf8")) as TranscriptReceipt;
 			if (
-				parsed.schema_version !== 1
+				(parsed.schema_version !== 1 && parsed.schema_version !== 2)
 				|| typeof parsed.trace_id !== "string"
 				|| !parsed.trace_id
 				|| parsed.trace_id !== parsed.trace_id.replace(/[^a-zA-Z0-9._-]/g, "_")
+				|| (parsed.schema_version === 2 && !/^[a-f0-9]{32}$/.test(parsed.tree_generation || ""))
 				|| !Number.isSafeInteger(parsed.parent_depth)
 				|| parsed.parent_depth < 0
 				|| !Number.isSafeInteger(parsed.child_depth)

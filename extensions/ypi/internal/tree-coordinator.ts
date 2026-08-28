@@ -144,6 +144,17 @@ export class TreeCoordinatorError extends Error {
 
 let localCoordinator: LocalCoordinator | undefined;
 
+export function currentTreeGeneration(): string {
+	const generation = process.env.YPI_TREE_GENERATION;
+	if (!GENERATION_TOKEN.test(generation || "")) {
+		throw new TreeCoordinatorError(
+			"Recursive tree generation is unavailable or malformed.",
+			130,
+		);
+	}
+	return generation!;
+}
+
 function exactNonNegativeInteger(name: string, value: unknown): number {
 	if (
 		typeof value !== "number"

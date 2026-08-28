@@ -81,6 +81,7 @@ export function registerNativeRlmQueryTool(pi: ExtensionAPI, runtime: YpiRuntime
 					stale ? `No new child events for ${formatElapsed(idleSeconds)}; still running — cancel manually if desired` : "Child running",
 					`elapsed ${formatElapsed(elapsedSeconds)}`,
 					`call ${admittedCall ?? "pending"}/${process.env.RLM_MAX_CALLS || "∞"}`,
+					`completed tokens ${spent.incomplete ? "at least " : ""}${spent.tokens}`,
 					`completed cost ${spent.incomplete ? "at least " : ""}$${spent.cost.toFixed(4)}`,
 				].join(" · ");
 				const statusBlock = [header, ...activityLines].join("\n");

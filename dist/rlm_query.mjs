@@ -894,6 +894,13 @@ class TreeCoordinatorError extends Error {
   }
 }
 var localCoordinator;
+function currentTreeGeneration() {
+  const generation = process.env.YPI_TREE_GENERATION;
+  if (!GENERATION_TOKEN.test(generation || "")) {
+    throw new TreeCoordinatorError("Recursive tree generation is unavailable or malformed.", 130);
+  }
+  return generation;
+}
 function exactNonNegativeInteger(name, value) {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
     throw new TreeCoordinatorError(`${name} must be a non-negative safe integer.`);
@@ -2020,11 +2027,24 @@ function appendTelemetryLine(line) {
     delete process.env.YPI_COST_FILE_IDENTITY;
   }
 }
-function appendCostSummary(summary) {
-  appendTelemetryLine(JSON.stringify(summary));
+function appendCostSummary(summary, attribution) {
+  appendTelemetryLine(JSON.stringify(attribution ? {
+    schema_version: 2,
+    type: "child_usage",
+    ...attribution,
+    ...summary
+  } : summary));
 }
-function appendIncompleteCostMarker(reason) {
-  appendTelemetryLine(JSON.stringify({ incomplete: true, reason }));
+function appendIncompleteCostMarker(reason, attribution) {
+  appendTelemetryLine(JSON.stringify({
+    ...attribution ? {
+      schema_version: 2,
+      type: "child_usage_incomplete",
+      ...attribution
+    } : {},
+    incomplete: true,
+    reason
+  }));
 }
 
 // extensions/ypi/internal/cli-async.ts
@@ -2361,7 +2381,8 @@ var CHILD_RUNTIME_EXCLUDED_KEYS = [
   "RLM_BUDGET",
   "YPI_EXPLICIT_RELEASE_REQUEST",
   "YPI_EXPLICIT_NON_OWNED_REMOTE",
-  "YPI_ALLOW_LOCAL_REMOTE_FOR_TESTS"
+  "YPI_ALLOW_LOCAL_REMOTE_FOR_TESTS",
+  "YPI_PROMPT_INCLUDE_RUNTIME_SOURCE"
 ];
 var CHILD_RUNTIME_EXCLUDED_PREFIXES = ["YPI_EXPLICIT_"];
 var PROVIDER_ENV_KEYS = {
@@ -2521,6 +2542,7 @@ function buildChildEnvironment(baseEnv, overrides, runtime, childDepth) {
 var MAX_TOOL_OUTPUT_CHARS = 60 * 1024;
 var MAX_CHILD_STREAM_CHARS = 16 * 1024 * 1024;
 var MAX_JSON_EVENT_CHARS = 1024 * 1024;
+var LONG_CONTEXT_OBSERVATION_TOKENS = 272000;
 function createBoundedCapture(limit) {
   const chunks = [];
   let retained = 0;
@@ -2565,7 +2587,19 @@ function createJsonDecoder(onText, onToolActivity) {
   let jsonCostIncomplete = false;
   let cost = 0;
   let tokens = 0;
+  let input = 0;
+  let output = 0;
+  let cacheRead = 0;
+  let cacheWrite = 0;
+  let reasoning = 0;
+  let turns = 0;
+  let peakContextTokens = 0;
+  let over272kTurns = 0;
   let sawTurnEnd = false;
+  const usageNumber = (value) => {
+    const parsed = Number(value || 0);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+  };
   const classifyOversizedLine = (prefix) => {
     const eventType = /"type"\s*:\s*"([^"]+)"/.exec(prefix)?.[1];
     if (!eventType || eventType === "turn_end")
@@ -2594,8 +2628,22 @@ function createJsonDecoder(onText, onToolActivity) {
       if (event.type === "turn_end") {
         sawTurnEnd = true;
         const usage = event.message?.usage || {};
-        cost += Number(usage.cost?.total || 0);
-        tokens += Number(usage.totalTokens || 0);
+        const turnInput = usageNumber(usage.input);
+        const turnOutput = usageNumber(usage.output);
+        const turnCacheRead = usageNumber(usage.cacheRead);
+        const turnCacheWrite = usageNumber(usage.cacheWrite);
+        const turnContext = turnInput + turnCacheRead + turnCacheWrite;
+        cost += usageNumber(usage.cost?.total);
+        tokens += usageNumber(usage.totalTokens) || turnContext + turnOutput;
+        input += turnInput;
+        output += turnOutput;
+        cacheRead += turnCacheRead;
+        cacheWrite += turnCacheWrite;
+        reasoning += usageNumber(usage.reasoning);
+        turns++;
+        peakContextTokens = Math.max(peakContextTokens, turnContext);
+        if (turnContext > LONG_CONTEXT_OBSERVATION_TOKENS)
+          over272kTurns++;
       }
     } catch {}
     return keepFlowing;
@@ -2646,7 +2694,18 @@ function createJsonDecoder(onText, onToolActivity) {
     result() {
       return {
         text: text.text(),
-        cost: sawTurnEnd ? { cost, tokens } : undefined,
+        cost: sawTurnEnd ? {
+          cost,
+          tokens,
+          input,
+          output,
+          cacheRead,
+          cacheWrite,
+          reasoning,
+          turns,
+          peakContextTokens,
+          over272kTurns
+        } : undefined,
         textTruncated: text.truncated,
         jsonEventTruncated,
         jsonCostIncomplete
@@ -3340,8 +3399,9 @@ function finalizeTranscriptProof(lease, identity) {
   }
   const appended = validateJsonlRegion(lease.descriptor, lease.baselineBytes, finalBytes - lease.baselineBytes, "Required child transcript append", true);
   const receipt = {
-    schema_version: 1,
+    schema_version: 2,
     trace_id: identity.traceId,
+    tree_generation: identity.treeGeneration,
     parent_depth: identity.parentDepth,
     child_depth: identity.childDepth,
     call_count: identity.callCount,
@@ -5164,20 +5224,26 @@ function childSessionFile(input) {
     }
     return;
   }
+  const generation = currentTreeGeneration();
+  const filename = `${safeTraceId(process.env.RLM_TRACE_ID || "ypi")}_g${generation}_d${input.childDepth}_c${input.callCount}.jsonl`;
   if (transcriptsRequired()) {
     if (!path23.isAbsolute(sessionDir)) {
       throw new Error(`RLM_REQUIRE_TRANSCRIPTS=1 requires an absolute session directory: ${sessionDir}`);
     }
-    return path23.join(sessionDir, `${safeTraceId(process.env.RLM_TRACE_ID || "ypi")}_d${input.childDepth}_c${input.callCount}.jsonl`);
+    return path23.join(sessionDir, filename);
   }
   withPrivateUmask(() => mkdirSync3(sessionDir, { recursive: true, mode: 448 }));
-  return path23.join(sessionDir, `${safeTraceId(process.env.RLM_TRACE_ID || "ypi")}_d${input.childDepth}_c${input.callCount}.jsonl`);
+  return path23.join(sessionDir, filename);
 }
-function copyForkSession(input, childSession) {
+function initializeChildSession(input, childSession) {
+  if (!childSession)
+    return;
   const parentSession = input.parentSessionFile || process.env.RLM_SESSION_FILE;
-  if (input.fork && childSession && parentSession && existsSync8(parentSession)) {
+  if (input.fork && parentSession && existsSync8(parentSession)) {
     atomicCopyFile(parentSession, childSession);
+    return;
   }
+  atomicCreateFile(childSession, "");
 }
 function cleanupErrors(actions) {
   const errors = [];
@@ -5281,7 +5347,7 @@ function acquireChildResources(input) {
       }
       transcriptProof = prepareTranscriptProof({ childSession, forkSource });
     } else {
-      copyForkSession(input, childSession);
+      initializeChildSession(input, childSession);
     }
     if (input.setupDeadlineMilliseconds !== undefined && Date.now() >= input.setupDeadlineMilliseconds) {
       const error = new Error("RLM_TIMEOUT expired during recursive resource setup");
@@ -5438,6 +5504,7 @@ async function runRecursiveChild(runtime, request) {
     removeRootAbortListener();
     throw normalizeAdmissionCancellation(error, request.signal);
   }
+  const treeGeneration = currentTreeGeneration();
   let parentSlotSuspension;
   let concurrencySlot;
   try {
@@ -5593,7 +5660,7 @@ Inherited concurrency-slot resume also failed: ${resumeFailure.message}` : prima
     }
     request.onAdmitted?.(callCount);
     const legacyJjPosture = resources.workspace.readOnly ? "off" : "on";
-    trace(`[${nowTraceTime()}] depth=${depth}→${childDepth} PID=${process.pid} call=${callCount} trace=${traceId} caller=${request.caller} fork=${request.fork === true} mode=${requestedMode} workspace=${resources.workspace.mode} jj=${legacyJjPosture}`);
+    trace(`[${nowTraceTime()}] depth=${depth}→${childDepth} PID=${process.pid} call=${callCount} trace=${traceId} generation=${treeGeneration} caller=${request.caller} fork=${request.fork === true} mode=${requestedMode} workspace=${resources.workspace.mode} jj=${legacyJjPosture}`);
     const started = Date.now();
     resources.workspace.prepareChildLaunch();
     const processResult = await runChildProcess({
@@ -5633,18 +5700,35 @@ Inherited concurrency-slot resume also failed: ${resumeFailure.message}` : prima
     });
     const elapsed = Math.max(0, Math.round((Date.now() - started) / 1000));
     const output2 = normalizeChildOutput(processResult);
+    const usageAttribution = {
+      trace_id: traceId,
+      tree_generation: treeGeneration,
+      parent_depth: depth,
+      child_depth: childDepth,
+      call_count: callCount,
+      ...resources.childSession ? { session_file: path24.basename(resources.childSession) } : {},
+      provider,
+      model,
+      thinking_level: thinkingLevel,
+      mode: requestedMode,
+      fork: request.fork === true,
+      prompt_chars: request.prompt.length,
+      context_kind: request.contextPath ? "path" : request.context !== undefined ? "inline" : "none",
+      context_chars: request.context?.length || 0
+    };
     if (jsonMode && (!output2.cost || processResult.cancelled || processResult.timedOut)) {
       processResult.jsonCostIncomplete = true;
     }
     if (output2.cost)
-      appendCostSummary(output2.cost);
+      appendCostSummary(output2.cost, usageAttribution);
     if (processResult.jsonCostIncomplete) {
-      appendIncompleteCostMarker("child ended without a complete final cost boundary");
+      appendIncompleteCostMarker("child ended without a complete final cost boundary", usageAttribution);
     }
     let transcriptFailure;
     try {
       finalizeTranscriptProof(resources.transcriptProof, {
         traceId,
+        treeGeneration,
         parentDepth: depth,
         childDepth,
         callCount,
@@ -5659,13 +5743,15 @@ Inherited concurrency-slot resume also failed: ${resumeFailure.message}` : prima
       exitCode: processResult.code,
       transcriptStatus
     };
-    trace(`[${new Date().toISOString()}] depth=${depth} COMPLETED child_depth=${childDepth} exit=${processResult.code} elapsed=${elapsed}s caller=${request.caller} call=${callCount} trace=${traceId} cost=${processResult.jsonCostIncomplete ? "incomplete" : output2.cost?.cost ?? "untracked"} tokens=${processResult.jsonCostIncomplete ? "incomplete" : output2.cost?.tokens ?? "untracked"} cancelled=${processResult.cancelled} timeout=${processResult.timedOut} truncated=${processResult.textTruncated || processResult.jsonEventTruncated} transcript=${transcriptStatus} changed_paths=${workspace.changedPaths.length}`);
+    trace(`[${new Date().toISOString()}] depth=${depth} COMPLETED child_depth=${childDepth} exit=${processResult.code} elapsed=${elapsed}s caller=${request.caller} call=${callCount} trace=${traceId} generation=${treeGeneration} cost=${processResult.jsonCostIncomplete ? "incomplete" : output2.cost?.cost ?? "untracked"} tokens=${processResult.jsonCostIncomplete ? "incomplete" : output2.cost?.tokens ?? "untracked"} cancelled=${processResult.cancelled} timeout=${processResult.timedOut} truncated=${processResult.textTruncated || processResult.jsonEventTruncated} transcript=${transcriptStatus} changed_paths=${workspace.changedPaths.length}`);
     const details = {
       implementation: "canonical",
       depth,
       childDepth,
       maxDepth: limit,
       callCount,
+      treeGeneration,
+      sessionFile: resources.childSession ? path24.basename(resources.childSession) : undefined,
       caller: request.caller,
       exitCode: processResult.code,
       signal: processResult.signal,
@@ -5677,8 +5763,10 @@ Inherited concurrency-slot resume also failed: ${resumeFailure.message}` : prima
       textTruncated: processResult.textTruncated,
       jsonEventTruncated: processResult.jsonEventTruncated,
       jsonCostIncomplete: processResult.jsonCostIncomplete,
-      cancelled: processResult.cancelled
+      cancelled: processResult.cancelled,
+      usage: output2.cost
     };
+    const usageOutput = formatUsageObservation(details);
     if (processResult.code !== 0) {
       const reason = processResult.cancelled ? "Child Pi cancelled" : processResult.timedOut ? `Child Pi timed out after ${timeoutSeconds}s` : `Child Pi exited with ${processResult.code}`;
       const childOutput = formatCombinedChildOutput(output2);
@@ -5687,12 +5775,16 @@ Inherited concurrency-slot resume also failed: ${resumeFailure.message}` : prima
 
 Transcript proof failed: ${transcriptFailure.message}` : "";
       throw new RecursiveChildError(`${reason}${childOutput ? `
-${childOutput}` : ""}${transcriptOutput}${workspaceOutput ? `
+${childOutput}` : ""}${transcriptOutput}${usageOutput ? `
+
+${usageOutput}` : ""}${workspaceOutput ? `
 
 ${workspaceOutput}` : ""}`, processResult.code, details);
     }
     if (transcriptFailure) {
-      throw new RecursiveChildError(`Required child transcript proof failed: ${transcriptFailure.message}`, 1, details);
+      throw new RecursiveChildError(`Required child transcript proof failed: ${transcriptFailure.message}${usageOutput ? `
+
+${usageOutput}` : ""}`, 1, details);
     }
     return { text: output2.text, stderr: output2.stderr, warnings: output2.warnings, details };
   } catch (error) {
@@ -5749,14 +5841,14 @@ ${report}`, error.exitCode || 1));
     }
     if (cleanupErrors2.length > 0) {
       const detail = cleanupErrors2.map((error) => error.message).join("; ");
-      trace(`[${new Date().toISOString()}] depth=${depth} child_depth=${childDepth} CLEANUP_FAILED call=${callCount} errors=${cleanupErrors2.length} detail=${detail}`);
+      trace(`[${new Date().toISOString()}] depth=${depth} child_depth=${childDepth} CLEANUP_FAILED call=${callCount} trace=${traceId} generation=${treeGeneration} errors=${cleanupErrors2.length} detail=${detail}`);
       if (!hasTerminalError) {
         throw new RecursiveChildError(`Recursive child cleanup failed: ${detail}`, 1);
       }
       throw errorWithLifecycleCleanupFailures(terminalError, "Recursive child cleanup also failed", cleanupErrors2);
     }
     if (completionEvidence) {
-      trace(`[${new Date().toISOString()}] depth=${depth} child_depth=${childDepth} LIFECYCLE_TERMINAL exit=${completionEvidence.exitCode} call=${callCount} trace=${traceId} transcript=${completionEvidence.transcriptStatus} cleanup=verified`);
+      trace(`[${new Date().toISOString()}] depth=${depth} child_depth=${childDepth} LIFECYCLE_TERMINAL exit=${completionEvidence.exitCode} call=${callCount} trace=${traceId} generation=${treeGeneration} transcript=${completionEvidence.transcriptStatus} cleanup=verified`);
     }
   }
 }
@@ -5782,12 +5874,26 @@ ${report.diffStat}`] : [],
 }
 function formatRecursiveResultForTool(result) {
   const output2 = formatCombinedChildOutput({ text: result.text, stderr: result.stderr, warnings: result.warnings });
+  const usage = formatUsageObservation(result.details);
+  const observed = `${output2}${output2 && usage ? `
+
+` : ""}${usage}`;
   if (result.details.requestedMode !== "implement")
-    return output2;
+    return observed;
   const suffix = formatWorkspaceReport(result.details.workspace);
-  return `${output2}${output2 ? `
+  return `${observed}${observed ? `
 
 ` : ""}${suffix}`;
+}
+function formatUsageObservation(details) {
+  const usage = details.usage;
+  if (!usage && !details.jsonCostIncomplete)
+    return "";
+  const node = `g${details.treeGeneration.slice(0, 8)}/d${details.childDepth}/c${details.callCount}`;
+  if (!usage)
+    return `[ypi usage: node=${node}; incomplete; observe-only]`;
+  const incomplete = details.jsonCostIncomplete ? "; incomplete" : "";
+  return `[ypi usage: node=${node}; turns=${usage.turns}; input=${usage.input}; cache-read=${usage.cacheRead}; cache-write=${usage.cacheWrite}; peak-context=${usage.peakContextTokens}; over-272k=${usage.over272kTurns}; output=${usage.output}; reasoning=${usage.reasoning}; total=${usage.tokens}${incomplete}; observe-only]`;
 }
 
 // extensions/ypi/cli.ts

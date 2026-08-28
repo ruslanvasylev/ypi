@@ -235,6 +235,7 @@ against the source and must contain exactly the public variables.
 | `YPI_EXTENSION_DEBUG` | `0` | Set to `1` for extension diagnostics. |
 | `YPI_NODE_BIN` | `node` | Node executable used by shell recursion, recovery, and native implementer launch adapters. |
 | `YPI_PI_BIN` | repository dependency, then `PATH` | Explicit Pi executable override. |
+| `YPI_PROMPT_INCLUDE_RUNTIME_SOURCE` | `0` | Root-only diagnostic opt-in that embeds the shell helper runtime source in the root prompt; it is never propagated to children. |
 | `YPI_STALL_WARNING_SECONDS` | `600` | Idle seconds before an observe-only child warning. |
 <!-- runtime-env:end -->
 
@@ -248,6 +249,11 @@ Useful telemetry readers:
 ./rlm_cost --json
 ./rlm_sessions --trace
 ```
+
+`rlm_cost --json` includes input/cache/output/reasoning totals, peak context,
+turns above 272,000 context tokens, and the ten highest-token generation-bound
+child sessions. These values are observe-only and never change admission or
+cancellation.
 
 ## Architecture
 

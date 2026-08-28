@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
 import { constants as osConstants } from "node:os";
-import type { CostSummary } from "../guardrails.ts";
 import { atomicCreateFile } from "./atomic-file.ts";
 import { withPrivateUmask } from "./private-path.ts";
 import { currentProcessStartIdentity } from "./process-identity.ts";
@@ -37,7 +36,6 @@ export interface ChildProcessOptions {
 export interface ChildProcessResult extends ChildOutputSnapshot {
 	code: number;
 	signal: NodeJS.Signals | null;
-	cost?: CostSummary;
 	timedOut: boolean;
 	cancelled: boolean;
 }

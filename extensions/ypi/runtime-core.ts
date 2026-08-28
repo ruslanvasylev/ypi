@@ -24,12 +24,13 @@ import {
 	acquireConcurrencySlot,
 	suspendInheritedConcurrencySlot,
 } from "./internal/concurrency.ts";
-import { formatCombinedChildOutput, normalizeChildOutput, type ChildToolActivity } from "./internal/child-output.ts";
+import { formatCombinedChildOutput, normalizeChildOutput, type ChildToolActivity, type ChildUsageSummary } from "./internal/child-output.ts";
 import { runChildProcess } from "./internal/child-process.ts";
 import { acquireChildResources } from "./internal/child-resources.ts";
 import { normalizeImplementScope } from "./internal/implement-scope.ts";
 import {
 	assertTreeCoordinatorActive,
+	currentTreeGeneration,
 	terminateRootTreeCoordinator,
 } from "./internal/tree-coordinator.ts";
 import { finalizeTranscriptProof } from "./internal/transcript.ts";
@@ -77,6 +78,8 @@ export interface RecursiveChildDetails {
 	childDepth: number;
 	maxDepth: number;
 	callCount: number;
+	treeGeneration: string;
+	sessionFile?: string;
 	caller: "tool" | "cli";
 	exitCode: number;
 	signal: NodeJS.Signals | null;
@@ -89,6 +92,7 @@ export interface RecursiveChildDetails {
 	jsonEventTruncated: boolean;
 	jsonCostIncomplete: boolean;
 	cancelled: boolean;
+	usage?: ChildUsageSummary;
 }
 
 export interface RecursiveChildResult {
@@ -230,6 +234,7 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 		removeRootAbortListener();
 		throw normalizeAdmissionCancellation(error, request.signal);
 	}
+	const treeGeneration = currentTreeGeneration();
 	let parentSlotSuspension;
 	let concurrencySlot;
 	try {
@@ -407,7 +412,7 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 		// Agent Protocol parent-absorption importer. The richer mode/workspace and
 		// child_depth fields remain additive trace metadata.
 		const legacyJjPosture = resources.workspace.readOnly ? "off" : "on";
-		trace(`[${nowTraceTime()}] depth=${depth}→${childDepth} PID=${process.pid} call=${callCount} trace=${traceId} caller=${request.caller} fork=${request.fork === true} mode=${requestedMode} workspace=${resources.workspace.mode} jj=${legacyJjPosture}`);
+		trace(`[${nowTraceTime()}] depth=${depth}→${childDepth} PID=${process.pid} call=${callCount} trace=${traceId} generation=${treeGeneration} caller=${request.caller} fork=${request.fork === true} mode=${requestedMode} workspace=${resources.workspace.mode} jj=${legacyJjPosture}`);
 		const started = Date.now();
 		resources.workspace.prepareChildLaunch();
 		const processResult = await runChildProcess({
@@ -447,17 +452,34 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 		});
 		const elapsed = Math.max(0, Math.round((Date.now() - started) / 1000));
 		const output = normalizeChildOutput(processResult);
+		const usageAttribution = {
+			trace_id: traceId,
+			tree_generation: treeGeneration,
+			parent_depth: depth,
+			child_depth: childDepth,
+			call_count: callCount,
+			...(resources.childSession ? { session_file: path.basename(resources.childSession) } : {}),
+			provider,
+			model,
+			thinking_level: thinkingLevel,
+			mode: requestedMode,
+			fork: request.fork === true,
+			prompt_chars: request.prompt.length,
+			context_kind: request.contextPath ? "path" as const : request.context !== undefined ? "inline" as const : "none" as const,
+			context_chars: request.context?.length || 0,
+		};
 		if (jsonMode && (!output.cost || processResult.cancelled || processResult.timedOut)) {
 			processResult.jsonCostIncomplete = true;
 		}
-		if (output.cost) appendCostSummary(output.cost);
+		if (output.cost) appendCostSummary(output.cost, usageAttribution);
 		if (processResult.jsonCostIncomplete) {
-			appendIncompleteCostMarker("child ended without a complete final cost boundary");
+			appendIncompleteCostMarker("child ended without a complete final cost boundary", usageAttribution);
 		}
 		let transcriptFailure: Error | undefined;
 		try {
 			finalizeTranscriptProof(resources.transcriptProof, {
 				traceId,
+				treeGeneration,
 				parentDepth: depth,
 				childDepth,
 				callCount,
@@ -474,13 +496,15 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 			exitCode: processResult.code,
 			transcriptStatus,
 		};
-		trace(`[${new Date().toISOString()}] depth=${depth} COMPLETED child_depth=${childDepth} exit=${processResult.code} elapsed=${elapsed}s caller=${request.caller} call=${callCount} trace=${traceId} cost=${processResult.jsonCostIncomplete ? "incomplete" : output.cost?.cost ?? "untracked"} tokens=${processResult.jsonCostIncomplete ? "incomplete" : output.cost?.tokens ?? "untracked"} cancelled=${processResult.cancelled} timeout=${processResult.timedOut} truncated=${processResult.textTruncated || processResult.jsonEventTruncated} transcript=${transcriptStatus} changed_paths=${workspace.changedPaths.length}`);
+		trace(`[${new Date().toISOString()}] depth=${depth} COMPLETED child_depth=${childDepth} exit=${processResult.code} elapsed=${elapsed}s caller=${request.caller} call=${callCount} trace=${traceId} generation=${treeGeneration} cost=${processResult.jsonCostIncomplete ? "incomplete" : output.cost?.cost ?? "untracked"} tokens=${processResult.jsonCostIncomplete ? "incomplete" : output.cost?.tokens ?? "untracked"} cancelled=${processResult.cancelled} timeout=${processResult.timedOut} truncated=${processResult.textTruncated || processResult.jsonEventTruncated} transcript=${transcriptStatus} changed_paths=${workspace.changedPaths.length}`);
 		const details: RecursiveChildDetails = {
 			implementation: "canonical",
 			depth,
 			childDepth,
 			maxDepth: limit,
 			callCount,
+			treeGeneration,
+			sessionFile: resources.childSession ? path.basename(resources.childSession) : undefined,
 			caller: request.caller,
 			exitCode: processResult.code,
 			signal: processResult.signal,
@@ -493,7 +517,9 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 			jsonEventTruncated: processResult.jsonEventTruncated,
 			jsonCostIncomplete: processResult.jsonCostIncomplete,
 			cancelled: processResult.cancelled,
+			usage: output.cost,
 		};
+		const usageOutput = formatUsageObservation(details);
 		if (processResult.code !== 0) {
 			const reason = processResult.cancelled
 				? "Child Pi cancelled"
@@ -505,11 +531,11 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 			const transcriptOutput = transcriptFailure
 				? `\n\nTranscript proof failed: ${transcriptFailure.message}`
 				: "";
-			throw new RecursiveChildError(`${reason}${childOutput ? `\n${childOutput}` : ""}${transcriptOutput}${workspaceOutput ? `\n\n${workspaceOutput}` : ""}`, processResult.code, details);
+			throw new RecursiveChildError(`${reason}${childOutput ? `\n${childOutput}` : ""}${transcriptOutput}${usageOutput ? `\n\n${usageOutput}` : ""}${workspaceOutput ? `\n\n${workspaceOutput}` : ""}`, processResult.code, details);
 		}
 		if (transcriptFailure) {
 			throw new RecursiveChildError(
-				`Required child transcript proof failed: ${transcriptFailure.message}`,
+				`Required child transcript proof failed: ${transcriptFailure.message}${usageOutput ? `\n\n${usageOutput}` : ""}`,
 				1,
 				details,
 			);
@@ -584,7 +610,7 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 		if (cleanupErrors.length > 0) {
 			const detail = cleanupErrors.map((error) => error.message).join("; ");
 			trace(
-				`[${new Date().toISOString()}] depth=${depth} child_depth=${childDepth} CLEANUP_FAILED call=${callCount} errors=${cleanupErrors.length} detail=${detail}`,
+				`[${new Date().toISOString()}] depth=${depth} child_depth=${childDepth} CLEANUP_FAILED call=${callCount} trace=${traceId} generation=${treeGeneration} errors=${cleanupErrors.length} detail=${detail}`,
 			);
 			if (!hasTerminalError) {
 				throw new RecursiveChildError(
@@ -600,7 +626,7 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 		}
 		if (completionEvidence) {
 			trace(
-				`[${new Date().toISOString()}] depth=${depth} child_depth=${childDepth} LIFECYCLE_TERMINAL exit=${completionEvidence.exitCode} call=${callCount} trace=${traceId} transcript=${completionEvidence.transcriptStatus} cleanup=verified`,
+				`[${new Date().toISOString()}] depth=${depth} child_depth=${childDepth} LIFECYCLE_TERMINAL exit=${completionEvidence.exitCode} call=${callCount} trace=${traceId} generation=${treeGeneration} transcript=${completionEvidence.transcriptStatus} cleanup=verified`,
 			);
 		}
 	}
@@ -628,7 +654,18 @@ function formatWorkspaceReport(report: WorkspaceReport): string {
 
 export function formatRecursiveResultForTool(result: RecursiveChildResult): string {
 	const output = formatCombinedChildOutput({ text: result.text, stderr: result.stderr, warnings: result.warnings });
-	if (result.details.requestedMode !== "implement") return output;
+	const usage = formatUsageObservation(result.details);
+	const observed = `${output}${output && usage ? "\n\n" : ""}${usage}`;
+	if (result.details.requestedMode !== "implement") return observed;
 	const suffix = formatWorkspaceReport(result.details.workspace);
-	return `${output}${output ? "\n\n" : ""}${suffix}`;
+	return `${observed}${observed ? "\n\n" : ""}${suffix}`;
+}
+
+function formatUsageObservation(details: RecursiveChildDetails): string {
+	const usage = details.usage;
+	if (!usage && !details.jsonCostIncomplete) return "";
+	const node = `g${details.treeGeneration.slice(0, 8)}/d${details.childDepth}/c${details.callCount}`;
+	if (!usage) return `[ypi usage: node=${node}; incomplete; observe-only]`;
+	const incomplete = details.jsonCostIncomplete ? "; incomplete" : "";
+	return `[ypi usage: node=${node}; turns=${usage.turns}; input=${usage.input}; cache-read=${usage.cacheRead}; cache-write=${usage.cacheWrite}; peak-context=${usage.peakContextTokens}; over-272k=${usage.over272kTurns}; output=${usage.output}; reasoning=${usage.reasoning}; total=${usage.tokens}${incomplete}; observe-only]`;
 }
