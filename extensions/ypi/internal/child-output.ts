@@ -3,11 +3,23 @@ import type { CostSummary } from "../guardrails.ts";
 export const MAX_TOOL_OUTPUT_CHARS = 60 * 1024;
 export const MAX_CHILD_STREAM_CHARS = 16 * 1024 * 1024;
 const MAX_JSON_EVENT_CHARS = 1024 * 1024;
+export const LONG_CONTEXT_OBSERVATION_TOKENS = 272_000;
+
+export interface ChildUsageSummary extends CostSummary {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	reasoning: number;
+	turns: number;
+	peakContextTokens: number;
+	over272kTurns: number;
+}
 
 export interface ChildOutputSnapshot {
 	stderr: string;
 	text: string;
-	cost?: CostSummary;
+	cost?: ChildUsageSummary;
 	stdoutTruncated: boolean;
 	stderrTruncated: boolean;
 	textTruncated: boolean;
@@ -19,7 +31,7 @@ export interface NormalizedChildOutput {
 	text: string;
 	stderr: string;
 	warnings: string[];
-	cost?: CostSummary;
+	cost?: ChildUsageSummary;
 }
 
 export interface BoundedCapture {
@@ -37,7 +49,7 @@ export interface ChildToolActivity {
 export interface JsonStreamDecoder {
 	append(chunk: string): boolean;
 	finish(): void;
-	result(): { text: string; cost?: CostSummary; textTruncated: boolean; jsonEventTruncated: boolean; jsonCostIncomplete: boolean };
+	result(): { text: string; cost?: ChildUsageSummary; textTruncated: boolean; jsonEventTruncated: boolean; jsonCostIncomplete: boolean };
 }
 
 export function createBoundedCapture(limit: number): BoundedCapture {
@@ -85,7 +97,19 @@ export function createJsonDecoder(
 	let jsonCostIncomplete = false;
 	let cost = 0;
 	let tokens = 0;
+	let input = 0;
+	let output = 0;
+	let cacheRead = 0;
+	let cacheWrite = 0;
+	let reasoning = 0;
+	let turns = 0;
+	let peakContextTokens = 0;
+	let over272kTurns = 0;
 	let sawTurnEnd = false;
+	const usageNumber = (value: unknown): number => {
+		const parsed = Number(value || 0);
+		return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+	};
 
 	const classifyOversizedLine = (prefix: string) => {
 		const eventType = /"type"\s*:\s*"([^"]+)"/.exec(prefix)?.[1];
@@ -113,8 +137,21 @@ export function createJsonDecoder(
 			if (event.type === "turn_end") {
 				sawTurnEnd = true;
 				const usage = event.message?.usage || {};
-				cost += Number(usage.cost?.total || 0);
-				tokens += Number(usage.totalTokens || 0);
+				const turnInput = usageNumber(usage.input);
+				const turnOutput = usageNumber(usage.output);
+				const turnCacheRead = usageNumber(usage.cacheRead);
+				const turnCacheWrite = usageNumber(usage.cacheWrite);
+				const turnContext = turnInput + turnCacheRead + turnCacheWrite;
+				cost += usageNumber(usage.cost?.total);
+				tokens += usageNumber(usage.totalTokens) || turnContext + turnOutput;
+				input += turnInput;
+				output += turnOutput;
+				cacheRead += turnCacheRead;
+				cacheWrite += turnCacheWrite;
+				reasoning += usageNumber(usage.reasoning);
+				turns++;
+				peakContextTokens = Math.max(peakContextTokens, turnContext);
+				if (turnContext > LONG_CONTEXT_OBSERVATION_TOKENS) over272kTurns++;
 			}
 		} catch {
 			// Ignore non-JSON chatter from extensions or wrappers.
@@ -166,7 +203,18 @@ export function createJsonDecoder(
 		result() {
 			return {
 				text: text.text(),
-				cost: sawTurnEnd ? { cost, tokens } : undefined,
+				cost: sawTurnEnd ? {
+					cost,
+					tokens,
+					input,
+					output,
+					cacheRead,
+					cacheWrite,
+					reasoning,
+					turns,
+					peakContextTokens,
+					over272kTurns,
+				} : undefined,
 				textTruncated: text.truncated,
 				jsonEventTruncated,
 				jsonCostIncomplete,

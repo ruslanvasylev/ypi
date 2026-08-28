@@ -41,10 +41,12 @@ Root cancellation marks the active coordinator generation terminal before it
 signals registered child process groups. Detached survivors cannot admit or
 launch new recursive work, and unrelated processes are never signal targets.
 
-The root wrapper enables the shell helper and includes its runtime source in
-the child prompt for self-inspection. Direct extension use exposes only the
-native tool. Children load the canonical extension by default; ambient
-extension discovery is an explicit compatibility choice.
+The root wrapper enables the shell helper and exposes concise source paths for
+on-demand self-inspection. Runtime source is not embedded by default. A
+root-only diagnostic opt-in may embed it temporarily, but that opt-in is never
+propagated to children. Direct extension use exposes only the native tool.
+Children load the canonical extension by default; ambient extension discovery
+is an explicit compatibility choice.
 
 ## First Checks
 

@@ -10,6 +10,7 @@ import {
 
 interface ExpectedTranscript {
 	traceId: string;
+	treeGeneration: string;
 	parentDepth: number;
 	childDepth: number;
 	callCount: number;
@@ -55,28 +56,35 @@ function argumentsFrom(argv: string[]): ValidatorArguments {
 }
 
 function callKey(value: ExpectedTranscript): string {
-	return `${value.traceId}\0${value.parentDepth}\0${value.childDepth}\0${value.callCount}`;
+	return `${value.traceId}\0${value.treeGeneration}\0${value.parentDepth}\0${value.childDepth}\0${value.callCount}`;
 }
 
 function expectedTranscripts(traceFile: string): ExpectedTranscript[] {
 	const starts = new Map<string, ExpectedTranscript>();
 	const completions = new Map<string, TraceResult>();
 	const terminals = new Map<string, TraceResult>();
-	const cleanupFailedCalls = new Set<number>();
-	const start = /\bdepth=(\d+)→(\d+)\b.*\bcall=(\d+)\s+trace=([^\s]+)/;
-	const completion = /\bdepth=(\d+)\s+COMPLETED\s+child_depth=(\d+)\s+exit=(\d+)\b.*\bcall=(\d+)\b.*\btrace=([^\s]+)\s+.*\btranscript=(verified|failed|not-required)\b/;
-	const legacyCompletion = /\bdepth=(\d+)\s+child_depth=(\d+)\s+COMPLETED\s+exit=(\d+)\b.*\bcall=(\d+)\b.*\btrace=([^\s]+)\s+.*\btranscript=(verified|failed|not-required)\b/;
-	const terminal = /\bdepth=(\d+)\s+child_depth=(\d+)\s+LIFECYCLE_TERMINAL\s+exit=(\d+)\b.*\bcall=(\d+)\b.*\btrace=([^\s]+)\s+.*\btranscript=(verified|failed|not-required)\b.*\bcleanup=verified\b/;
-	const cleanupFailed = /\bCLEANUP_FAILED\b.*\bcall=(\d+)\b/;
+	const cleanupFailedCalls = new Set<string>();
+	const start = /\bdepth=(\d+)→(\d+)\b.*\bcall=(\d+)\s+trace=([^\s]+)\s+generation=([a-f0-9]{32})\b/;
+	const completion = /\bdepth=(\d+)\s+COMPLETED\s+child_depth=(\d+)\s+exit=(\d+)\b.*\bcall=(\d+)\b.*\btrace=([^\s]+)\s+generation=([a-f0-9]{32})\b.*\btranscript=(verified|failed|not-required)\b/;
+	const legacyCompletion = /\bdepth=(\d+)\s+child_depth=(\d+)\s+COMPLETED\s+exit=(\d+)\b.*\bcall=(\d+)\b.*\btrace=([^\s]+)\s+generation=([a-f0-9]{32})\b.*\btranscript=(verified|failed|not-required)\b/;
+	const terminal = /\bdepth=(\d+)\s+child_depth=(\d+)\s+LIFECYCLE_TERMINAL\s+exit=(\d+)\b.*\bcall=(\d+)\b.*\btrace=([^\s]+)\s+generation=([a-f0-9]{32})\b.*\btranscript=(verified|failed|not-required)\b.*\bcleanup=verified\b/;
+	const cleanupFailed = /\bdepth=(\d+)\s+child_depth=(\d+)\s+CLEANUP_FAILED\s+call=(\d+)\s+trace=([^\s]+)\s+generation=([a-f0-9]{32})\b/;
 	for (const line of readFileSync(traceFile, "utf8").split(/\r?\n/)) {
 		const cleanupFailedMatch = cleanupFailed.exec(line);
 		if (cleanupFailedMatch) {
-			cleanupFailedCalls.add(Number(cleanupFailedMatch[1]));
+			cleanupFailedCalls.add(callKey({
+				traceId: safeTraceId(cleanupFailedMatch[4]),
+				treeGeneration: cleanupFailedMatch[5],
+				parentDepth: Number(cleanupFailedMatch[1]),
+				childDepth: Number(cleanupFailedMatch[2]),
+				callCount: Number(cleanupFailedMatch[3]),
+			}));
 		}
 		const startMatch = start.exec(line);
 		if (startMatch) {
 			const value: ExpectedTranscript = {
 				traceId: safeTraceId(startMatch[4]),
+				treeGeneration: startMatch[5],
 				parentDepth: Number(startMatch[1]),
 				childDepth: Number(startMatch[2]),
 				callCount: Number(startMatch[3]),
@@ -90,6 +98,7 @@ function expectedTranscripts(traceFile: string): ExpectedTranscript[] {
 		if (completionMatch) {
 			const completedIdentity: ExpectedTranscript = {
 				traceId: safeTraceId(completionMatch[5]),
+				treeGeneration: completionMatch[6],
 				parentDepth: Number(completionMatch[1]),
 				childDepth: Number(completionMatch[2]),
 				callCount: Number(completionMatch[4]),
@@ -104,7 +113,7 @@ function expectedTranscripts(traceFile: string): ExpectedTranscript[] {
 			}
 			completions.set(key, {
 				exitCode: Number(completionMatch[3]),
-				transcriptStatus: completionMatch[6],
+				transcriptStatus: completionMatch[7],
 			});
 			continue;
 		}
@@ -112,6 +121,7 @@ function expectedTranscripts(traceFile: string): ExpectedTranscript[] {
 		if (!terminalMatch) continue;
 		const terminalIdentity: ExpectedTranscript = {
 			traceId: safeTraceId(terminalMatch[5]),
+			treeGeneration: terminalMatch[6],
 			parentDepth: Number(terminalMatch[1]),
 			childDepth: Number(terminalMatch[2]),
 			callCount: Number(terminalMatch[4]),
@@ -130,7 +140,7 @@ function expectedTranscripts(traceFile: string): ExpectedTranscript[] {
 		}
 		terminals.set(key, {
 			exitCode: Number(terminalMatch[3]),
-			transcriptStatus: terminalMatch[6],
+			transcriptStatus: terminalMatch[7],
 		});
 	}
 	if (starts.size === 0) {
@@ -141,7 +151,7 @@ function expectedTranscripts(traceFile: string): ExpectedTranscript[] {
 		if (!completionValue) {
 			throw new Error(`trace child has no terminal completion: call ${value.callCount}`);
 		}
-		if (cleanupFailedCalls.has(value.callCount)) {
+		if (cleanupFailedCalls.has(key)) {
 			throw new Error(
 				`trace child reported lifecycle cleanup failure: call ${value.callCount}`,
 			);
@@ -184,6 +194,7 @@ function receiptMatches(
 ): boolean {
 	return (
 		receipt.trace_id === expected.traceId
+		&& receipt.tree_generation === expected.treeGeneration
 		&& receipt.parent_depth === expected.parentDepth
 		&& receipt.child_depth === expected.childDepth
 		&& receipt.call_count === expected.callCount
@@ -203,7 +214,7 @@ function main(): void {
 	const expectedReceiptNames = new Set<string>();
 	const expectedTranscriptNames = new Set<string>();
 	for (const item of expected) {
-		const transcriptFile = `${item.traceId}_d${item.childDepth}_c${item.callCount}.jsonl`;
+		const transcriptFile = `${item.traceId}_g${item.treeGeneration}_d${item.childDepth}_c${item.callCount}.jsonl`;
 		const receipt = verifyTranscriptReceipt(
 			sessionDir,
 			transcriptFile,
@@ -218,12 +229,12 @@ function main(): void {
 	const traceIds = new Set(expected.map((item) => item.traceId));
 	const tracePatterns = [...traceIds].map((traceId) => (
 		new RegExp(
-			`^${traceId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}_d\\d+_c\\d+\\.jsonl$`,
+			`^${traceId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}_g[a-f0-9]{32}_d\\d+_c\\d+\\.jsonl$`,
 		)
 	));
 	const observedReceipts = readdirSync(sessionDir).filter((name) => (
 		name.endsWith(".jsonl.receipt.json")
-		&& [...traceIds].some((traceId) => name.startsWith(`${traceId}_d`))
+		&& [...traceIds].some((traceId) => name.startsWith(`${traceId}_g`))
 	));
 	for (const receipt of observedReceipts) {
 		if (!expectedReceiptNames.has(receipt)) {

@@ -874,7 +874,7 @@ OUTPUT=$(
 assert_contains "G24: --session in args" "--session" "$OUTPUT"
 assert_not_contains "G24: no --no-session" "--no-session" "$OUTPUT"
 
-# G25: session filename encodes trace ID, depth, and call count
+# G25: session filename encodes trace ID, generation, depth, and call count
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
@@ -884,8 +884,9 @@ OUTPUT=$(
     RLM_CALL_COUNT=0 \
     rlm_query "Session filename test"
 )
-# Depth 0→1, call count becomes 1: abcg25_d1_c1.jsonl
+# Depth 0→1, call count becomes 1: abcg25_g<generation>_d1_c1.jsonl
 assert_contains "G25: session has trace ID" "abcg25" "$OUTPUT"
+assert_contains "G25: session has generation" "abcg25_g" "$OUTPUT"
 assert_contains "G25: session has depth" "_d1_" "$OUTPUT"
 assert_contains "G25: session has call count" "_c1.jsonl" "$OUTPUT"
 
@@ -899,7 +900,8 @@ OUTPUT=$(
     RLM_CALL_COUNT=0 \
     rlm_query "Session file env test"
 )
-assert_contains "G26: RLM_SESSION_FILE set" "abcg26_d1_c1.jsonl" "$OUTPUT"
+assert_contains "G26: RLM_SESSION_FILE set" "abcg26_g" "$OUTPUT"
+assert_contains "G26: RLM_SESSION_FILE owns depth and call" "_d1_c1.jsonl" "$OUTPUT"
 assert_not_contains "G26: RLM_SESSION_FILE not unset" "RLM_SESSION_FILE=unset" "$OUTPUT"
 
 # G27: max depth nodes still get sessions (they have full tools)
@@ -952,7 +954,7 @@ OUTPUT=$(
     rlm_query --fork "Fork with parent"
 )
 # Child session file should exist and contain parent's content
-CHILD_FILE="$SESSION_TMP/fork0002_d1_c1.jsonl"
+CHILD_FILE=$(printf '%s\n' "$OUTPUT" | sed -n 's/^RLM_SESSION_FILE=//p' | head -1)
 if [ -f "$CHILD_FILE" ]; then
     pass "G30: forked session file created"
     CHILD_CONTENT=$(cat "$CHILD_FILE")
@@ -963,7 +965,6 @@ else
 fi
 
 # G31: without --fork, child session file is NOT pre-populated
-rm -f "$SESSION_TMP/nofork01_d1_c1.jsonl"
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
@@ -974,7 +975,7 @@ OUTPUT=$(
     RLM_CALL_COUNT=0 \
     rlm_query "No fork test"
 )
-CHILD_FILE="$SESSION_TMP/nofork01_d1_c1.jsonl"
+CHILD_FILE=$(printf '%s\n' "$OUTPUT" | sed -n 's/^RLM_SESSION_FILE=//p' | head -1)
 if [ -f "$CHILD_FILE" ]; then
     CHILD_CONTENT=$(cat "$CHILD_FILE")
     assert_not_contains "G31: no fork → no parent content" "parent-uuid" "$CHILD_CONTENT"
@@ -1323,7 +1324,7 @@ rm -f "$COST_FILE"
 # G46: rlm_cost --json returns structured data
 COST_FILE=$(mktemp "${TMPDIR:-/tmp}/rlm_cost_test.jsonl.XXXXXX")
 echo '{"cost": 0.10, "tokens": 1000}' > "$COST_FILE"
-echo '{"cost": 0.20, "tokens": 2000}' >> "$COST_FILE"
+echo '{"schema_version":2,"type":"child_usage","trace_id":"usage-test","tree_generation":"00000000000000000000000000000000","child_depth":1,"call_count":1,"session_file":"usage-test_g00000000000000000000000000000000_d1_c1.jsonl","model":"test","thinking_level":"xhigh","mode":"review","fork":false,"prompt_chars":42,"context_kind":"path","context_chars":0,"cost":0.20,"tokens":2000,"input":700,"output":100,"cacheRead":1100,"cacheWrite":100,"reasoning":50,"turns":2,"over272kTurns":1,"peakContextTokens":280000}' >> "$COST_FILE"
 OUTPUT=$(
     RLM_COST_FILE="$COST_FILE" \
     "$PROJECT_DIR/rlm_cost" --json
@@ -1331,17 +1332,22 @@ OUTPUT=$(
 assert_contains "G46: rlm_cost json has cost" "0.3" "$OUTPUT"
 assert_contains "G46: rlm_cost json has tokens" "3000" "$OUTPUT"
 assert_contains "G46: rlm_cost json has calls" '"calls": 2' "$OUTPUT"
+assert_contains "G46: rlm_cost json has cached-token detail" '"cache_read": 1100' "$OUTPUT"
+assert_contains "G46: rlm_cost json has long-context detail" '"over_272k_turns": 1' "$OUTPUT"
+assert_contains "G46: rlm_cost json identifies the highest-usage session" '"session_file": "usage-test_g00000000000000000000000000000000_d1_c1.jsonl"' "$OUTPUT"
 
 HOSTILE_COST_FILE="$TEST_TMP/cost ledger 'quoted
 name.jsonl"
 printf '%s\n' \
     '{"cost":0.25,"tokens":25}' \
+    '{"type":"child_usage","cost":99,"tokens":"invalid","input":99}' \
     '{"incomplete":true,"reason":"cancelled"}' \
     > "$HOSTILE_COST_FILE"
 HOSTILE_COST_OUTPUT=$(RLM_COST_FILE="$HOSTILE_COST_FILE" "$PROJECT_DIR/rlm_cost" --json)
 assert_contains "G46a: hostile cost filename remains argv data" '"cost": 0.25' "$HOSTILE_COST_OUTPUT"
 assert_contains "G46a: incomplete records are not completed calls" '"calls": 1' "$HOSTILE_COST_OUTPUT"
-assert_contains "G46a: incomplete telemetry remains explicit" '"incomplete_markers": 1' "$HOSTILE_COST_OUTPUT"
+assert_contains "G46a: incomplete telemetry remains explicit" '"incomplete_markers": 2' "$HOSTILE_COST_OUTPUT"
+assert_contains "G46a: malformed usage record cannot partially contaminate totals" '"tokens": 25' "$HOSTILE_COST_OUTPUT"
 rm -f "$COST_FILE"
 
 # G46b: retained JSON parser emits one newline-delimited cost record per call.
@@ -1459,7 +1465,8 @@ TRACEPI
     SANITIZED_TRACE=$(printf '%s\n' "$OUTPUT" | sed -n 's/^RLM_TRACE_ID=//p' | head -1)
     assert_contains "G52: hostile trace id is sanitized for the child" "RLM_TRACE_ID=.._.._etc_evil" "$OUTPUT"
     assert_eq "G52: hostile trace id uses the bounded identity mapping" "64" "${#SANITIZED_TRACE}"
-    assert_contains "G52: session file uses the exact mapped trace id" "${SANITIZED_TRACE}_d1_c1.jsonl" "$OUTPUT"
+    assert_contains "G52: session file uses the exact mapped trace id" "${SANITIZED_TRACE}_g" "$OUTPUT"
+    assert_contains "G52: session file binds depth and call after generation" "_d1_c1.jsonl" "$OUTPUT"
     assert_not_contains "G52: session file cannot traverse out of the dir" "/etc/evil_d1" "$OUTPUT"
 else
     skip "G52: trace id sanitization" "safe_trace_id not implemented yet"

@@ -74,12 +74,18 @@ done
   printf 'RLM_THINKING_LEVEL=%s\n' "\${RLM_THINKING_LEVEL:-unset}"
   printf 'RLM_SESSION_FILE=%s\n' "\${RLM_SESSION_FILE:-unset}"
   printf 'RLM_SESSION_DIR=%s\n' "\${RLM_SESSION_DIR:-unset}"
+  printf 'YPI_PROMPT_INCLUDE_RUNTIME_SOURCE=%s\n' "\${YPI_PROMPT_INCLUDE_RUNTIME_SOURCE:-unset}"
   printf 'PROMPT_CONTENT=%s\n' "$(cat "\${RLM_PROMPT_FILE:-/dev/null}" 2>/dev/null || true)"
   printf 'STDIN_CONTENT=%s\n' "$STDIN_CONTENT"
   printf 'ROOT_PROMPT_CONTENT=%s\n' "$(cat "\${RLM_ROOT_PROMPT_FILE:-/dev/null}" 2>/dev/null || true)"
   printf 'CONTEXT_CONTENT=%s\n' "$(cat "\${CONTEXT:-/dev/null}" 2>/dev/null || true)"
   printf 'SYSTEM_PROMPT_CONTEXT=%s\n' "$(grep -F 'External task context:' "$SYSTEM_PROMPT_FILE" 2>/dev/null | head -1 || true)"
   printf 'SYSTEM_PROMPT_ROOT=%s\n' "$(grep -F 'Root task charter:' "$SYSTEM_PROMPT_FILE" 2>/dev/null | head -1 || true)"
+  if grep -qF 'export async function runRecursiveChild' "$SYSTEM_PROMPT_FILE" 2>/dev/null; then
+    printf 'SYSTEM_PROMPT_RUNTIME_SOURCE=present\n'
+  else
+    printf 'SYSTEM_PROMPT_RUNTIME_SOURCE=absent\n'
+  fi
 } > "$YPI_FAKE_PI_LOG"
 echo FAKE_CHILD_OK
 `);
@@ -241,10 +247,12 @@ function assertCommonObservation(native: Observation, cli: Observation): void {
 		"RLM_PROVIDER",
 		"RLM_MODEL",
 		"RLM_THINKING_LEVEL",
+		"YPI_PROMPT_INCLUDE_RUNTIME_SOURCE",
 		"PROMPT_CONTENT",
 		"STDIN_CONTENT",
 		"ROOT_PROMPT_CONTENT",
 		"CONTEXT_CONTENT",
+		"SYSTEM_PROMPT_RUNTIME_SOURCE",
 	]) {
 		equal(`shared ${key}`, native[key], cli[key]);
 	}
@@ -287,12 +295,28 @@ async function run(): Promise<void> {
 	clearRuntimeEnv();
 	process.env.YPI_SHELL_HELPER = "1";
 	ensureEnvironment(runtime, extensionContext(), pi);
-	const selfHostingPrompt = buildYpiPrompt(runtime);
-	contains("wrapper prompt exposes canonical runtime section", selfHostingPrompt, "SECTION 6 - Canonical rlm_query Runtime Implementation");
-	contains("wrapper prompt exposes runtime-core source", selfHostingPrompt, "export async function runRecursiveChild");
-	contains("wrapper prompt exposes internal runtime owners", selfHostingPrompt, "// child-process.ts");
-	contains("wrapper prompt exposes CLI adapter source", selfHostingPrompt, "export async function main");
-	record(!selfHostingPrompt.includes("# rlm_query — Recursive Language Model sub-call for Pi."), "wrapper prompt embeds only the thin CLI launcher");
+	const concisePrompt = buildYpiPrompt(runtime);
+	contains("wrapper prompt exposes the optional shell-helper capability", concisePrompt, "Optional rlm_query Shell Helper");
+	contains("wrapper prompt points to runtime-core for on-demand inspection", concisePrompt, runtime.runtimeCorePath);
+	record(
+		Buffer.byteLength(concisePrompt, "utf8") <= 16 * 1024,
+		"default wrapper prompt stays within the explicit 16 KiB context budget",
+		`bytes=${Buffer.byteLength(concisePrompt, "utf8")}`,
+	);
+	record(!concisePrompt.includes("export async function runRecursiveChild"), "default wrapper prompt does not embed runtime-core source");
+	record(!concisePrompt.includes("// child-process.ts"), "default wrapper prompt does not embed internal runtime source");
+	record(!concisePrompt.includes("export async function main"), "default wrapper prompt does not embed CLI adapter source");
+	process.env.YPI_PROMPT_INCLUDE_RUNTIME_SOURCE = "1";
+	const diagnosticPrompt = buildYpiPrompt(runtime);
+	contains("explicit root diagnostic embeds canonical runtime source", diagnosticPrompt, "export async function runRecursiveChild");
+	contains("explicit root diagnostic embeds internal runtime owners", diagnosticPrompt, "// child-process.ts");
+	contains("explicit root diagnostic embeds CLI adapter source", diagnosticPrompt, "export async function main");
+	record(diagnosticPrompt.length > concisePrompt.length * 5, "prompt ablation proves diagnostic source is materially larger than the default");
+	process.env.RLM_DEPTH = "1";
+	const childDiagnosticPrompt = buildYpiPrompt(runtime);
+	record(!childDiagnosticPrompt.includes("export async function runRecursiveChild"), "diagnostic runtime source remains root-only");
+	process.env.RLM_DEPTH = "0";
+	delete process.env.YPI_PROMPT_INCLUDE_RUNTIME_SOURCE;
 	process.env.CONTEXT = contextFile;
 	process.env.RLM_PROMPT_FILE = staleRootPromptFile;
 	const taskFilePrompt = buildYpiPrompt(runtime);
@@ -348,6 +372,43 @@ async function run(): Promise<void> {
 	const capturedRootCli = await invokeCli({ ...baseEnv("cli-captured-root"), RLM_ROOT_PROMPT_FILE: staleRootPromptFile }, prompt);
 	equal("native preserves captured human root charter", capturedRootNative.observation?.ROOT_PROMPT_CONTENT, "STALE_ROOT_PROMPT");
 	equal("CLI preserves captured human root charter", capturedRootCli.observation?.ROOT_PROMPT_CONTENT, "STALE_ROOT_PROMPT");
+
+	const diagnosticOptInNative = await invokeNative(
+		{
+			...baseEnv("native-diagnostic-opt-in"),
+			YPI_SHELL_HELPER: "1",
+			YPI_PROMPT_INCLUDE_RUNTIME_SOURCE: "1",
+		},
+		prompt,
+	);
+	const diagnosticOptInCli = await invokeCli(
+		{
+			...baseEnv("cli-diagnostic-opt-in"),
+			YPI_SHELL_HELPER: "1",
+			YPI_PROMPT_INCLUDE_RUNTIME_SOURCE: "1",
+		},
+		prompt,
+	);
+	equal(
+		"native strips the root-only diagnostic opt-in from child env",
+		diagnosticOptInNative.observation?.YPI_PROMPT_INCLUDE_RUNTIME_SOURCE,
+		"unset",
+	);
+	equal(
+		"CLI strips the root-only diagnostic opt-in from child env",
+		diagnosticOptInCli.observation?.YPI_PROMPT_INCLUDE_RUNTIME_SOURCE,
+		"unset",
+	);
+	equal(
+		"native child system prompt omits runtime source even when the root opts in",
+		diagnosticOptInNative.observation?.SYSTEM_PROMPT_RUNTIME_SOURCE,
+		"absent",
+	);
+	equal(
+		"CLI child system prompt omits runtime source even when the root opts in",
+		diagnosticOptInCli.observation?.SYSTEM_PROMPT_RUNTIME_SOURCE,
+		"absent",
+	);
 
 	const routedNativeEnv = {
 		...baseEnv("native-route"),

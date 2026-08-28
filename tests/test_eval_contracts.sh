@@ -15,6 +15,7 @@ cat > "$TEST_TMP/fake-rlm" <<'MOCK'
   printf 'RLM_CHILD_MODEL=%s\n' "${RLM_CHILD_MODEL-unset}"
   printf 'RLM_STDIN=%s\n' "${RLM_STDIN-unset}"
   printf 'YPI_SHELL_HELPER=%s\n' "${YPI_SHELL_HELPER-unset}"
+  printf 'YPI_PROMPT_INCLUDE_RUNTIME_SOURCE=%s\n' "${YPI_PROMPT_INCLUDE_RUNTIME_SOURCE-unset}"
   printf 'YPI_EXTENSION_PROMPT_MODE=%s\n' "${YPI_EXTENSION_PROMPT_MODE-unset}"
   printf 'YPI_CLI_ROOT_OVERRIDE=%s\n' "${YPI_CLI_ROOT_OVERRIDE-unset}"
   printf 'YPI_CLI_EXTENSION_OVERRIDE=%s\n' "${YPI_CLI_EXTENSION_OVERRIDE-unset}"
@@ -26,7 +27,7 @@ DEPTH_ROOT="$TEST_TMP/depth"
 mkdir -p "$DEPTH_ROOT/depth-3/sessions"
 printf '{}\n' > "$DEPTH_ROOT/depth-3/sessions/stale_d9_c1.jsonl"
 set +e
-RLM_CHILD_MODEL=ambient-model RLM_STDIN=1 YPI_SHELL_HELPER=1 YPI_EXTENSION_PROMPT_MODE=replace \
+RLM_CHILD_MODEL=ambient-model RLM_STDIN=1 YPI_SHELL_HELPER=1 YPI_PROMPT_INCLUDE_RUNTIME_SOURCE=1 YPI_EXTENSION_PROMPT_MODE=replace \
 YPI_CLI_ROOT_OVERRIDE=/stale/root YPI_CLI_EXTENSION_OVERRIDE=/stale/extension \
 YPI_EVAL_PROBE="$TEST_TMP/depth-env.txt" YPI_RLM_QUERY_BIN="$TEST_TMP/fake-rlm" YPI_EVAL_OUTPUT_ROOT="$DEPTH_ROOT" \
 YPI_PI_BIN="${YPI_PI_BIN:-$(command -v pi)}" \
@@ -138,6 +139,7 @@ RLM_CHILD_MODEL=ambient-model RLM_CHILD_PROVIDER=ambient-provider RLM_SESSION_DI
 RLM_AMBIENT_EXTENSIONS=1 RLM_CALL_COUNT=99 RLM_CALL_COUNTER_FILE=/poison/counter \
 RLM_COST_FILE=/poison/cost RLM_TRACE_ID=poison RLM_ROOT_PROMPT_FILE=/poison/root \
 YPI_EXTENSION_ROOT=/poison/root YPI_CLI_ROOT_OVERRIDE=/poison/cli YPI_EXTENSION_PROMPT_MODE=replace \
+YPI_PROMPT_INCLUDE_RUNTIME_SOURCE=1 \
 CONTEXT=/poison/context PI_TRACE_FILE=/poison/trace PARITY_ENV_PROBE="$TEST_TMP/parity-env.txt" \
 YPI_RLM_QUERY_BIN="$TEST_TMP/fake-clean-env-cli" YPI_EVAL_OUTPUT_ROOT="$PARITY_ROOT" \
 YPI_PI_BIN="${YPI_PI_BIN:-$(command -v pi)}" \
@@ -151,7 +153,7 @@ values = {}
 for line in open(sys.argv[1]):
     key, _, value = line.rstrip("\n").partition("=")
     values[key] = value
-for key in ("RLM_CHILD_MODEL", "RLM_CHILD_PROVIDER", "RLM_SESSION_DIR", "RLM_AMBIENT_EXTENSIONS", "RLM_ROOT_PROMPT_FILE", "YPI_EXTENSION_ROOT", "YPI_CLI_ROOT_OVERRIDE", "YPI_EXTENSION_PROMPT_MODE"):
+for key in ("RLM_CHILD_MODEL", "RLM_CHILD_PROVIDER", "RLM_SESSION_DIR", "RLM_AMBIENT_EXTENSIONS", "RLM_ROOT_PROMPT_FILE", "YPI_EXTENSION_ROOT", "YPI_CLI_ROOT_OVERRIDE", "YPI_EXTENSION_PROMPT_MODE", "YPI_PROMPT_INCLUDE_RUNTIME_SOURCE"):
     assert key not in values, (key, values.get(key))
 out = os.path.join(os.environ["PARITY_ROOT"], "canonical-cli")
 assert values["CONTEXT"] == os.path.join(out, "context.txt")

@@ -129,7 +129,11 @@ change the admitted job.
 
 Shared sessions use the active Pi session directory. Forking pre-populates the
 child session with the parent snapshot. A non-fork child may still have its own
-session file but does not inherit parent events.
+session file but does not inherit parent events. Every child filename includes
+the exact root-tree generation as well as trace, depth, and call identities:
+`<trace>_g<generation>_d<depth>_c<call>.jsonl`. Call-counter resets therefore
+cannot resume a prior root turn, and every destination is atomically reserved
+with no-clobber semantics before Pi starts.
 
 `RLM_REQUIRE_TRANSCRIPTS=1` turns auditability into a proof gate. Admission
 fails before spawn unless session sharing uses an existing absolute
@@ -152,6 +156,21 @@ prove that resource cleanup, slot release, and inherited-parent resumption
 succeeded. `rlm_sessions` is a direct-child, no-symlink presentation tool; it
 is limited to current-user-owned `0600` singly-linked files in a `0700`
 directory. It is not an evidence validator.
+
+The normal wrapper prompt exposes only the optional shell helper capability and
+the paths of its runtime owners. It does not embed implementation source.
+`YPI_PROMPT_INCLUDE_RUNTIME_SOURCE=1` is a root-only diagnostic ablation; child
+environment projection removes it, so source embedding cannot recur down the
+tree.
+
+Each structured child completion returns one compact, observe-only usage line
+to its parent and appends a private attributed record to `RLM_COST_FILE`. The
+record binds trace, generation, depth, call, session, route, context transport,
+and token categories (`input`, `cacheRead`, `cacheWrite`, `output`, and
+`reasoning`). It also records peak request context and the number of turns over
+272,000 context tokens. `rlm_cost --json` summarizes these fields and ranks the
+ten highest-token child sessions. Missing or invalid telemetry disables only
+the affected sink; it never blocks, cancels, or changes admission.
 
 ## Implement Mode
 

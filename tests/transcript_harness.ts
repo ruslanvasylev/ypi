@@ -87,12 +87,14 @@ function closeQuietly(lease: TranscriptProofLease | undefined): void {
 const root = mkdtempSync(path.join(tmpdir(), "ypi_transcript_test."));
 chmodSync(root, 0o700);
 process.env.RLM_REQUIRE_TRANSCRIPTS = "1";
+const testGeneration = "0".repeat(32);
+process.env.YPI_TREE_GENERATION = testGeneration;
 
 console.log("\n=== Required transcript proof harness ===");
 try {
 	{
 		const directory = sessionDirectory(root, "positive");
-		const transcript = childPath(directory, "positive_d1_c1");
+		const transcript = childPath(directory, `positive_g${testGeneration}_d1_c1`);
 		const originalUmask = process.umask(0o777);
 		let lease: TranscriptProofLease | undefined;
 		try {
@@ -105,6 +107,7 @@ try {
 			writeFileSync(transcript, `${sessionEvent}${messageEvent}`, { flag: "a" });
 			const receipt = finalizeTranscriptProof(lease, {
 				traceId: "positive",
+				treeGeneration: testGeneration,
 				parentDepth: 0,
 				childDepth: 1,
 				callCount: 1,
@@ -132,9 +135,9 @@ try {
 			writeFileSync(
 				trace,
 					[
-						"[2026-07-28 00:00:00] depth=0→1 PID=1 call=1 trace=positive caller=tool mode=review",
-						"[2026-07-28T00:00:01.000Z] depth=0 COMPLETED child_depth=1 exit=0 elapsed=1s caller=tool call=1 trace=positive transcript=verified",
-						"[2026-07-28T00:00:02.000Z] depth=0 child_depth=1 LIFECYCLE_TERMINAL exit=0 call=1 trace=positive transcript=verified cleanup=verified",
+						`[2026-07-28 00:00:00] depth=0→1 PID=1 call=1 trace=positive generation=${testGeneration} caller=tool mode=review`,
+						`[2026-07-28T00:00:01.000Z] depth=0 COMPLETED child_depth=1 exit=0 elapsed=1s caller=tool call=1 trace=positive generation=${testGeneration} transcript=verified`,
+						`[2026-07-28T00:00:02.000Z] depth=0 child_depth=1 LIFECYCLE_TERMINAL exit=0 call=1 trace=positive generation=${testGeneration} transcript=verified cleanup=verified`,
 						"",
 				].join("\n"),
 				{ mode: 0o600 },
@@ -161,8 +164,8 @@ try {
 				writeFileSync(
 					trace,
 					[
-						"[2026-07-28 00:00:00] depth=0→1 PID=1 call=1 trace=positive caller=tool mode=review",
-						"[2026-07-28T00:00:01.000Z] depth=0 child_depth=1 COMPLETED exit=0 elapsed=1s caller=tool call=1 trace=positive transcript=verified",
+						`[2026-07-28 00:00:00] depth=0→1 PID=1 call=1 trace=positive generation=${testGeneration} caller=tool mode=review`,
+						`[2026-07-28T00:00:01.000Z] depth=0 child_depth=1 COMPLETED exit=0 elapsed=1s caller=tool call=1 trace=positive generation=${testGeneration} transcript=verified`,
 						"",
 					].join("\n"),
 					{ mode: 0o600 },
@@ -189,9 +192,9 @@ try {
 				writeFileSync(
 					trace,
 					[
-						"[2026-07-28 00:00:00] depth=0→1 PID=1 call=1 trace=positive caller=tool mode=review",
-						"[2026-07-28T00:00:01.000Z] depth=0 child_depth=1 COMPLETED exit=0 elapsed=1s caller=tool call=1 trace=positive transcript=verified",
-						"[2026-07-28T00:00:02.000Z] depth=0 child_depth=1 CLEANUP_FAILED call=1 errors=1 detail=injected",
+						`[2026-07-28 00:00:00] depth=0→1 PID=1 call=1 trace=positive generation=${testGeneration} caller=tool mode=review`,
+						`[2026-07-28T00:00:01.000Z] depth=0 child_depth=1 COMPLETED exit=0 elapsed=1s caller=tool call=1 trace=positive generation=${testGeneration} transcript=verified`,
+						`[2026-07-28T00:00:02.000Z] depth=0 child_depth=1 CLEANUP_FAILED call=1 trace=positive generation=${testGeneration} errors=1 detail=injected`,
 						"",
 					].join("\n"),
 					{ mode: 0o600 },
@@ -218,9 +221,9 @@ try {
 				writeFileSync(
 					trace,
 					[
-						"[2026-07-28 00:00:00] depth=0→1 PID=1 call=1 trace=positive caller=tool mode=review",
-						"[2026-07-28T00:00:01.000Z] depth=0 child_depth=1 COMPLETED exit=0 elapsed=1s caller=tool call=1 trace=positive transcript=failed",
-						"[2026-07-28T00:00:02.000Z] depth=0 child_depth=1 LIFECYCLE_TERMINAL exit=0 call=1 trace=positive transcript=failed cleanup=verified",
+						`[2026-07-28 00:00:00] depth=0→1 PID=1 call=1 trace=positive generation=${testGeneration} caller=tool mode=review`,
+						`[2026-07-28T00:00:01.000Z] depth=0 child_depth=1 COMPLETED exit=0 elapsed=1s caller=tool call=1 trace=positive generation=${testGeneration} transcript=failed`,
+						`[2026-07-28T00:00:02.000Z] depth=0 child_depth=1 LIFECYCLE_TERMINAL exit=0 call=1 trace=positive generation=${testGeneration} transcript=failed cleanup=verified`,
 						"",
 				].join("\n"),
 				{ mode: 0o600 },
@@ -246,14 +249,14 @@ try {
 			writeFileSync(
 				trace,
 					[
-						"[2026-07-28 00:00:00] depth=0→1 PID=1 call=1 trace=positive caller=tool mode=review",
-						"[2026-07-28T00:00:01.000Z] depth=0 child_depth=1 COMPLETED exit=0 elapsed=1s caller=tool call=1 trace=positive transcript=verified",
-						"[2026-07-28T00:00:02.000Z] depth=0 child_depth=1 LIFECYCLE_TERMINAL exit=0 call=1 trace=positive transcript=verified cleanup=verified",
+						`[2026-07-28 00:00:00] depth=0→1 PID=1 call=1 trace=positive generation=${testGeneration} caller=tool mode=review`,
+						`[2026-07-28T00:00:01.000Z] depth=0 child_depth=1 COMPLETED exit=0 elapsed=1s caller=tool call=1 trace=positive generation=${testGeneration} transcript=verified`,
+						`[2026-07-28T00:00:02.000Z] depth=0 child_depth=1 LIFECYCLE_TERMINAL exit=0 call=1 trace=positive generation=${testGeneration} transcript=verified cleanup=verified`,
 						"",
 				].join("\n"),
 				{ mode: 0o600 },
 			);
-			const orphan = path.join(directory, "positive_d2_c2.jsonl");
+			const orphan = path.join(directory, `positive_g${testGeneration}_d2_c2.jsonl`);
 			writeFileSync(orphan, messageEvent, { mode: 0o600 });
 			const orphanValidation = spawnSync(
 				process.execPath,
@@ -346,6 +349,7 @@ try {
 				"did not append",
 				() => finalizeTranscriptProof(lease, {
 					traceId: "no-append",
+					treeGeneration: testGeneration,
 					parentDepth: 0,
 					childDepth: 1,
 					callCount: 1,
@@ -369,6 +373,7 @@ try {
 				"leased inode",
 				() => finalizeTranscriptProof(lease, {
 					traceId: "replacement",
+					treeGeneration: testGeneration,
 					parentDepth: 0,
 					childDepth: 1,
 					callCount: 1,
@@ -445,6 +450,7 @@ try {
 				"invalid UTF-8",
 				() => finalizeTranscriptProof(lease, {
 					traceId: "invalid-utf8",
+					treeGeneration: testGeneration,
 					parentDepth: 0,
 					childDepth: 1,
 					callCount: 1,
@@ -467,6 +473,7 @@ try {
 				"invalid JSONL",
 				() => finalizeTranscriptProof(lease, {
 					traceId: "malformed-tail",
+					treeGeneration: testGeneration,
 					parentDepth: 0,
 					childDepth: 1,
 					callCount: 1,
@@ -512,6 +519,7 @@ try {
 				"no Pi message event",
 				() => finalizeTranscriptProof(lease, {
 					traceId: "no-message",
+					treeGeneration: testGeneration,
 					parentDepth: 0,
 					childDepth: 1,
 					callCount: 1,
@@ -545,6 +553,7 @@ try {
 				"baseline prefix",
 				() => finalizeTranscriptProof(lease, {
 					traceId: "fork-prefix",
+					treeGeneration: testGeneration,
 					parentDepth: 0,
 					childDepth: 1,
 					callCount: 1,
@@ -586,6 +595,7 @@ try {
 			writeFileSync(transcript, messageEvent, { flag: "a" });
 			finalizeTranscriptProof(lease, {
 				traceId: "streaming-fork",
+				treeGeneration: testGeneration,
 				parentDepth: 0,
 				childDepth: 1,
 				callCount: 1,
