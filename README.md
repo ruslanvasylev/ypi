@@ -250,10 +250,29 @@ Useful telemetry readers:
 ./rlm_sessions --trace
 ```
 
-`rlm_cost --json` includes input/cache/output/reasoning totals, peak context,
-turns above 272,000 context tokens, and the ten highest-token generation-bound
-child sessions. These values are observe-only and never change admission or
-cancellation.
+`rlm_cost --json` preserves its original top-level child-ledger fields and adds
+`root`, `children`, `combined`, `scope`, and `completeness`. Root analytics read
+only the exact active `RLM_SESSION_FILE` prefix captured at open time; no
+historical session-directory scan occurs. The report includes input, cache,
+output, reasoning, model/thinking epochs, peak context, turns above 272,000
+context tokens, compaction usage, direct `tokensBefore`, a next-assistant
+after-context estimate, and the ten highest-token child sessions. It never
+prints prompt, tool, or summary content.
+
+Plain `rlm_cost` prints the combined root-plus-child cost when an active root is
+available; without one, it retains the child-only value. Each source is an
+exact captured snapshot, but `scope.cross_file_atomic_snapshot=false` makes
+clear that the trace, child ledger, and root transcript are not one transactional
+multi-file checkpoint.
+
+The root transcript is hardened to `0600` at live persistence boundaries while
+historical files, directory modes, and the process umask remain untouched.
+Append growth after the captured boundary is valid; truncation, replacement,
+captured-prefix mutation, symlinks, hard links, invalid UTF-8, and malformed
+complete JSONL fail closed. Current-generation joining uses the latest private
+`TREE_GENERATION_START`; missing trace evidence is reported as inexact instead
+of inferred. These values are observe-only and never change admission,
+cancellation, model, thinking level, depth, timeout, or call limits.
 
 ## Architecture
 
