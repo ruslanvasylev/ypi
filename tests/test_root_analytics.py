@@ -16,7 +16,11 @@ ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "tests" / "fixtures" / "root-analytics"
 sys.path.insert(0, os.fspath(ROOT / "scripts"))
 
-from ypi_transcript import TranscriptReadError, scan_jsonl_snapshot  # noqa: E402
+from ypi_transcript import (  # noqa: E402
+    TranscriptReadError,
+    scan_jsonl_snapshot,
+    scan_text_lines_snapshot,
+)
 
 
 passed = 0
@@ -60,6 +64,41 @@ def expect_reader_error(path: Path, label: str, **kwargs: object) -> None:
         check(True, label)
     else:
         check(False, label)
+
+
+def cost_identity(path: Path) -> str:
+    metadata = path.stat()
+    return json.dumps({
+        "device": str(metadata.st_dev),
+        "inode": str(metadata.st_ino),
+        "kind": "file",
+        "mode": 0o600,
+        "links": "1",
+    })
+
+
+def check_rejected_child_ledger(
+    environment: dict[str, str],
+    label: str,
+    *,
+    expected_reason: str | None = None,
+) -> dict[str, object]:
+    result = run_cost(environment)
+    payload = json.loads(result.stdout)
+    reason = payload["children"]["completeness"]["reason"]
+    check(
+        payload["tokens"] == 0
+        and payload["children"]["tokens"] == 0
+        and payload["children"]["incomplete"] is True
+        and payload["children"]["incomplete_markers"] >= 1
+        and payload["root"]["tokens"] == 584455
+        and payload["combined"]["tokens"] == 584455
+        and payload["children"]["completeness"]["trusted_snapshot"] is False
+        and isinstance(reason, str)
+        and (expected_reason is None or expected_reason in reason),
+        label,
+    )
+    return payload
 
 
 print("\n=== Root transcript analytics ===")
@@ -152,6 +191,132 @@ with tempfile.TemporaryDirectory(prefix="ypi-root-analytics-") as raw_scratch:
     check(root["current_generation"]["cost"] == 3.6 and payload["children"]["current_generation"]["cost"] == 0.6, "root and child current-generation totals are separated")
     check(payload["combined"]["cost"] == 4.61 and payload["combined"]["current_generation"]["cost"] == 4.2, "combined totals are non-double-counted")
     check(root["snapshot"]["bytes_scanned"] == root_file.stat().st_size and root["snapshot"]["peak_record_bytes"] > 0, "snapshot performance evidence is emitted")
+    check(payload["children"]["snapshot"]["bytes_scanned"] == ledger_file.stat().st_size, "child ledger snapshot performance evidence is emitted")
+    check(payload["children"]["completeness"]["trusted_snapshot"] is True and payload["children"]["completeness"]["identity_bound"] is False, "legacy child ledger remains readable without a projected identity")
+
+    bound_ledger_environment = dict(environment)
+    bound_ledger_environment["YPI_COST_FILE_IDENTITY"] = cost_identity(ledger_file)
+    bound_ledger_payload = json.loads(run_cost(bound_ledger_environment).stdout)
+    check(bound_ledger_payload["children"]["tokens"] == 1000 and bound_ledger_payload["children"]["completeness"]["identity_bound"] is True, "projected child-ledger identity binds the analytics read")
+
+    wrong_ledger_identity = dict(bound_ledger_environment)
+    wrong_identity_value = json.loads(wrong_ledger_identity["YPI_COST_FILE_IDENTITY"])
+    wrong_identity_value["inode"] = str(int(wrong_identity_value["inode"]) + 1)
+    wrong_ledger_identity["YPI_COST_FILE_IDENTITY"] = json.dumps(wrong_identity_value)
+    check_rejected_child_ledger(wrong_ledger_identity, "mismatched child-ledger identity rejects fabricated totals", expected_reason="projected active-file identity")
+
+    malformed_identity = dict(environment)
+    malformed_identity["YPI_COST_FILE_IDENTITY"] = '{"device":"1"}'
+    check_rejected_child_ledger(malformed_identity, "malformed child-ledger identity degrades telemetry instead of product work", expected_reason="Invalid projected child-ledger identity")
+
+    ledger_outside = scratch / "ledger-outside.jsonl"
+    ledger_outside.write_text(json.dumps({
+        "type": "child_usage",
+        "cost": 123.45,
+        "tokens": 999999,
+        "input": 999999,
+    }) + "\n")
+    ledger_outside.chmod(0o600)
+    ledger_symlink = scratch / "ledger-symlink.jsonl"
+    ledger_symlink.symlink_to(ledger_outside)
+    symlink_ledger_environment = dict(environment)
+    symlink_ledger_environment["RLM_COST_FILE"] = os.fspath(ledger_symlink)
+    symlink_payload = check_rejected_child_ledger(symlink_ledger_environment, "symlinked child ledger cannot fabricate complete totals")
+    check("999999" not in json.dumps(symlink_payload), "rejected child ledger never leaks fabricated sentinel totals")
+
+    hardlink_source = private_copy(FIXTURES / "children.jsonl", scratch / "ledger-hardlink-source.jsonl")
+    ledger_hardlink = scratch / "ledger-hardlink.jsonl"
+    os.link(hardlink_source, ledger_hardlink)
+    hardlink_ledger_environment = dict(environment)
+    hardlink_ledger_environment["RLM_COST_FILE"] = os.fspath(ledger_hardlink)
+    check_rejected_child_ledger(hardlink_ledger_environment, "hardlinked child ledger cannot produce trusted totals", expected_reason="singly linked")
+
+    permissive_ledger = private_copy(FIXTURES / "children.jsonl", scratch / "ledger-mode.jsonl")
+    permissive_ledger.chmod(0o664)
+    permissive_ledger_environment = dict(environment)
+    permissive_ledger_environment["RLM_COST_FILE"] = os.fspath(permissive_ledger)
+    check_rejected_child_ledger(permissive_ledger_environment, "wrong-mode child ledger cannot produce trusted totals", expected_reason="mode 0600")
+
+    malformed_ledger = private_copy(FIXTURES / "children.jsonl", scratch / "ledger-malformed.jsonl")
+    with malformed_ledger.open("a", encoding="utf-8") as stream:
+        stream.write("{not-json}\n")
+        stream.write(json.dumps({"type": "child_usage", "cost": 0.25, "tokens": 25}) + "\n")
+    malformed_ledger_payload_environment = dict(environment)
+    malformed_ledger_payload_environment["RLM_COST_FILE"] = os.fspath(malformed_ledger)
+    malformed_ledger_payload = json.loads(run_cost(malformed_ledger_payload_environment).stdout)
+    check(malformed_ledger_payload["children"]["tokens"] == 1025 and malformed_ledger_payload["children"]["calls"] == 3 and malformed_ledger_payload["children"]["incomplete_markers"] == 1, "malformed legacy ledger rows are skipped without hiding later valid rows")
+
+    partial_ledger = private_copy(FIXTURES / "children.jsonl", scratch / "ledger-partial.jsonl")
+    with partial_ledger.open("ab") as stream:
+        stream.write(b'{"type":"child_usage","cost":999999,"tokens":999999')
+    partial_ledger_environment = dict(environment)
+    partial_ledger_environment["RLM_COST_FILE"] = os.fspath(partial_ledger)
+    partial_ledger_payload = json.loads(run_cost(partial_ledger_environment).stdout)
+    check(partial_ledger_payload["children"]["tokens"] == 1000 and partial_ledger_payload["children"]["incomplete_markers"] == 1 and partial_ledger_payload["children"]["snapshot"]["trailing_record_incomplete"] is True, "partial child-ledger tail is excluded and marked incomplete")
+
+    invalid_utf8_ledger = private_copy(FIXTURES / "children.jsonl", scratch / "ledger-utf8.jsonl")
+    with invalid_utf8_ledger.open("ab") as stream:
+        stream.write(b'\xff\n')
+    invalid_utf8_environment = dict(environment)
+    invalid_utf8_environment["RLM_COST_FILE"] = os.fspath(invalid_utf8_ledger)
+    check_rejected_child_ledger(invalid_utf8_environment, "invalid UTF-8 rejects the entire child-ledger snapshot", expected_reason="Invalid text snapshot UTF-8")
+
+    append_ledger = private_copy(FIXTURES / "children.jsonl", scratch / "ledger-append.jsonl")
+    append_lines: list[str] = []
+    def ledger_append_hook(stage: str, _descriptor: int, _size: int) -> None:
+        if stage == "after_open":
+            with append_ledger.open("ab") as stream:
+                stream.write(b'{"type":"child_usage","tokens":999999}\n')
+    append_ledger_metrics = scan_text_lines_snapshot(append_ledger, lambda line, _number: append_lines.append(line), test_hook=ledger_append_hook)
+    check(len(append_lines) == 2 and append_ledger_metrics.final_size > append_ledger_metrics.captured_size, "child-ledger append growth stays outside the captured prefix")
+
+    mutated_ledger = private_copy(FIXTURES / "children.jsonl", scratch / "ledger-mutated.jsonl")
+    def ledger_mutation_hook(stage: str, _descriptor: int, _size: int) -> None:
+        if stage == "before_verify":
+            with mutated_ledger.open("r+b") as stream:
+                stream.seek(1)
+                stream.write(b"X")
+    try:
+        scan_text_lines_snapshot(mutated_ledger, lambda _line, _number: None, test_hook=ledger_mutation_hook)
+    except TranscriptReadError:
+        check(True, "child-ledger captured-prefix mutation is rejected")
+    else:
+        check(False, "child-ledger captured-prefix mutation is rejected")
+
+    truncated_ledger = private_copy(FIXTURES / "children.jsonl", scratch / "ledger-truncated.jsonl")
+    def ledger_truncate_hook(stage: str, _descriptor: int, _size: int) -> None:
+        if stage == "after_open":
+            os.truncate(truncated_ledger, 0)
+    try:
+        scan_text_lines_snapshot(truncated_ledger, lambda _line, _number: None, test_hook=ledger_truncate_hook)
+    except TranscriptReadError:
+        check(True, "child-ledger truncation below the boundary is rejected")
+    else:
+        check(False, "child-ledger truncation below the boundary is rejected")
+
+    replaced_ledger = private_copy(FIXTURES / "children.jsonl", scratch / "ledger-replaced.jsonl")
+    replaced_ledger_old = scratch / "ledger-replaced.old"
+    def ledger_replace_hook(stage: str, _descriptor: int, _size: int) -> None:
+        if stage == "before_verify":
+            replaced_ledger.rename(replaced_ledger_old)
+            replaced_ledger.write_text('{"type":"child_usage","tokens":999999}\n')
+            replaced_ledger.chmod(0o600)
+    try:
+        scan_text_lines_snapshot(replaced_ledger, lambda _line, _number: None, test_hook=ledger_replace_hook)
+    except TranscriptReadError:
+        check(True, "child-ledger pathname replacement is rejected")
+    else:
+        check(False, "child-ledger pathname replacement is rejected")
+
+    oversized_ledger = scratch / "ledger-oversized.jsonl"
+    oversized_ledger.write_text("123456789\n")
+    oversized_ledger.chmod(0o600)
+    try:
+        scan_text_lines_snapshot(oversized_ledger, lambda _line, _number: None, max_record_bytes=8)
+    except TranscriptReadError:
+        check(True, "oversized child-ledger rows are rejected")
+    else:
+        check(False, "oversized child-ledger rows are rejected")
 
     duplicate_file = scratch / "duplicate-entry.jsonl"
     fixture_lines = root_file.read_text().splitlines()
