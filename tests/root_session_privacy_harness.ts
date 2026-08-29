@@ -46,9 +46,10 @@ try {
 	const historical = path.join(scratch, "historical.jsonl");
 	writeFileSync(active, "{}\n", { mode: 0o664 });
 	writeFileSync(historical, "{}\n", { mode: 0o664 });
+	const historicalMode = lstatSync(historical).mode & 0o777;
 	const identity = hardenActiveRootSessionFile(active);
 	record((lstatSync(active).mode & 0o777) === 0o600, "exact active transcript becomes 0600");
-	record((lstatSync(historical).mode & 0o777) === 0o664, "historical transcript mode is untouched");
+	record((lstatSync(historical).mode & 0o777) === historicalMode, "historical transcript mode is untouched");
 	record((lstatSync(scratch).mode & 0o777) === 0o775, "session directory mode is untouched");
 	record(Boolean(identity && process.env.YPI_ROOT_SESSION_FILE_IDENTITY), "hardened inode identity is projected");
 
@@ -70,9 +71,10 @@ try {
 	delete process.env.YPI_ROOT_SESSION_FILE_IDENTITY;
 	const childFile = path.join(scratch, "child.jsonl");
 	writeFileSync(childFile, "{}\n", { mode: 0o664 });
+	const childMode = lstatSync(childFile).mode & 0o777;
 	process.env.RLM_DEPTH = "1";
 	hardenActiveRootSessionFile(childFile);
-	record((lstatSync(childFile).mode & 0o777) === 0o664, "descendants cannot harden or claim a root transcript");
+	record((lstatSync(childFile).mode & 0o777) === childMode, "descendants cannot harden or claim a root transcript");
 } finally {
 	if (originalDepth === undefined) delete process.env.RLM_DEPTH;
 	else process.env.RLM_DEPTH = originalDepth;
