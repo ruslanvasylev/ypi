@@ -2,6 +2,7 @@ import {
 	chmodSync,
 	linkSync,
 	lstatSync,
+	mkdirSync,
 	mkdtempSync,
 	renameSync,
 	rmSync,
@@ -10,7 +11,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { hardenActiveRootSessionFile } from "../extensions/ypi/internal/root-session.ts";
+import {
+	canonicalRootSessionFilePath,
+	hardenActiveRootSessionFile,
+} from "../extensions/ypi/internal/root-session.ts";
 
 const scratch = mkdtempSync(path.join(tmpdir(), "ypi-root-session-"));
 chmodSync(scratch, 0o775);
@@ -67,6 +71,19 @@ try {
 	const hardlink = path.join(scratch, "hardlink.jsonl");
 	linkSync(source, hardlink);
 	record(rejected(() => hardenActiveRootSessionFile(source)), "multiply-linked active transcript is rejected");
+
+	delete process.env.YPI_ROOT_SESSION_FILE_IDENTITY;
+	const realParent = path.join(scratch, "real-parent");
+	const aliasParent = path.join(scratch, "alias-parent");
+	mkdirSync(realParent);
+	symlinkSync(realParent, aliasParent, "dir");
+	const canonicalActive = path.join(realParent, "aliased-active.jsonl");
+	const aliasedActive = path.join(aliasParent, "aliased-active.jsonl");
+	writeFileSync(canonicalActive, "{}\n", { mode: 0o664 });
+	const aliasIdentity = hardenActiveRootSessionFile(aliasedActive);
+	record(Boolean(aliasIdentity), "benign ancestor alias remains hardenable");
+	record(canonicalRootSessionFilePath(aliasedActive) === canonicalActive, "ancestor alias projects one canonical session pathname");
+	record((lstatSync(canonicalActive).mode & 0o777) === 0o600, "canonical target beneath an ancestor alias becomes 0600");
 
 	delete process.env.YPI_ROOT_SESSION_FILE_IDENTITY;
 	const childFile = path.join(scratch, "child.jsonl");
