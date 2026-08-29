@@ -288,3 +288,12 @@ The persisted proof directory may be longer than a Unix-domain socket path.
 Use a bounded private socket directory when needed, close every coordinator
 connection explicitly, and retire that directory only after server close.
 Covered by the concurrency harness.
+
+### 13. Root Transcript Hardening Blocked The Turn Lifecycle
+
+An ancestor path alias made root transcript hardening throw before prompt
+patching and root-generation rotation. Canonicalize benign ancestor aliases,
+keep final-component identity checks fail-closed, and contain telemetry
+hardening failures so route refresh and recursive lifecycle work continue.
+Expose the degraded analytics state through a deduplicated warning and status.
+Covered by the root-session privacy and failure-isolation harnesses.

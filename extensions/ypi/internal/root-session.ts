@@ -1,20 +1,26 @@
 import {
 	closeSync,
 	constants,
-	existsSync,
 	fchmodSync,
 	fstatSync,
 	lstatSync,
 	openSync,
-	realpathSync,
 } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import path from "node:path";
 import {
+	canonicalPrivateFilePath,
 	parsePrivateFileIdentity,
 	PRIVATE_FILE_MODE,
 	type PrivatePathIdentity,
 } from "./private-path.ts";
+
+interface ActiveRootBinding {
+	path: string;
+	identity: PrivatePathIdentity;
+}
+
+let activeRootBinding: ActiveRootBinding | undefined;
 
 function controlError(message: string): Error {
 	return new Error(message);
@@ -43,6 +49,18 @@ function identityOf(metadata: BigIntStats): PrivatePathIdentity {
 	};
 }
 
+/** Resolve benign ancestor aliases without ever following the final component. */
+export function canonicalRootSessionFilePath(candidate: string): string {
+	try {
+		return canonicalPrivateFilePath(candidate);
+	} catch (error) {
+		if (error instanceof Error && error.message === "Private file path must be absolute and normalized") {
+			throw controlError("Root session path must be absolute and normalized");
+		}
+		throw error;
+	}
+}
+
 /**
  * Harden only Pi's exact current root transcript. Historical files, directory
  * modes, and the process umask are intentionally untouched.
@@ -52,64 +70,76 @@ export function hardenActiveRootSessionFile(candidate: string | undefined): Priv
 		delete process.env.YPI_ROOT_SESSION_FILE_IDENTITY;
 		return undefined;
 	}
-	if (!candidate || !existsSync(candidate)) {
+	if (!candidate) {
 		delete process.env.YPI_ROOT_SESSION_FILE_IDENTITY;
+		activeRootBinding = undefined;
 		return undefined;
 	}
-	if (!path.isAbsolute(candidate) || path.normalize(candidate) !== candidate) {
-		throw controlError("Root session path must be absolute and normalized");
-	}
-	if (realpathSync.native(candidate) !== candidate) {
-		throw controlError("Root session path must not contain symlinks");
-	}
-	const parent = path.dirname(candidate);
-	const parentMetadata = lstatSync(parent, { bigint: true });
+	const canonical = canonicalRootSessionFilePath(candidate);
+	if (activeRootBinding?.path !== canonical) activeRootBinding = undefined;
+	const canonicalParent = path.dirname(canonical);
+	const parentMetadata = lstatSync(canonicalParent, { bigint: true });
 	if (!parentMetadata.isDirectory() || parentMetadata.isSymbolicLink()) {
-		throw controlError(`Root session parent is not a regular directory: ${parent}`);
+		throw controlError(`Root session parent is not a regular directory: ${canonicalParent}`);
 	}
-	assertOwner(parentMetadata, parent);
+	assertOwner(parentMetadata, canonicalParent);
 
-	const namedBefore = lstatSync(candidate, { bigint: true });
+	let namedBefore: BigIntStats;
+	try {
+		namedBefore = lstatSync(canonical, { bigint: true });
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+			delete process.env.YPI_ROOT_SESSION_FILE_IDENTITY;
+			return undefined;
+		}
+		throw error;
+	}
 	if (!namedBefore.isFile() || namedBefore.isSymbolicLink()) {
-		throw controlError(`Root session path is not a regular file: ${candidate}`);
+		throw controlError(`Root session path is not a regular file: ${canonical}`);
 	}
-	assertOwner(namedBefore, candidate);
+	assertOwner(namedBefore, canonical);
 	if (namedBefore.nlink !== 1n) {
-		throw controlError(`Root session file must be singly linked: ${candidate}`);
+		throw controlError(`Root session file must be singly linked: ${canonical}`);
 	}
-	const previousRaw = process.env.YPI_ROOT_SESSION_FILE_IDENTITY;
-	if (previousRaw) {
-		const previous = parsePrivateFileIdentity(previousRaw);
+	const previous = activeRootBinding?.identity
+		?? (process.env.YPI_ROOT_SESSION_FILE_IDENTITY
+			? parsePrivateFileIdentity(process.env.YPI_ROOT_SESSION_FILE_IDENTITY)
+			: undefined);
+	if (previous) {
 		if (
 			previous.device !== namedBefore.dev.toString()
 			|| previous.inode !== namedBefore.ino.toString()
 		) {
-			throw controlError(`Root session file identity changed: ${candidate}`);
+			throw controlError(`Root session file identity changed: ${canonical}`);
 		}
 	}
 
-	const descriptor = openSync(candidate, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
+	const descriptor = openSync(canonical, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
 	try {
 		const opened = fstatSync(descriptor, { bigint: true });
 		if (!opened.isFile() || !sameInode(namedBefore, opened)) {
-			throw controlError(`Root session identity changed before hardening: ${candidate}`);
+			throw controlError(`Root session identity changed before hardening: ${canonical}`);
 		}
-		assertOwner(opened, candidate);
+		assertOwner(opened, canonical);
 		if (opened.nlink !== 1n) {
-			throw controlError(`Root session file must be singly linked: ${candidate}`);
+			throw controlError(`Root session file must be singly linked: ${canonical}`);
 		}
 		if (process.platform !== "win32") fchmodSync(descriptor, PRIVATE_FILE_MODE);
 		const hardened = fstatSync(descriptor, { bigint: true });
-		const namedAfter = lstatSync(candidate, { bigint: true });
+		const namedAfter = lstatSync(canonical, { bigint: true });
+		const parentAfter = lstatSync(canonicalParent, { bigint: true });
 		if (
 			!sameInode(opened, hardened)
 			|| !sameInode(opened, namedAfter)
+			|| namedAfter.isSymbolicLink()
+			|| !sameInode(parentMetadata, parentAfter)
 			|| hardened.nlink !== 1n
 			|| (process.platform !== "win32" && Number(hardened.mode & 0o777n) !== PRIVATE_FILE_MODE)
 		) {
-			throw controlError(`Root session identity changed during hardening: ${candidate}`);
+			throw controlError(`Root session identity changed during hardening: ${canonical}`);
 		}
 		const identity = identityOf(hardened);
+		activeRootBinding = { path: canonical, identity };
 		process.env.YPI_ROOT_SESSION_FILE_IDENTITY = JSON.stringify(identity);
 		return identity;
 	} finally {

@@ -3,6 +3,7 @@ import {
 	existsSync,
 	linkSync,
 	lstatSync,
+	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	rmSync,
@@ -98,6 +99,32 @@ try {
 			&& (lstatSync(absentTrace).mode & 0o777) === 0o600
 			&& (lstatSync(absentCost).mode & 0o777) === 0o600,
 		"absent owned sinks are created no-clobber with exact modes under umask 0777",
+	);
+
+	const realState = path.join(root, "real-state");
+	const aliasState = path.join(root, "alias-state");
+	mkdirSync(realState, { mode: 0o700 });
+	symlinkSync(realState, aliasState, "dir");
+	const aliasTrace = path.join(aliasState, "trace.jsonl");
+	const aliasCost = path.join(aliasState, "cost.jsonl");
+	const canonicalTrace = path.join(realState, "trace.jsonl");
+	const canonicalCost = path.join(realState, "cost.jsonl");
+	process.env.PI_TRACE_FILE = aliasTrace;
+	process.env.RLM_COST_FILE = aliasCost;
+	delete process.env.YPI_TRACE_FILE_IDENTITY;
+	delete process.env.YPI_COST_FILE_IDENTITY;
+	ensureEnvironment(runtime);
+	record(
+		process.env.PI_TRACE_FILE === canonicalTrace
+			&& process.env.RLM_COST_FILE === canonicalCost
+			&& existsSync(canonicalTrace)
+			&& existsSync(canonicalCost),
+		"telemetry sinks beneath benign ancestor aliases project canonical paths",
+	);
+	record(
+		Boolean(process.env.YPI_TRACE_FILE_IDENTITY)
+			&& Boolean(process.env.YPI_COST_FILE_IDENTITY),
+		"canonical telemetry sinks retain exact writer identities",
 	);
 } finally {
 	rmSync(root, { recursive: true, force: true });

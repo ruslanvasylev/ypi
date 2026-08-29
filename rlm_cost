@@ -9,6 +9,7 @@ prompt or tool content.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -24,7 +25,11 @@ from ypi_root_analytics import (  # noqa: E402
     latest_generation,
     rounded_totals,
 )
-from ypi_transcript import TranscriptReadError  # noqa: E402
+from ypi_transcript import (  # noqa: E402
+    SnapshotMetrics,
+    TranscriptReadError,
+    scan_text_lines_snapshot,
+)
 
 
 LEGACY_KEYS = (
@@ -51,77 +56,153 @@ def parse_nonnegative(record: dict[str, Any], key: str) -> int:
     return parsed
 
 
-def parse_child_ledger(path: str | None, generation: str | None) -> dict[str, Any]:
+def snapshot_payload(metrics: SnapshotMetrics) -> dict[str, Any]:
+    return {
+        "path": metrics.path,
+        "bytes_scanned": metrics.bytes_scanned,
+        "verification_bytes": metrics.verification_bytes,
+        "elapsed_ms": metrics.elapsed_ms,
+        "peak_record_bytes": metrics.peak_record_bytes,
+        "complete_records": metrics.complete_records,
+        "trailing_record_incomplete": metrics.trailing_record_incomplete,
+        "captured_size": metrics.captured_size,
+        "final_size": metrics.final_size,
+        "device": metrics.device,
+        "inode": metrics.inode,
+    }
+
+
+def parse_projected_identity(raw_identity: str | None) -> dict[str, str] | None:
+    if raw_identity is None:
+        return None
+    try:
+        value = json.loads(raw_identity)
+    except json.JSONDecodeError as error:
+        raise TranscriptReadError("Invalid projected child-ledger identity JSON") from error
+    if not isinstance(value, dict) or any(
+        not isinstance(value.get(key), str)
+        for key in ("device", "inode", "kind", "links")
+    ) or not isinstance(value.get("mode"), int):
+        raise TranscriptReadError("Invalid projected child-ledger identity")
+    if (
+        value["kind"] != "file"
+        or value["mode"] != 0o600
+        or value["links"] != "1"
+        or not value["device"].isdigit()
+        or not value["inode"].isdigit()
+    ):
+        raise TranscriptReadError("Invalid projected child-ledger identity")
+    return value
+
+
+def parse_child_ledger(
+    path: str | None,
+    generation: str | None,
+    raw_identity: str | None,
+) -> dict[str, Any]:
     totals = empty_totals()
     current = empty_totals()
     completed_calls = 0
     current_calls = 0
     incomplete_markers = 0
     nodes: list[dict[str, Any]] = []
-    if path and Path(path).is_file():
-        with open(path, encoding="utf-8", errors="strict") as stream:
-            for line in stream:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    record = json.loads(line)
-                except (UnicodeDecodeError, json.JSONDecodeError):
-                    incomplete_markers += 1
-                    continue
-                if not isinstance(record, dict):
-                    incomplete_markers += 1
-                    continue
-                if record.get("incomplete") is True:
-                    incomplete_markers += 1
-                    continue
-                if "cost" not in record and "tokens" not in record:
-                    continue
-                try:
-                    record_cost = float(record.get("cost", 0) or 0)
-                    if record_cost < 0:
-                        raise ValueError("cost")
-                    record_totals = {
-                        "cost": record_cost,
-                        "tokens": parse_nonnegative(record, "tokens"),
-                        "input": parse_nonnegative(record, "input"),
-                        "output": parse_nonnegative(record, "output"),
-                        "cache_read": parse_nonnegative(record, "cacheRead"),
-                        "cache_write": parse_nonnegative(record, "cacheWrite"),
-                        "reasoning": parse_nonnegative(record, "reasoning"),
-                        "turns": parse_nonnegative(record, "turns"),
-                        "over_272k_turns": parse_nonnegative(record, "over272kTurns"),
-                        "peak_context_tokens": parse_nonnegative(record, "peakContextTokens"),
-                    }
-                except (TypeError, ValueError, OverflowError):
-                    incomplete_markers += 1
-                    continue
-                totals = combine_totals(totals, record_totals)
-                completed_calls += 1
-                if generation and record.get("tree_generation") == generation:
-                    current = combine_totals(current, record_totals)
-                    current_calls += 1
-                if record.get("type") == "child_usage":
-                    nodes.append({
-                        "trace_id": record.get("trace_id"),
-                        "tree_generation": record.get("tree_generation"),
-                        "child_depth": record.get("child_depth"),
-                        "call_count": record.get("call_count"),
-                        "session_file": record.get("session_file"),
-                        "model": record.get("model"),
-                        "thinking_level": record.get("thinking_level"),
-                        "mode": record.get("mode"),
-                        "fork": record.get("fork"),
-                        "prompt_chars": record.get("prompt_chars"),
-                        "context_kind": record.get("context_kind"),
-                        "context_chars": record.get("context_chars"),
-                        **record_totals,
-                    })
+    snapshot: dict[str, Any] | None = None
+    rejection_reason: str | None = None
+    identity_bound = False
+
+    def consume_line(line: str, _line_number: int) -> None:
+        nonlocal totals, current, completed_calls, current_calls, incomplete_markers
+        line = line.strip()
+        if not line:
+            return
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            incomplete_markers += 1
+            return
+        if not isinstance(record, dict):
+            incomplete_markers += 1
+            return
+        if record.get("incomplete") is True:
+            incomplete_markers += 1
+            return
+        if "cost" not in record and "tokens" not in record:
+            return
+        try:
+            record_cost = float(record.get("cost", 0) or 0)
+            if record_cost < 0 or not math.isfinite(record_cost):
+                raise ValueError("cost")
+            record_totals = {
+                "cost": record_cost,
+                "tokens": parse_nonnegative(record, "tokens"),
+                "input": parse_nonnegative(record, "input"),
+                "output": parse_nonnegative(record, "output"),
+                "cache_read": parse_nonnegative(record, "cacheRead"),
+                "cache_write": parse_nonnegative(record, "cacheWrite"),
+                "reasoning": parse_nonnegative(record, "reasoning"),
+                "turns": parse_nonnegative(record, "turns"),
+                "over_272k_turns": parse_nonnegative(record, "over272kTurns"),
+                "peak_context_tokens": parse_nonnegative(record, "peakContextTokens"),
+            }
+        except (TypeError, ValueError, OverflowError):
+            incomplete_markers += 1
+            return
+        totals = combine_totals(totals, record_totals)
+        completed_calls += 1
+        if generation and record.get("tree_generation") == generation:
+            current = combine_totals(current, record_totals)
+            current_calls += 1
+        if record.get("type") == "child_usage":
+            nodes.append({
+                "trace_id": record.get("trace_id"),
+                "tree_generation": record.get("tree_generation"),
+                "child_depth": record.get("child_depth"),
+                "call_count": record.get("call_count"),
+                "session_file": record.get("session_file"),
+                "model": record.get("model"),
+                "thinking_level": record.get("thinking_level"),
+                "mode": record.get("mode"),
+                "fork": record.get("fork"),
+                "prompt_chars": record.get("prompt_chars"),
+                "context_kind": record.get("context_kind"),
+                "context_chars": record.get("context_chars"),
+                **record_totals,
+            })
+
+    if path:
+        try:
+            expected_identity = parse_projected_identity(raw_identity)
+            metrics = scan_text_lines_snapshot(
+                path,
+                consume_line,
+                required_mode=0o600,
+                expected_identity=expected_identity,
+            )
+            snapshot = snapshot_payload(metrics)
+            identity_bound = expected_identity is not None
+            if metrics.trailing_record_incomplete:
+                incomplete_markers += 1
+        except TranscriptReadError as error:
+            totals = empty_totals()
+            current = empty_totals()
+            completed_calls = 0
+            current_calls = 0
+            nodes = []
+            incomplete_markers = max(1, incomplete_markers)
+            rejection_reason = str(error)[:512]
     return {
         **rounded_totals(totals),
         "calls": completed_calls,
         "incomplete": incomplete_markers > 0,
         "incomplete_markers": incomplete_markers,
+        "snapshot": snapshot,
+        "completeness": {
+            "trusted_snapshot": snapshot is not None,
+            "identity_bound": identity_bound,
+            "reason": rejection_reason or (
+                None if path else "RLM_COST_FILE is not set"
+            ),
+        },
         "top_nodes": sorted(nodes, key=lambda node: node["tokens"], reverse=True)[:10],
         "current_generation": {
             **rounded_totals(current),
@@ -138,7 +219,11 @@ def main() -> int:
     json_mode = arguments == ["--json"]
     correlation = latest_generation(os.environ.get("PI_TRACE_FILE"))
     generation = correlation["generation"] if correlation["exact"] else None
-    children = parse_child_ledger(os.environ.get("RLM_COST_FILE"), generation)
+    children = parse_child_ledger(
+        os.environ.get("RLM_COST_FILE"),
+        generation,
+        os.environ.get("YPI_COST_FILE_IDENTITY"),
+    )
 
     root_path = os.environ.get("RLM_SESSION_FILE")
     root: dict[str, Any] | None = None
@@ -178,7 +263,7 @@ def main() -> int:
         "scope": {
             "default": "exact_active_root",
             "root": "captured_prefix_of_RLM_SESSION_FILE" if root_path else "unavailable",
-            "children": "all_records_in_RLM_COST_FILE",
+            "children": "captured_prefix_of_RLM_COST_FILE" if os.environ.get("RLM_COST_FILE") else "unavailable",
             "historical_directory_scan": False,
             "tree_generation": generation,
             "tree_generation_started_at": correlation.get("started_at"),
@@ -196,6 +281,7 @@ def main() -> int:
             },
             "children_incomplete": children["incomplete"],
             "children_incomplete_markers": children["incomplete_markers"],
+            "children": children["completeness"],
             "current_generation_exact": bool(correlation["exact"]),
             "combined_non_double_counted": True,
             "combined_method": "root_explicit_usage_plus_child_ledger; nested_tool_content_not_parsed",

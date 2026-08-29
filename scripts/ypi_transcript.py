@@ -51,6 +51,7 @@ class DirectoryEntry:
 
 SnapshotHook = Callable[[str, int, int], None]
 RecordConsumer = Callable[[dict[str, Any], int], None]
+LineConsumer = Callable[[str, int], None]
 
 
 def _uid() -> int | None:
@@ -266,6 +267,153 @@ def scan_jsonl_snapshot(
         )
     except OSError as error:
         raise TranscriptReadError(f"Cannot read exact transcript snapshot: {error}") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(directory_fd)
+
+
+def scan_text_lines_snapshot(
+    raw_path: str | os.PathLike[str],
+    consumer: LineConsumer,
+    *,
+    required_mode: int | None = 0o600,
+    max_record_bytes: int = DEFAULT_MAX_RECORD_BYTES,
+    expected_identity: dict[str, str] | None = None,
+    test_hook: SnapshotHook | None = None,
+) -> SnapshotMetrics:
+    """Stream complete UTF-8 lines from one verified file-prefix snapshot.
+
+    Unlike :func:`scan_jsonl_snapshot`, this reader deliberately leaves line
+    interpretation to the consumer. This preserves tolerant legacy-ledger
+    parsing while retaining exact pathname, inode, captured-prefix, mode,
+    ownership, and link-count checks. A final partial line is excluded and
+    reported through ``trailing_record_incomplete``.
+    """
+
+    if not isinstance(max_record_bytes, int) or max_record_bytes <= 0:
+        raise TranscriptReadError("Maximum record size must be a positive integer")
+    started = time.monotonic()
+    candidate = _absolute_normalized_path(raw_path)
+    parent = candidate.parent
+    parent_before = os.lstat(parent)
+    if not stat.S_ISDIR(parent_before.st_mode):
+        raise TranscriptReadError("Text snapshot parent must be a directory")
+    _validate_owner(parent_before, "Text snapshot parent")
+
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    directory_fd = os.open(parent, directory_flags)
+    descriptor = -1
+    try:
+        parent_open = os.fstat(directory_fd)
+        if not stat.S_ISDIR(parent_open.st_mode) or not _same_inode(parent_before, parent_open):
+            raise TranscriptReadError("Text snapshot parent identity changed during validation")
+
+        descriptor = os.open(
+            candidate.name,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory_fd,
+        )
+        opened = os.fstat(descriptor)
+        named = os.stat(candidate.name, dir_fd=directory_fd, follow_symlinks=False)
+        _validate_file(opened, label="Text snapshot", required_mode=required_mode)
+        _validate_file(named, label="Text snapshot", required_mode=required_mode)
+        if not _same_inode(opened, named):
+            raise TranscriptReadError("Text snapshot identity changed during validation")
+        if expected_identity is not None and (
+            expected_identity.get("device") != str(opened.st_dev)
+            or expected_identity.get("inode") != str(opened.st_ino)
+            or expected_identity.get("kind") != "file"
+            or expected_identity.get("links") != "1"
+        ):
+            raise TranscriptReadError(
+                "Text snapshot does not match the projected active-file identity"
+            )
+        captured_size = opened.st_size
+        if captured_size < 0:
+            raise TranscriptReadError("Text snapshot size is invalid")
+        if test_hook is not None:
+            test_hook("after_open", descriptor, captured_size)
+
+        digest = hashlib.sha256()
+        buffer = b""
+        offset = 0
+        line_number = 0
+        peak_record_bytes = 0
+        complete_records = 0
+        while offset < captured_size:
+            requested = min(READ_CHUNK_BYTES, captured_size - offset)
+            chunk = os.pread(descriptor, requested, offset)
+            if not chunk:
+                raise TranscriptReadError("Text snapshot was truncated during snapshot read")
+            offset += len(chunk)
+            digest.update(chunk)
+            buffer += chunk
+            while True:
+                newline = buffer.find(b"\n")
+                if newline < 0:
+                    if len(buffer) > max_record_bytes:
+                        raise TranscriptReadError(
+                            f"Text snapshot record exceeds {max_record_bytes} bytes"
+                        )
+                    break
+                raw_record = buffer[:newline]
+                buffer = buffer[newline + 1 :]
+                line_number += 1
+                peak_record_bytes = max(peak_record_bytes, len(raw_record))
+                if len(raw_record) > max_record_bytes:
+                    raise TranscriptReadError(
+                        f"Text snapshot record exceeds {max_record_bytes} bytes at line {line_number}"
+                    )
+                try:
+                    decoded = raw_record.decode("utf-8", errors="strict")
+                except UnicodeDecodeError as error:
+                    raise TranscriptReadError(
+                        f"Invalid text snapshot UTF-8 at line {line_number}: {error}"
+                    ) from error
+                consumer(decoded, line_number)
+                complete_records += 1
+
+        trailing_incomplete = bool(buffer)
+        peak_record_bytes = max(peak_record_bytes, len(buffer))
+        if len(buffer) > max_record_bytes:
+            raise TranscriptReadError(f"Text snapshot record exceeds {max_record_bytes} bytes")
+        if test_hook is not None:
+            test_hook("before_verify", descriptor, captured_size)
+
+        after_read = os.fstat(descriptor)
+        if after_read.st_size < captured_size:
+            raise TranscriptReadError("Text snapshot was truncated below the captured boundary")
+        _, verification_digest = _pread_exact(descriptor, captured_size, hash_only=True)
+        if verification_digest != digest.hexdigest():
+            raise TranscriptReadError("Text snapshot captured prefix changed during analysis")
+        final_open = os.fstat(descriptor)
+        if final_open.st_size < captured_size:
+            raise TranscriptReadError("Text snapshot was truncated below the captured boundary")
+        final_named = os.stat(candidate.name, dir_fd=directory_fd, follow_symlinks=False)
+        parent_after = os.fstat(directory_fd)
+        if not _same_inode(opened, final_open) or not _same_inode(opened, final_named):
+            raise TranscriptReadError("Text snapshot pathname was replaced during analysis")
+        if not _same_inode(parent_before, parent_after):
+            raise TranscriptReadError("Text snapshot parent identity changed during analysis")
+        _validate_file(final_open, label="Text snapshot", required_mode=required_mode)
+        _validate_file(final_named, label="Text snapshot", required_mode=required_mode)
+
+        return SnapshotMetrics(
+            path=os.fspath(candidate),
+            bytes_scanned=captured_size,
+            verification_bytes=captured_size,
+            elapsed_ms=round((time.monotonic() - started) * 1000, 3),
+            peak_record_bytes=peak_record_bytes,
+            complete_records=complete_records,
+            trailing_record_incomplete=trailing_incomplete,
+            captured_size=captured_size,
+            final_size=final_open.st_size,
+            device=opened.st_dev,
+            inode=opened.st_ino,
+        )
+    except OSError as error:
+        raise TranscriptReadError(f"Cannot read exact text snapshot: {error}") from error
     finally:
         if descriptor >= 0:
             os.close(descriptor)

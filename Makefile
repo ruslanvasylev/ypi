@@ -65,6 +65,7 @@ test-root-analytics:
 	@echo "Running root transcript analytics tests..."
 	@python3 tests/test_root_analytics.py
 	@bun tests/root_session_privacy_harness.ts
+	@bun tests/root_session_failure_isolation_harness.ts
 
 test-root-incident-crosscheck:
 	@python3 tests/test_root_incident_crosscheck.py

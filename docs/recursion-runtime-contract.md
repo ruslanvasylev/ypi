@@ -171,14 +171,20 @@ and token categories (`input`, `cacheRead`, `cacheWrite`, `output`, and
 `reasoning`). It also records peak request context and the number of turns over
 272,000 context tokens. `rlm_cost --json` preserves those child-ledger fields
 and also derives root and combined totals from the exact active Pi transcript.
-The reader captures one byte boundary, streams only complete events in that
-prefix, accepts later append growth, and rejects truncation, replacement,
-prefix mutation, insecure identity, invalid UTF-8, or malformed complete
-JSONL. Root aggregation counts only explicit Pi usage fields; nested
+The readers capture one byte boundary and stream only complete records in that
+prefix. Both accept later append growth and reject truncation, replacement,
+prefix mutation, insecure identity, or invalid UTF-8. Transcript JSONL is
+strict; the legacy child ledger instead skips malformed complete rows and marks
+the snapshot incomplete without accepting their values. Root aggregation
+counts only explicit Pi usage fields; nested
 `rlm_query` tool text/details are never reinterpreted as root model usage. The
 live extension hardens only the current root transcript to `0600`, without
-changing historical files, session-directory modes, or global umask. `scope`
-and `completeness` distinguish whole-session totals from exact
+changing historical files, session-directory modes, or global umask. Ancestor
+aliases are canonicalized before projection while a symlinked final component
+is rejected. Hardening failure clears the unsafe analytics projection and is
+visible in a deduplicated status warning, but prompt patching, generation
+rotation, and model/thinking refresh continue. `scope` and `completeness`
+distinguish whole-session totals from exact
 current-generation values joined through the latest private
 `TREE_GENERATION_START`. Missing trace evidence stays explicitly inexact.
 Analytics never block, cancel, tune, or change admission.

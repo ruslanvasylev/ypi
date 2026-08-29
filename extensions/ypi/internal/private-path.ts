@@ -12,6 +12,7 @@ import {
 	readFileSync,
 	readSync,
 	readdirSync,
+	realpathSync,
 	rmdirSync,
 	unlinkSync,
 	writeFileSync,
@@ -51,6 +52,15 @@ export interface AppendOwnedPrivateFileTransactionOptions extends WriteOwnedPriv
 	afterTailTrim?: () => void;
 	afterPayloadSync?: () => void;
 	afterCommitWrite?: () => void;
+}
+
+/** Resolve an existing parent once without following the final component. */
+export function canonicalPrivateFilePath(candidate: string): string {
+	if (!path.isAbsolute(candidate) || path.normalize(candidate) !== candidate) {
+		throw controlError("Private file path must be absolute and normalized");
+	}
+	const parent = realpathSync.native(path.dirname(candidate));
+	return path.join(parent, path.basename(candidate));
 }
 
 export function parsePrivatePathIdentityValue(value: unknown): PrivatePathIdentity {

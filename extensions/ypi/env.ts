@@ -1,21 +1,58 @@
 import { createHash, randomBytes } from "node:crypto";
-import { accessSync, constants, existsSync, mkdirSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_MAX_CONCURRENT_CALLS } from "./internal/concurrency.ts";
 import {
+	canonicalPrivateFilePath,
 	createPrivateTempDirectory,
 	ensurePrivateAppendFile,
 	withPrivateUmask,
 } from "./internal/private-path.ts";
 import { ensureRootTreeCoordinator } from "./internal/tree-coordinator.ts";
-import { hardenActiveRootSessionFile } from "./internal/root-session.ts";
+import {
+	canonicalRootSessionFilePath,
+	hardenActiveRootSessionFile,
+} from "./internal/root-session.ts";
 import type { YpiRuntime } from "./runtime.ts";
 import { debug } from "./runtime.ts";
 
 export const DEFAULT_MAX_DEPTH = 3;
 export const DEFAULT_MAX_CALLS = 65_536;
+
+let rootSessionWarning: string | undefined;
+let lastNotifiedRootSessionWarning: string | undefined;
+
+export function currentRootSessionWarning(): string | undefined {
+	return rootSessionWarning;
+}
+
+function boundedFailure(error: unknown): string {
+	const message = error instanceof Error ? error.message : String(error);
+	return message.replace(/[\r\n\t]+/g, " ").slice(0, 240);
+}
+
+function clearRootSessionProjection(): void {
+	delete process.env.RLM_SESSION_FILE;
+	delete process.env.RLM_SESSION_DIR;
+	delete process.env.YPI_ROOT_SESSION_FILE_IDENTITY;
+}
+
+function recordRootSessionFailure(error: unknown, ctx?: ExtensionContext): void {
+	clearRootSessionProjection();
+	rootSessionWarning = `root session telemetry disabled: ${boundedFailure(error)}`;
+	debug(`__YPI_ROOT_SESSION_TELEMETRY_DISABLED__ ${rootSessionWarning}`);
+	if (ctx?.hasUI && lastNotifiedRootSessionWarning !== rootSessionWarning) {
+		ctx.ui.notify(rootSessionWarning, "warning");
+		lastNotifiedRootSessionWarning = rootSessionWarning;
+	}
+}
+
+function clearRootSessionFailure(): void {
+	rootSessionWarning = undefined;
+	lastNotifiedRootSessionWarning = undefined;
+}
 
 function exactNonNegativeInteger(value: string | undefined, fallback: string): number {
 	const raw = value ?? fallback;
@@ -102,10 +139,10 @@ function ensureRuntimeStatePaths(): void {
 		.update(process.env.RLM_TRACE_ID || "ypi")
 		.digest("hex")
 		.slice(0, 8);
-	const stateRoot = createPrivateTempDirectory(path.join(
+	const stateRoot = realpathSync.native(createPrivateTempDirectory(path.join(
 		tmpdir(),
 		`ypi_runtime_${stateLabel}_`,
-	));
+	)));
 	process.env.RLM_CALL_COUNTER_FILE ||= path.join(stateRoot, "calls.counter");
 	process.env.RLM_CONCURRENCY_DIR ||= path.join(stateRoot, "concurrency");
 	process.env.PI_TRACE_FILE ||= path.join(stateRoot, "trace.jsonl");
@@ -113,12 +150,14 @@ function ensureRuntimeStatePaths(): void {
 }
 
 function ensurePrivateTelemetryFile(variable: "PI_TRACE_FILE" | "RLM_COST_FILE"): void {
-	const filePath = process.env[variable];
-	if (!filePath) return;
+	const rawFilePath = process.env[variable];
+	if (!rawFilePath) return;
 	const identityVariable = variable === "PI_TRACE_FILE"
 		? "YPI_TRACE_FILE_IDENTITY"
 		: "YPI_COST_FILE_IDENTITY";
 	try {
+		const filePath = canonicalPrivateFilePath(rawFilePath);
+		process.env[variable] = filePath;
 		process.env[identityVariable] = JSON.stringify(ensurePrivateAppendFile(filePath));
 	} catch {
 		// Telemetry is observational. An unwritable or invalid sink must never
@@ -162,16 +201,25 @@ export function ensureEnvironment(runtime: YpiRuntime, ctx?: ExtensionContext, p
 	if (ctx && sharedSessionsEnabled()) {
 		const sessionFile = ctx.sessionManager.getSessionFile();
 		if (sessionFile) {
-			if (process.env.RLM_SESSION_FILE !== sessionFile) {
-				delete process.env.YPI_ROOT_SESSION_FILE_IDENTITY;
+			try {
+				const canonicalFile = canonicalRootSessionFilePath(sessionFile);
+				const canonicalDirectory = realpathSync.native(ctx.sessionManager.getSessionDir());
+				if (path.dirname(canonicalFile) !== canonicalDirectory) {
+					throw new Error("Root session file is outside the canonical session directory");
+				}
+				if (process.env.RLM_SESSION_FILE !== canonicalFile) {
+					delete process.env.YPI_ROOT_SESSION_FILE_IDENTITY;
+				}
+				hardenActiveRootSessionFile(canonicalFile);
+				process.env.RLM_SESSION_FILE = canonicalFile;
+				process.env.RLM_SESSION_DIR = canonicalDirectory;
+				clearRootSessionFailure();
+			} catch (error) {
+				recordRootSessionFailure(error, ctx);
 			}
-			process.env.RLM_SESSION_FILE = sessionFile;
-			process.env.RLM_SESSION_DIR = ctx.sessionManager.getSessionDir();
-			hardenActiveRootSessionFile(sessionFile);
 		} else if (process.env.RLM_DEPTH === "0") {
-			delete process.env.RLM_SESSION_FILE;
-			delete process.env.RLM_SESSION_DIR;
-			delete process.env.YPI_ROOT_SESSION_FILE_IDENTITY;
+			clearRootSessionProjection();
+			clearRootSessionFailure();
 		}
 	}
 	if (process.env.RLM_SESSION_DIR && sharedSessionsEnabled()) {

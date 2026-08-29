@@ -55,6 +55,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("before_agent_start", (event, ctx) => {
 		rootPrompt.capture(event.prompt);
 		ensureEnvironment(runtime, ctx, pi);
+		updateStatus(ctx);
 		if ((process.env.RLM_DEPTH || "0") === "0") {
 			beginRootTreeCoordinator("root-turn-replaced");
 		}
@@ -67,10 +68,12 @@ export default function (pi: ExtensionAPI) {
 	// so newly created root transcripts are private before operator tools run.
 	pi.on("tool_execution_start", (_event, ctx) => {
 		ensureEnvironment(runtime, ctx, pi);
+		updateStatus(ctx);
 	});
 
 	pi.on("turn_end", (_event, ctx) => {
 		ensureEnvironment(runtime, ctx, pi);
+		updateStatus(ctx);
 	});
 
 	pi.on("session_shutdown", async () => {

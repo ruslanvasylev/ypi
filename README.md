@@ -267,9 +267,17 @@ multi-file checkpoint.
 
 The root transcript is hardened to `0600` at live persistence boundaries while
 historical files, directory modes, and the process umask remain untouched.
-Append growth after the captured boundary is valid; truncation, replacement,
-captured-prefix mutation, symlinks, hard links, invalid UTF-8, and malformed
-complete JSONL fail closed. Current-generation joining uses the latest private
+Benign ancestor aliases are resolved once and the canonical session and
+telemetry paths are projected to readers; a symlinked final component still
+fails closed. A root-session hardening failure disables only that analytics
+projection, appears as a deduplicated warning/status, and cannot skip prompt
+patching, generation rotation, or route refresh. Append growth after the
+captured boundary is valid; truncation, replacement, captured-prefix mutation,
+symlinks, hard links, invalid UTF-8, and malformed complete transcript JSONL
+fail closed. The child ledger uses the same identity-bound captured-prefix
+contract while retaining its legacy row-level tolerance: malformed complete
+rows are skipped and marked incomplete, never reported as trusted totals.
+Current-generation joining uses the latest private
 `TREE_GENERATION_START`; missing trace evidence is reported as inexact instead
 of inferred. These values are observe-only and never change admission,
 cancellation, model, thinking level, depth, timeout, or call limits.

@@ -1343,6 +1343,7 @@ printf '%s\n' \
     '{"type":"child_usage","cost":99,"tokens":"invalid","input":99}' \
     '{"incomplete":true,"reason":"cancelled"}' \
     > "$HOSTILE_COST_FILE"
+chmod 600 "$HOSTILE_COST_FILE"
 HOSTILE_COST_OUTPUT=$(RLM_COST_FILE="$HOSTILE_COST_FILE" "$PROJECT_DIR/rlm_cost" --json)
 assert_contains "G46a: hostile cost filename remains argv data" '"cost": 0.25' "$HOSTILE_COST_OUTPUT"
 assert_contains "G46a: incomplete records are not completed calls" '"calls": 1' "$HOSTILE_COST_OUTPUT"
