@@ -1,130 +1,217 @@
-#!/usr/bin/env bash
-# rlm_cost — Report observational cost for the current recursive tree.
-# Usage:
-#   rlm_cost          # prints "$0.042381" (and an incomplete qualifier if needed)
-#   rlm_cost --json   # prints totals, context categories, top nodes, and incompleteness
+#!/usr/bin/env python3
+"""Report observational root, child, and combined YPI usage.
 
-set -euo pipefail
+By default this inspects only the exact ``RLM_SESSION_FILE`` plus YPI's private
+child-usage ledger. It never scans the Pi session directory and never emits
+prompt or tool content.
+"""
 
-MODE="${1:-}"
-if [ -z "${RLM_COST_FILE:-}" ] || [ ! -f "$RLM_COST_FILE" ]; then
-    if [ "$MODE" = "--json" ]; then
-        echo '{"cost": 0, "tokens": 0, "input": 0, "output": 0, "cache_read": 0, "cache_write": 0, "reasoning": 0, "turns": 0, "over_272k_turns": 0, "peak_context_tokens": 0, "calls": 0, "incomplete": false, "incomplete_markers": 0, "top_nodes": []}'
-    else
-        echo '$0.000000'
-    fi
-    exit 0
-fi
+from __future__ import annotations
 
-# The ledger pathname is argv data, never executable Python source.
-python3 - "$RLM_COST_FILE" "$MODE" <<'PY'
 import json
+import os
 import sys
+from pathlib import Path
+from typing import Any
 
-ledger = sys.argv[1]
-json_mode = len(sys.argv) > 2 and sys.argv[2] == "--json"
-total_cost = 0.0
-total_tokens = 0
-completed_calls = 0
-incomplete_markers = 0
-input_tokens = 0
-output_tokens = 0
-cache_read_tokens = 0
-cache_write_tokens = 0
-reasoning_tokens = 0
-turns = 0
-over_272k_turns = 0
-peak_context_tokens = 0
-nodes = []
-with open(ledger, encoding="utf-8") as stream:
-    for line in stream:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            record = json.loads(line)
-        except Exception:
-            continue
-        if not isinstance(record, dict):
-            continue
-        if record.get("incomplete") is True:
-            incomplete_markers += 1
-            continue
-        if "cost" not in record and "tokens" not in record:
-            continue
-        try:
-            record_cost = float(record.get("cost", 0) or 0)
-            record_tokens = int(record.get("tokens", 0) or 0)
-            record_input = int(record.get("input", 0) or 0)
-            record_output = int(record.get("output", 0) or 0)
-            record_cache_read = int(record.get("cacheRead", 0) or 0)
-            record_cache_write = int(record.get("cacheWrite", 0) or 0)
-            record_reasoning = int(record.get("reasoning", 0) or 0)
-            record_turns = int(record.get("turns", 0) or 0)
-            record_over_272k = int(record.get("over272kTurns", 0) or 0)
-            record_peak_context = int(record.get("peakContextTokens", 0) or 0)
-        except (TypeError, ValueError, OverflowError):
-            incomplete_markers += 1
-            continue
-        total_cost += record_cost
-        total_tokens += record_tokens
-        input_tokens += record_input
-        output_tokens += record_output
-        cache_read_tokens += record_cache_read
-        cache_write_tokens += record_cache_write
-        reasoning_tokens += record_reasoning
-        turns += record_turns
-        over_272k_turns += record_over_272k
-        peak_context_tokens = max(peak_context_tokens, record_peak_context)
-        completed_calls += 1
-        if record.get("type") == "child_usage":
-            nodes.append({
-                "trace_id": record.get("trace_id"),
-                "tree_generation": record.get("tree_generation"),
-                "child_depth": record.get("child_depth"),
-                "call_count": record.get("call_count"),
-                "session_file": record.get("session_file"),
-                "model": record.get("model"),
-                "thinking_level": record.get("thinking_level"),
-                "mode": record.get("mode"),
-                "fork": record.get("fork"),
-                "prompt_chars": record.get("prompt_chars"),
-                "context_kind": record.get("context_kind"),
-                "context_chars": record.get("context_chars"),
-                "tokens": record_tokens,
-                "input": record_input,
-                "output": record_output,
-                "cache_read": record_cache_read,
-                "cache_write": record_cache_write,
-                "reasoning": record_reasoning,
-                "turns": record_turns,
-                "over_272k_turns": record_over_272k,
-                "peak_context_tokens": record_peak_context,
-            })
+SCRIPT_DIR = Path(__file__).resolve().parent / "scripts"
+sys.path.insert(0, os.fspath(SCRIPT_DIR))
 
-incomplete = incomplete_markers > 0
-if json_mode:
-    print(json.dumps({
-        "cost": round(total_cost, 6),
-        "tokens": total_tokens,
-        "input": input_tokens,
-        "output": output_tokens,
-        "cache_read": cache_read_tokens,
-        "cache_write": cache_write_tokens,
-        "reasoning": reasoning_tokens,
-        "turns": turns,
-        "over_272k_turns": over_272k_turns,
-        "peak_context_tokens": peak_context_tokens,
+from ypi_root_analytics import (  # noqa: E402
+    analyze_root,
+    combine_totals,
+    empty_totals,
+    latest_generation,
+    rounded_totals,
+)
+from ypi_transcript import TranscriptReadError  # noqa: E402
+
+
+LEGACY_KEYS = (
+    "cost",
+    "tokens",
+    "input",
+    "output",
+    "cache_read",
+    "cache_write",
+    "reasoning",
+    "turns",
+    "over_272k_turns",
+    "peak_context_tokens",
+)
+
+
+def parse_nonnegative(record: dict[str, Any], key: str) -> int:
+    value = record.get(key, 0) or 0
+    if isinstance(value, bool):
+        raise ValueError(key)
+    parsed = int(value)
+    if parsed < 0:
+        raise ValueError(key)
+    return parsed
+
+
+def parse_child_ledger(path: str | None, generation: str | None) -> dict[str, Any]:
+    totals = empty_totals()
+    current = empty_totals()
+    completed_calls = 0
+    current_calls = 0
+    incomplete_markers = 0
+    nodes: list[dict[str, Any]] = []
+    if path and Path(path).is_file():
+        with open(path, encoding="utf-8", errors="strict") as stream:
+            for line in stream:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    incomplete_markers += 1
+                    continue
+                if not isinstance(record, dict):
+                    incomplete_markers += 1
+                    continue
+                if record.get("incomplete") is True:
+                    incomplete_markers += 1
+                    continue
+                if "cost" not in record and "tokens" not in record:
+                    continue
+                try:
+                    record_cost = float(record.get("cost", 0) or 0)
+                    if record_cost < 0:
+                        raise ValueError("cost")
+                    record_totals = {
+                        "cost": record_cost,
+                        "tokens": parse_nonnegative(record, "tokens"),
+                        "input": parse_nonnegative(record, "input"),
+                        "output": parse_nonnegative(record, "output"),
+                        "cache_read": parse_nonnegative(record, "cacheRead"),
+                        "cache_write": parse_nonnegative(record, "cacheWrite"),
+                        "reasoning": parse_nonnegative(record, "reasoning"),
+                        "turns": parse_nonnegative(record, "turns"),
+                        "over_272k_turns": parse_nonnegative(record, "over272kTurns"),
+                        "peak_context_tokens": parse_nonnegative(record, "peakContextTokens"),
+                    }
+                except (TypeError, ValueError, OverflowError):
+                    incomplete_markers += 1
+                    continue
+                totals = combine_totals(totals, record_totals)
+                completed_calls += 1
+                if generation and record.get("tree_generation") == generation:
+                    current = combine_totals(current, record_totals)
+                    current_calls += 1
+                if record.get("type") == "child_usage":
+                    nodes.append({
+                        "trace_id": record.get("trace_id"),
+                        "tree_generation": record.get("tree_generation"),
+                        "child_depth": record.get("child_depth"),
+                        "call_count": record.get("call_count"),
+                        "session_file": record.get("session_file"),
+                        "model": record.get("model"),
+                        "thinking_level": record.get("thinking_level"),
+                        "mode": record.get("mode"),
+                        "fork": record.get("fork"),
+                        "prompt_chars": record.get("prompt_chars"),
+                        "context_kind": record.get("context_kind"),
+                        "context_chars": record.get("context_chars"),
+                        **record_totals,
+                    })
+    return {
+        **rounded_totals(totals),
         "calls": completed_calls,
-        "incomplete": incomplete,
+        "incomplete": incomplete_markers > 0,
         "incomplete_markers": incomplete_markers,
         "top_nodes": sorted(nodes, key=lambda node: node["tokens"], reverse=True)[:10],
-    }))
-else:
-    suffix = (
-        f" (incomplete telemetry; {incomplete_markers} incomplete marker"
-        f"{'s' if incomplete_markers != 1 else ''})"
-        if incomplete else ""
-    )
-    print(f"${total_cost:.6f}{suffix}")
-PY
+        "current_generation": {
+            **rounded_totals(current),
+            "calls": current_calls,
+        } if generation else None,
+    }
+
+
+def main() -> int:
+    arguments = sys.argv[1:]
+    if arguments not in ([], ["--json"]):
+        print("Usage: rlm_cost [--json]", file=sys.stderr)
+        return 2
+    json_mode = arguments == ["--json"]
+    correlation = latest_generation(os.environ.get("PI_TRACE_FILE"))
+    generation = correlation["generation"] if correlation["exact"] else None
+    children = parse_child_ledger(os.environ.get("RLM_COST_FILE"), generation)
+
+    root_path = os.environ.get("RLM_SESSION_FILE")
+    root: dict[str, Any] | None = None
+    if root_path:
+        try:
+            root = analyze_root(
+                root_path,
+                correlation.get("started_at") if correlation["exact"] else None,
+                os.environ.get("YPI_ROOT_SESSION_FILE_IDENTITY"),
+            )
+        except TranscriptReadError as error:
+            print(f"rlm_cost: active root transcript rejected: {error}", file=sys.stderr)
+            return 1
+
+    root_totals = {key: root[key] for key in LEGACY_KEYS} if root else empty_totals()
+    child_totals = {key: children[key] for key in LEGACY_KEYS}
+    combined = combine_totals(root_totals, child_totals)
+    if generation:
+        root_current = root.get("current_generation") if root else empty_totals()
+        child_current = children.get("current_generation") or empty_totals()
+        combined["current_generation"] = combine_totals(
+            root_current or empty_totals(), child_current
+        )
+    else:
+        combined["current_generation"] = None
+
+    # The original top-level child-ledger schema remains intact for callers.
+    payload: dict[str, Any] = {
+        **{key: children[key] for key in LEGACY_KEYS},
+        "calls": children["calls"],
+        "incomplete": children["incomplete"],
+        "incomplete_markers": children["incomplete_markers"],
+        "top_nodes": children["top_nodes"],
+        "root": root,
+        "children": children,
+        "combined": combined,
+        "scope": {
+            "default": "exact_active_root",
+            "root": "captured_prefix_of_RLM_SESSION_FILE" if root_path else "unavailable",
+            "children": "all_records_in_RLM_COST_FILE",
+            "historical_directory_scan": False,
+            "tree_generation": generation,
+            "tree_generation_started_at": correlation.get("started_at"),
+            "current_generation_correlation_exact": bool(correlation["exact"]),
+            "current_generation_exact_at_trace_snapshot": bool(correlation["exact"]),
+            "cross_file_atomic_snapshot": False,
+            "snapshot_order": ["generation_trace", "child_ledger", "root_transcript"],
+            "correlation_reason": correlation.get("reason"),
+        },
+        "completeness": {
+            "root_available": root is not None,
+            "root": root.get("completeness") if root else {
+                "exact_entry_identity": False,
+                "reason": "RLM_SESSION_FILE is not set",
+            },
+            "children_incomplete": children["incomplete"],
+            "children_incomplete_markers": children["incomplete_markers"],
+            "current_generation_exact": bool(correlation["exact"]),
+            "combined_non_double_counted": True,
+            "combined_method": "root_explicit_usage_plus_child_ledger; nested_tool_content_not_parsed",
+        },
+    }
+    if json_mode:
+        print(json.dumps(payload, sort_keys=False))
+    else:
+        suffix = (
+            f" (incomplete telemetry; {children['incomplete_markers']} incomplete marker"
+            f"{'s' if children['incomplete_markers'] != 1 else ''})"
+            if children["incomplete"] else ""
+        )
+        print(f"${combined['cost']:.6f}{suffix}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

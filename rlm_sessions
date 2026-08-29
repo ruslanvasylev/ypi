@@ -6,11 +6,17 @@ from __future__ import annotations
 import json
 import os
 import re
-import stat
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, NoReturn
+
+sys.path.insert(0, os.fspath(Path(__file__).resolve().parent / "scripts"))
+
+from ypi_transcript import (  # noqa: E402
+    DirectoryEntry,
+    PrivateSessionDirectory,
+    TranscriptReadError,
+)
 
 
 def fail(message: str, code: int = 1) -> NoReturn:
@@ -28,34 +34,9 @@ if not raw_session_dir:
 
 session_dir = Path(raw_session_dir).absolute()
 try:
-    directory_lstat = session_dir.lstat()
-    resolved = session_dir.resolve(strict=True)
-except OSError as error:
-    fail(f"No session directory found: {error}")
-if not stat.S_ISDIR(directory_lstat.st_mode) or resolved != session_dir:
-    fail(f"Session directory must be a regular non-symlink path: {session_dir}")
-if hasattr(os, "getuid") and directory_lstat.st_uid != os.getuid():
-    fail(f"Session directory must be owned by the current uid: {session_dir}")
-if os.name != "nt" and stat.S_IMODE(directory_lstat.st_mode) != 0o700:
-    fail(f"Session directory must have mode 0700: {session_dir}")
-
-directory_flags = (
-    os.O_RDONLY
-    | getattr(os, "O_DIRECTORY", 0)
-    | getattr(os, "O_NOFOLLOW", 0)
-)
-try:
-    directory_fd = os.open(session_dir, directory_flags)
-except OSError as error:
-    fail(f"Cannot open session directory: {error}")
-directory_stat = os.fstat(directory_fd)
-if (
-    not stat.S_ISDIR(directory_stat.st_mode)
-    or directory_stat.st_dev != directory_lstat.st_dev
-    or directory_stat.st_ino != directory_lstat.st_ino
-):
-    os.close(directory_fd)
-    fail(f"Session directory identity changed during validation: {session_dir}")
+    session_owner = PrivateSessionDirectory(session_dir)
+except (OSError, TranscriptReadError) as error:
+    fail(f"Session directory must be a regular non-symlink path: {session_dir}: {error}")
 
 trace_id = re.sub(
     r"[^a-zA-Z0-9._-]",
@@ -64,126 +45,29 @@ trace_id = re.sub(
 )
 
 
-@dataclass(frozen=True)
-class SessionEntry:
-    name: str
-    size: int
-    mtime_ns: int
-
-
-def session_entries(trace_only: bool = False) -> list[SessionEntry]:
-    entries: list[SessionEntry] = []
-    with os.scandir(directory_fd) as iterator:
-        for entry in iterator:
-            if not entry.name.endswith(".jsonl"):
-                continue
-            if trace_only and trace_id and not entry.name.startswith(trace_id):
-                continue
-            metadata = entry.stat(follow_symlinks=False)
-            if (
-                not stat.S_ISREG(metadata.st_mode)
-                or metadata.st_nlink != 1
-                or (
-                    hasattr(os, "getuid")
-                    and metadata.st_uid != os.getuid()
-                )
-                or (
-                    os.name != "nt"
-                    and stat.S_IMODE(metadata.st_mode) != 0o600
-                )
-            ):
-                fail(
-                    "Session entries must be private, singly-linked regular "
-                    f"files: {json.dumps(entry.name)}"
-                )
-            entries.append(
-                SessionEntry(
-                    name=entry.name,
-                    size=metadata.st_size,
-                    mtime_ns=metadata.st_mtime_ns,
-                )
-            )
-    return sorted(entries, key=lambda item: item.name)
+def session_entries(trace_only: bool = False) -> list[DirectoryEntry]:
+    try:
+        return session_owner.entries(prefix=trace_id if trace_only else "")
+    except (OSError, TranscriptReadError) as error:
+        fail(f"Session entries must be private, singly-linked regular files: {error}")
 
 
 def checked_name(value: str) -> str:
-    if (
-        not value
-        or value != os.path.basename(value)
-        or os.sep in value
-        or (os.altsep is not None and os.altsep in value)
-        or not value.endswith(".jsonl")
-    ):
-        fail("Session reads accept only a direct-child .jsonl filename.")
-    return value
-
-
-def open_session(name: str):
-    checked_name(name)
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        descriptor = os.open(name, flags, dir_fd=directory_fd)
-    except OSError as error:
-        fail(f"Cannot open session {json.dumps(name)}: {error}")
-    try:
-        descriptor_stat = os.fstat(descriptor)
-        path_stat = os.stat(
-            name,
-            dir_fd=directory_fd,
-            follow_symlinks=False,
-        )
-        if (
-            not stat.S_ISREG(descriptor_stat.st_mode)
-            or not stat.S_ISREG(path_stat.st_mode)
-            or descriptor_stat.st_nlink != 1
-            or descriptor_stat.st_dev != path_stat.st_dev
-            or descriptor_stat.st_ino != path_stat.st_ino
-            or (
-                hasattr(os, "getuid")
-                and descriptor_stat.st_uid != os.getuid()
-            )
-            or (
-                os.name != "nt"
-                and stat.S_IMODE(descriptor_stat.st_mode) != 0o600
-            )
-        ):
-            fail(
-                "Session is not a private, singly-linked direct-child "
-                f"regular file: {json.dumps(name)}"
-            )
-        return os.fdopen(descriptor, "r", encoding="utf-8", errors="strict")
-    except BaseException:
-        os.close(descriptor)
-        raise
+        return session_owner.checked_name(value)
+    except TranscriptReadError as error:
+        fail(str(error))
 
 
 def records(name: str) -> Iterator[dict[str, Any]]:
-    with open_session(name) as handle:
-        line_number = 0
-        while True:
-            try:
-                line = handle.readline()
-            except UnicodeDecodeError as error:
-                fail(
-                    f"Invalid session UTF-8 in {json.dumps(name)} "
-                    f"near line {line_number + 1}: {error}"
-                )
-            if not line:
-                break
-            line_number += 1
-            try:
-                value = json.loads(line)
-            except json.JSONDecodeError as error:
-                fail(
-                    f"Invalid session JSONL in {json.dumps(name)} "
-                    f"at line {line_number}: {error}"
-                )
-            if not isinstance(value, dict):
-                fail(
-                    f"Invalid non-object session event in {json.dumps(name)} "
-                    f"at line {line_number}"
-                )
-            yield value
+    try:
+        values, _metrics = session_owner.read(checked_name(name))
+    except (OSError, TranscriptReadError) as error:
+        fail(
+            "Session is not a private, singly-linked direct-child regular "
+            f"file: {json.dumps(name)}: {error}"
+        )
+    yield from values
 
 
 def text_content(content: Any) -> str:
@@ -323,4 +207,4 @@ elif command == "grep":
 else:
     fail("Usage: rlm_sessions [list|--trace|read <file>|grep [-t] <pattern>]", 2)
 
-os.close(directory_fd)
+session_owner.close()

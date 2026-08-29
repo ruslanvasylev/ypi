@@ -10,6 +10,7 @@ import {
 	withPrivateUmask,
 } from "./internal/private-path.ts";
 import { ensureRootTreeCoordinator } from "./internal/tree-coordinator.ts";
+import { hardenActiveRootSessionFile } from "./internal/root-session.ts";
 import type { YpiRuntime } from "./runtime.ts";
 import { debug } from "./runtime.ts";
 
@@ -161,11 +162,16 @@ export function ensureEnvironment(runtime: YpiRuntime, ctx?: ExtensionContext, p
 	if (ctx && sharedSessionsEnabled()) {
 		const sessionFile = ctx.sessionManager.getSessionFile();
 		if (sessionFile) {
+			if (process.env.RLM_SESSION_FILE !== sessionFile) {
+				delete process.env.YPI_ROOT_SESSION_FILE_IDENTITY;
+			}
 			process.env.RLM_SESSION_FILE = sessionFile;
 			process.env.RLM_SESSION_DIR = ctx.sessionManager.getSessionDir();
+			hardenActiveRootSessionFile(sessionFile);
 		} else if (process.env.RLM_DEPTH === "0") {
 			delete process.env.RLM_SESSION_FILE;
 			delete process.env.RLM_SESSION_DIR;
+			delete process.env.YPI_ROOT_SESSION_FILE_IDENTITY;
 		}
 	}
 	if (process.env.RLM_SESSION_DIR && sharedSessionsEnabled()) {

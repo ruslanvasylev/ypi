@@ -62,6 +62,17 @@ export default function (pi: ExtensionAPI) {
 		return { systemPrompt: patchSystemPrompt(runtime, event) };
 	});
 
+	// Pi persists the assistant entry before turn_end and before starting its
+	// first tool. Re-assert the exact active-file permission at both boundaries
+	// so newly created root transcripts are private before operator tools run.
+	pi.on("tool_execution_start", (_event, ctx) => {
+		ensureEnvironment(runtime, ctx, pi);
+	});
+
+	pi.on("turn_end", (_event, ctx) => {
+		ensureEnvironment(runtime, ctx, pi);
+	});
+
 	pi.on("session_shutdown", async () => {
 		await terminateRootTreeCoordinator("root-session-shutdown");
 		rootPrompt.cleanup();

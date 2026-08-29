@@ -155,7 +155,8 @@ every call and recomputes the current digests. A completion record alone cannot
 prove that resource cleanup, slot release, and inherited-parent resumption
 succeeded. `rlm_sessions` is a direct-child, no-symlink presentation tool; it
 is limited to current-user-owned `0600` singly-linked files in a `0700`
-directory. It is not an evidence validator.
+directory. It shares the exact-file JSONL reader with root analytics, but is
+not an evidence validator.
 
 The normal wrapper prompt exposes only the optional shell helper capability and
 the paths of its runtime owners. It does not embed implementation source.
@@ -168,9 +169,19 @@ to its parent and appends a private attributed record to `RLM_COST_FILE`. The
 record binds trace, generation, depth, call, session, route, context transport,
 and token categories (`input`, `cacheRead`, `cacheWrite`, `output`, and
 `reasoning`). It also records peak request context and the number of turns over
-272,000 context tokens. `rlm_cost --json` summarizes these fields and ranks the
-ten highest-token child sessions. Missing or invalid telemetry disables only
-the affected sink; it never blocks, cancels, or changes admission.
+272,000 context tokens. `rlm_cost --json` preserves those child-ledger fields
+and also derives root and combined totals from the exact active Pi transcript.
+The reader captures one byte boundary, streams only complete events in that
+prefix, accepts later append growth, and rejects truncation, replacement,
+prefix mutation, insecure identity, invalid UTF-8, or malformed complete
+JSONL. Root aggregation counts only explicit Pi usage fields; nested
+`rlm_query` tool text/details are never reinterpreted as root model usage. The
+live extension hardens only the current root transcript to `0600`, without
+changing historical files, session-directory modes, or global umask. `scope`
+and `completeness` distinguish whole-session totals from exact
+current-generation values joined through the latest private
+`TREE_GENERATION_START`. Missing trace evidence stays explicitly inexact.
+Analytics never block, cancel, tune, or change admission.
 
 ## Implement Mode
 
