@@ -14,6 +14,7 @@ import { registerNativeRlmQueryTool } from "./ypi/native-tool.ts";
 import { createRootPromptLease } from "./ypi/internal/root-prompt.ts";
 import { registerRootImplementerBatchPolicy } from "./ypi/internal/root-batch-policy.ts";
 import { registerImplementWriteScope } from "./ypi/internal/write-scope.ts";
+import { registerCompactionContextProjection } from "./ypi/internal/compaction-context.ts";
 import {
 	beginRootTreeCoordinator,
 	terminateRootTreeCoordinator,
@@ -42,6 +43,7 @@ export default function (pi: ExtensionAPI) {
 	ensureEnvironment(runtime);
 	registerRootImplementerBatchPolicy(pi);
 	registerImplementWriteScope(pi);
+	registerCompactionContextProjection(pi);
 	if (shouldExposeRecursion()) {
 		registerNativeRlmQueryTool(pi, runtime);
 	}
