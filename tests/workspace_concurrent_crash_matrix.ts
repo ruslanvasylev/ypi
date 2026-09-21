@@ -7,7 +7,9 @@ import {
 	mkdtempSync,
 	readFileSync,
 	readdirSync,
+	renameSync,
 	rmSync,
+	type FSWatcher,
 	watch,
 	writeFileSync,
 } from "node:fs";
@@ -54,8 +56,14 @@ function fixture(): { parent: string; root: string } {
 	return { parent, root };
 }
 
+function publishSentinel(sentinel: string, payload: Record<string, unknown>): void {
+	const temporary = `${sentinel}.tmp-${process.pid}`;
+	writeFileSync(temporary, `${JSON.stringify(payload)}\n`, { flag: "wx" });
+	renameSync(temporary, sentinel);
+}
+
 function pause(sentinel: string, payload: Record<string, unknown>): void {
-	writeFileSync(sentinel, `${JSON.stringify(payload)}\n`);
+	publishSentinel(sentinel, payload);
 	process.kill(process.pid, "SIGSTOP");
 }
 
@@ -77,7 +85,7 @@ async function workerMain(): Promise<void> {
 	}
 	const report = lease.finalize();
 	lease.cleanup();
-	writeFileSync(sentinel, `${JSON.stringify({ leaseId: report.leaseId, attemptRef: report.attemptRef, stage: "complete" })}\n`);
+	publishSentinel(sentinel, { leaseId: report.leaseId, attemptRef: report.attemptRef, stage: "complete" });
 }
 
 async function parentMain(): Promise<void> {
@@ -98,21 +106,46 @@ if (process.argv[2] === "--parent") {
 	process.exit(0);
 }
 
-function waitForSentinel(sentinel: string, timeoutMilliseconds = 20_000): Promise<Record<string, any>> {
+function waitForSentinel(sentinel: string, timeoutMilliseconds = 20_000): Promise<Record<string, unknown>> {
 	const read = () => JSON.parse(readFileSync(sentinel, "utf8"));
-	if (existsSync(sentinel)) return Promise.resolve(read());
 	return new Promise((resolve, reject) => {
-		const watcher = watch(path.dirname(sentinel), (_event, filename) => {
-			if (filename === path.basename(sentinel) && existsSync(sentinel)) {
-				clearTimeout(timer);
-				watcher.close();
-				resolve(read());
+		let watcher: FSWatcher | undefined;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		let poll: ReturnType<typeof setInterval> | undefined;
+		let settled = false;
+		const finish = (error?: unknown, payload?: Record<string, unknown>) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			clearInterval(poll);
+			watcher?.close();
+			if (error) reject(error);
+			else resolve(payload!);
+		};
+		const check = () => {
+			if (settled || !existsSync(sentinel)) return;
+			try {
+				finish(undefined, read());
+			} catch (error) {
+				finish(error);
 			}
-		});
-		const timer = setTimeout(() => {
-			watcher.close();
-			reject(new Error(`timed out waiting for ${sentinel}`));
-		}, timeoutMilliseconds);
+		};
+		try {
+			// A rename may report the temporary source name, so any directory
+			// event rechecks the final path instead of filtering by filename.
+			watcher = watch(path.dirname(sentinel), check);
+			watcher.on("error", (error) => finish(error));
+			timer = setTimeout(() => finish(new Error(`timed out waiting for ${sentinel}`)), timeoutMilliseconds);
+			// Native rename notifications can be coalesced or lost. This cheap
+			// bounded fallback observes the actual publication, not event delivery.
+			poll = setInterval(check, 25);
+			// Recheck after subscribing so creation between exists/watch cannot be missed.
+			check();
+			// Bun may activate the native watch on the next event-loop turn.
+			setImmediate(check);
+		} catch (error) {
+			finish(error);
+		}
 	});
 }
 
@@ -164,6 +197,35 @@ function record(ok: boolean, label: string, detail = "") {
 }
 
 console.log("\n=== Concurrent implementer crash matrix ===");
+{
+	const scratch = mkdtempSync(path.join(tmpdir(), "ypi-sentinel-proof."));
+	try {
+		const existing = path.join(scratch, "existing");
+		publishSentinel(existing, { stage: "ready" });
+		record((await waitForSentinel(existing)).stage === "ready", "sentinel: preexisting atomic publication is observed");
+		const future = path.join(scratch, "future");
+		const pending = waitForSentinel(future);
+		publishSentinel(future, { stage: "future" });
+		record((await pending).stage === "future", "sentinel: publication after subscription is observed");
+		for (const preexisting of [true, false]) {
+			const malformed = path.join(scratch, `malformed-${preexisting}`);
+			if (preexisting) writeFileSync(malformed, "");
+			const rejected = waitForSentinel(malformed, 100);
+			if (!preexisting) writeFileSync(malformed, "");
+			let parseError = false;
+			try { await rejected; } catch (error) { parseError = error instanceof SyntaxError; }
+			record(parseError, `sentinel: ${preexisting ? "existing" : "new"} malformed JSON rejects instead of hanging`);
+		}
+		const unreadable = path.join(scratch, "directory");
+		mkdirSync(unreadable);
+		let readError = false;
+		try { await waitForSentinel(unreadable, 100); }
+		catch (error) { readError = error instanceof Error && "code" in error && error.code === "EISDIR"; }
+		record(readError, "sentinel: read error rejects instead of hanging");
+	} finally {
+		rmSync(scratch, { recursive: true, force: true });
+	}
+}
 const realGit = spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim() || "/usr/bin/git";
 const cases: Array<{ name: string; stage: WorkspaceLifecycleStage | "mid-add" }> = [
 	{ name: "before-snapshot", stage: "before-snapshot" },
@@ -190,7 +252,9 @@ for (const crashCase of cases) {
 		writeFileSync(wrapper, `#!/usr/bin/env bash
 set -euo pipefail
 if [ "\${YPI_CRASH_STAGE:-}" = "mid-add" ] && [[ " $* " == *" add -A "* ]]; then
-  printf '%s\\n' '{"stage":"mid-add"}' > "$YPI_CRASH_SENTINEL"
+  _YPI_SENTINEL_TMP="$YPI_CRASH_SENTINEL.tmp.$$"
+  printf '%s\\n' '{"stage":"mid-add"}' > "$_YPI_SENTINEL_TMP"
+  mv -- "$_YPI_SENTINEL_TMP" "$YPI_CRASH_SENTINEL"
   kill -STOP $$
 fi
 exec "$YPI_REAL_GIT" "$@"
