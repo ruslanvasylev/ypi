@@ -28,4 +28,13 @@ lower uncached-token billing. The model can retrieve an earlier exact path by
 selecting the referenced JSONL entry's file-list fields and filtering them.
 
 Run `make test-compaction-context` for deterministic projection, preservation,
-resume and branch-isolation checks. It is included in `make test-fast`.
+resume and branch-isolation checks, including Pi's actual context-event dispatch
+and preservation of system/tool state. It is included in `make test-fast`.
+
+A replay of 19 historical checkpoints reduced the largest rendered summary
+from an estimated 44,023 to 27,799 text tokens (36.85%). Counts include Pi's
+summary wrapper and use `tiktoken` 0.12.0 with `o200k_base`; the session's
+`openai-codex/gpt-6-astra` model has no tokenizer mapping in that library, so
+these are estimates, not exact provider counts. They exclude provider framing
+and other request content. This measures the file-history projection only;
+summary generation and uncached billing were not replayed.

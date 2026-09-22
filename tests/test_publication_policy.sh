@@ -74,7 +74,8 @@ else
 fi
 rm -rf "$MULTI_PARENT"
 
-if grep -q 'Never release, publish, tag, or ask whether to release' "$ROOT/SYSTEM_PROMPT.md"; then pass "system prompt carries release prohibition"; else fail "system prompt carries release prohibition" "missing rule"; fi
+if grep -Fq 'No releases, package publication, or tags.' "$ROOT/SYSTEM_PROMPT.md"; then pass "system prompt carries release prohibition"; else fail "system prompt carries release prohibition" "missing rule"; fi
+if grep -Fq 'Explicitly authorized Git pushes, PR creation, and PR merges on a remote the user owns are permitted.' "$ROOT/SYSTEM_PROMPT.md"; then pass "system prompt allows explicitly authorized owned-remote delivery"; else fail "system prompt owned-remote delivery" "missing authority boundary"; fi
 if grep -q 'validate-push-owner' "$ROOT/scripts/land" && grep -q -- '--no-follow-tags' "$ROOT/scripts/land" && grep -q 'HEAD:refs/heads/' "$ROOT/scripts/land" && grep -q 'never merges, tags, publishes, or releases' "$ROOT/scripts/land"; then pass "landing validates all origin targets and pushes only one branch"; else fail "landing publication boundary" "unsafe landing text"; fi
 if grep -q 'git diff --quiet' "$ROOT/scripts/land" && grep -q 'HEAD_BEFORE' "$ROOT/scripts/land"; then pass "landing binds validation to a clean unchanged commit"; else fail "landing exact-state gate" "missing clean/HEAD checks"; fi
 

@@ -102,6 +102,7 @@ const providerCases = [
 	{ provider: "qwen-token-plan-cn", retained: ["QWEN_TOKEN_PLAN_CN_API_KEY"] },
 	{ provider: "radius", retained: ["RADIUS_API_KEY"] },
 	{ provider: "baseten", retained: ["BASETEN_API_KEY"] },
+	{ provider: "meta", retained: ["META_API_KEY"] },
 ] as const;
 for (const providerCase of providerCases) {
 	const providerBase = Object.fromEntries(

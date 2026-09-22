@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, unlinkSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
-import type { CompactionEntry, ContextEvent, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { discoverAndLoadExtensions, ExtensionRunner, SessionManager } from "@earendil-works/pi-coding-agent";
+import type { CompactionEntry, ContextEvent, ExtensionAPI, ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { projectCompactionFileHistory, registerCompactionContextProjection } from "../extensions/ypi/internal/compaction-context.ts";
 
 const scratch = mkdtempSync(path.join(tmpdir(), "ypi-compaction-é-"));
@@ -139,6 +139,36 @@ try {
 		assert.equal(invoke(event, context), undefined);
 		activeTools = ["read", "bash"];
 	});
+	// Exercise Pi's real request-time context dispatch. The 0.86 regressions
+	// upstream #9789/#9822 lost system/tool state after context transforms.
+	const fixture = path.join(scratch, "projection-extension.ts");
+	const helper = path.resolve(import.meta.dirname, "../extensions/ypi/internal/compaction-context.ts");
+	writeFileSync(fixture, `import { registerCompactionContextProjection } from ${JSON.stringify(helper)};\n`
+		+ "export default registerCompactionContextProjection;\n");
+	const loaded = await discoverAndLoadExtensions([fixture], scratch, scratch);
+	assert.deepEqual(loaded.errors, []);
+	assert.equal(loaded.extensions.length, 1);
+	loaded.runtime.getActiveTools = () => ["read", "bash"];
+	const persisted = readFileSync(sessionFile, "utf8");
+	for (const manager of [session, SessionManager.open(sessionFile)]) {
+		// Model access is not part of this hook; fail if the real runner tries it.
+		const registry = new Proxy({} as ModelRegistry, { get() { throw new Error("unexpected model access"); } });
+		const runner = new ExtensionRunner(loaded.extensions, loaded.runtime, scratch, manager, registry);
+		const errors: unknown[] = [];
+		runner.onError((error) => errors.push(error));
+		const system = { role: "system" as const, content: "Preserve the active authorization.", timestamp: 1,
+			toolsAdded: [{ name: "bash", description: "Run a bounded command.", parameters: { type: "object" } }] };
+		const input = [system, ...manager.buildSessionContext().messages];
+		const result = await runner.emitContext(input);
+		check("real Pi context dispatch preserves system/tools and persisted resume state", () => {
+			assert.deepEqual(errors, []);
+			assert.deepEqual(result[0], system);
+			assert(result.some((message) => message.role === "compactionSummary" && message.summary.includes("<file-history>")));
+			assert.deepEqual(result.filter((message) => message.role !== "compactionSummary"),
+				input.filter((message) => message.role !== "compactionSummary"));
+			assert.equal(readFileSync(sessionFile, "utf8"), persisted);
+		});
+	}
 	check("missing/in-memory session and unavailable transcript keep full messages", () => {
 		assert.equal(invoke(event, { sessionManager: { getSessionFile: () => undefined } } as unknown as ExtensionContext), undefined);
 		assert.equal(invoke(event, { sessionManager: {
