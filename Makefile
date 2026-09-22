@@ -67,6 +67,10 @@ test-root-analytics:
 	@bun tests/root_session_privacy_harness.ts
 	@bun tests/root_session_failure_isolation_harness.ts
 
+.PHONY: test-compaction-context
+test-compaction-context:
+	@bun tests/compaction_context_harness.ts
+
 test-root-incident-crosscheck:
 	@python3 tests/test_root_incident_crosscheck.py
 
@@ -157,7 +161,7 @@ test-doctor:
 	@bash tests/test_doctor.sh
 
 # All fast tests (no LLM calls)
-test-fast: typecheck-runtime check-runtime-cli test-unit test-guardrails test-timeout-range test-native test-runtime-contract test-eval-contracts test-concurrency test-atomic-file test-cli-async test-cost-ledger test-child-process test-cross-depth-cancellation test-transcripts test-session-tools test-root-analytics test-root-incident-crosscheck test-private-path-ownership test-implementer-registry-generation test-workspace-retirement-generation test-workspace-policy test-parallel-workspace test-implementer-recovery test-workspace-crash test-workspace-concurrent-crash test-write-scope test-publication-policy test-config-surface test-provider-allowlist test-pi-version-alignment test-doctor
+test-fast: typecheck-runtime check-runtime-cli test-unit test-guardrails test-timeout-range test-native test-runtime-contract test-eval-contracts test-concurrency test-atomic-file test-cli-async test-cost-ledger test-child-process test-cross-depth-cancellation test-transcripts test-session-tools test-root-analytics test-compaction-context test-root-incident-crosscheck test-private-path-ownership test-implementer-registry-generation test-workspace-retirement-generation test-workspace-policy test-parallel-workspace test-implementer-recovery test-workspace-crash test-workspace-concurrent-crash test-write-scope test-publication-policy test-config-surface test-provider-allowlist test-pi-version-alignment test-doctor
 
 # Extension compatibility — requires real pi installed
 test-extensions:
