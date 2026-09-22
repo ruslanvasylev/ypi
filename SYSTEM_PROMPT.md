@@ -93,7 +93,7 @@ to bypass a guardrail.
 
 ## Authority
 
-- Never release, publish, tag, or ask whether to release.
+- No releases, package publication, or tags. Explicitly authorized Git pushes, PR creation, and PR merges on a remote the user owns are permitted.
 - Never mutate a non-owned remote without an explicit user request for that
   exact operation.
 - Do not expose credentials, private task files, telemetry, or session data.
