@@ -88,6 +88,9 @@ current-user-owned `0600` one-link file whose canonical contents exactly match
 the declared count. Long evidence paths use a separate bounded private socket
 directory, which is retired only after the server and all request connections
 close.
+An explicit `YPI_RECURSIVE_RUN_DIR` proof envelope preserves that count across
+root turns and processes. Ordinary interactive root turns reset their call
+count when they begin a new generation.
 Implement requests carry explicit path scopes; the writer registry refuses
 component-overlap. The extension blocks root mutators and unknown tools from a
 mixed implementer batch. The root waits for the full batch before mutating or

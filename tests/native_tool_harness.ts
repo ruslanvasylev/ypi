@@ -1345,6 +1345,23 @@ async function run(): Promise<void> {
 
 	clearYpiEnv();
 	resetLog();
+	const envelopeCounter = path.join(scratch, "envelope.counter");
+	writeFileSync(envelopeCounter, "2\n", { mode: 0o600 });
+	chmodSync(envelopeCounter, 0o600);
+	process.env.YPI_RECURSIVE_RUN_DIR = scratch;
+	process.env.RLM_CALL_COUNTER_FILE = envelopeCounter;
+	process.env.RLM_CALL_COUNT = "2";
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	process.env.RLM_JSON = "0";
+	ensureEnvironment(runtime, context());
+	beginRootTreeCoordinator("persisted-envelope-next-turn");
+	await invoke("continued proof envelope");
+	assertContains("N11b: persisted envelope continues its call count", readLog(), "RLM_CALL_COUNT=3");
+	record(readFileSync(envelopeCounter, "utf8") === "3\n", "N11b: persisted counter advances without reset");
+
+	clearYpiEnv();
+	resetLog();
 	process.env.RLM_DEPTH = "0";
 	process.env.RLM_MAX_DEPTH = "2";
 	process.env.RLM_JSON = "0";
