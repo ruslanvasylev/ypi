@@ -4,6 +4,7 @@
 test-unit:
 	@echo "Running unit tests..."
 	@bash tests/test_unit.sh
+	@bun tests/model_routing_harness.ts
 
 # Guardrail tests — no LLM calls, tests new features
 test-guardrails:

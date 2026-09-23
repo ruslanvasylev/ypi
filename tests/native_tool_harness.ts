@@ -1047,6 +1047,33 @@ async function run(): Promise<void> {
 	process.env.RLM_DEPTH = "0";
 	process.env.RLM_MAX_DEPTH = "2";
 	process.env.RLM_JSON = "0";
+	ensureEnvironment(runtime, context(), pi);
+	process.env.YPI_MODEL_CATALOG = JSON.stringify([
+		{ provider: "openai-codex", id: "gpt-6-sol", reasoning: true, input: ["text"] },
+		{ provider: "openai-codex", id: "gpt-6-luna", reasoning: true, input: ["text"] },
+		{ provider: "openai-codex", id: "gpt-6-astra", reasoning: true, input: ["text"] },
+	]);
+	await Promise.all([
+		tool!.execute("route-explorer", { prompt: "explore", routing: { profile: "explorer" } }, undefined, undefined, context()),
+		tool!.execute("route-reviewer", { prompt: "review", routing: { profile: "reviewer" } }, undefined, undefined, context()),
+	]);
+	assertContains("N7d: concurrent explorer uses Luna", readLog(), "--model gpt-6-luna");
+	assertContains("N7d: concurrent reviewer uses Astra", readLog(), "--model gpt-6-astra");
+	resetLog();
+	await tool!.execute("route-escalated", { prompt: "retry proof", routing: { escalation: { previousAttempt: "c1", issue: "missing case", kind: "correctness", stage: 1 } } }, undefined, undefined, context());
+	assertContains("N7d: escalation raises Sol effort", readLog(), "--model gpt-6-sol --thinking high");
+	resetLog();
+	await tool!.execute("route-normal", { prompt: "normal", routing: { profile: "worker" } }, undefined, undefined, context());
+	assertContains("N7d: next task resets to Sol medium", readLog(), "--model gpt-6-sol --thinking medium");
+	resetLog();
+	await expectThrow("N7d: unavailable explicit model fails", "unavailable", () => tool!.execute("route-invalid", { prompt: "invalid", routing: { provider: "openai-codex", model: "gpt-99-sol" } }, undefined, undefined, context()));
+	assertNotContains("N7d: unavailable route spawns no child", readLog(), "ARGS:");
+
+	clearYpiEnv();
+	resetLog();
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	process.env.RLM_JSON = "0";
 	ensureEnvironment(runtime, context());
 	await invoke();
 	assertContains("N8: ambient extension copies are disabled by default", readLog(), "--no-extensions");

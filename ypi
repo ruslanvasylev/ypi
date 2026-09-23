@@ -115,6 +115,8 @@ export YPI_SHELL_HELPER=1
 PASS_ARGS=()
 HAS_PROVIDER=false
 HAS_MODEL=false
+HAS_THINKING=false
+HAS_RESTORED_SESSION=false
 SESSION_DIR_OVERRIDE=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -143,6 +145,39 @@ while [[ $# -gt 0 ]]; do
             ;;
         --model=*)
             HAS_MODEL=true
+            PASS_ARGS+=("$1")
+            shift
+            ;;
+        --thinking)
+            HAS_THINKING=true
+            PASS_ARGS+=("$1")
+            shift
+            if [[ $# -gt 0 ]]; then
+                PASS_ARGS+=("$1")
+                shift
+            fi
+            ;;
+        --thinking=*)
+            HAS_THINKING=true
+            PASS_ARGS+=("$1")
+            shift
+            ;;
+        --continue|-c|--resume|-r)
+            HAS_RESTORED_SESSION=true
+            PASS_ARGS+=("$1")
+            shift
+            ;;
+        --session|--session-id|--fork)
+            HAS_RESTORED_SESSION=true
+            PASS_ARGS+=("$1")
+            shift
+            if [[ $# -gt 0 ]]; then
+                PASS_ARGS+=("$1")
+                shift
+            fi
+            ;;
+        --session=*|--session-id=*|--fork=*)
+            HAS_RESTORED_SESSION=true
             PASS_ARGS+=("$1")
             shift
             ;;
@@ -221,6 +256,21 @@ elif [ "$HAS_MODEL" = true ]; then
     # Explicit CLI model should win for both root and recursive children.
     # The extension will seed RLM_MODEL from Pi's active root model.
     unset RLM_MODEL
+fi
+if [ "$HAS_THINKING" = false ] && [ -n "${RLM_THINKING_LEVEL:-}" ]; then
+    PI_ARGV+=(--thinking "$RLM_THINKING_LEVEL")
+elif [ "$HAS_THINKING" = true ]; then
+    unset RLM_THINKING_LEVEL
+fi
+if [ "$HAS_MODEL" = false ] && [ "$HAS_PROVIDER" = false ] && [ "$HAS_RESTORED_SESSION" = false ] && [ -z "${RLM_MODEL:-}" ] && [ -z "${RLM_PROVIDER:-}" ]; then
+    export YPI_ROOT_AUTO_ROUTE=1
+else
+    unset YPI_ROOT_AUTO_ROUTE
+fi
+if [ "$HAS_THINKING" = true ] || [ -n "${RLM_THINKING_LEVEL:-}" ]; then
+    export YPI_ROOT_EXPLICIT_THINKING=1
+else
+    unset YPI_ROOT_EXPLICIT_THINKING
 fi
 if [ "$YPI_ALLOW_AMBIENT" != true ]; then
     PI_ARGV+=(--no-extensions)

@@ -27,6 +27,19 @@ const RlmQueryParams = Type.Object({
 		minItems: 1,
 		maxItems: 64,
 	})),
+	routing: Type.Optional(Type.Object({
+		profile: Type.Optional(Type.Union([Type.Literal("worker"), Type.Literal("explorer"), Type.Literal("reviewer"), Type.Literal("inherit")])),
+		provider: Type.Optional(Type.String()),
+		model: Type.Optional(Type.String()),
+		thinkingLevel: Type.Optional(Type.Union([Type.Literal("off"), Type.Literal("minimal"), Type.Literal("low"), Type.Literal("medium"), Type.Literal("high"), Type.Literal("xhigh"), Type.Literal("max")])),
+		justification: Type.Optional(Type.String()),
+		escalation: Type.Optional(Type.Object({
+			previousAttempt: Type.String(),
+			issue: Type.String(),
+			kind: Type.Union([Type.Literal("reasoning"), Type.Literal("correctness")]),
+			stage: Type.Union([Type.Literal(1), Type.Literal(2)]),
+		})),
+	})),
 });
 
 export function registerNativeRlmQueryTool(pi: ExtensionAPI, runtime: YpiRuntime): void {
@@ -41,6 +54,7 @@ export function registerNativeRlmQueryTool(pi: ExtensionAPI, runtime: YpiRuntime
 			"Use rlm_query mode=review for audits, research, and probes; review is read-only and is the default.",
 			"Use root-only mode=implement with an explicit scope for bounded edit/write work. Parallel implementers require disjoint declared scopes; the parent integrates returned refs, then runs commands and tests.",
 			"Do not recurse past the active RLM_MAX_DEPTH limit.",
+			"Choose routing.profile by task: worker is the default, explorer for bounded search, reviewer for consequential independent review. Use profile=inherit to preserve the current route. Escalate only with a previous attempt and a named unresolved reasoning or correctness issue; the next independent call returns to its normal profile. xhigh/max needs a justified stage-2 escalation.",
 		],
 		parameters: RlmQueryParams,
 		executionMode: "parallel" as const,
@@ -123,6 +137,7 @@ export function registerNativeRlmQueryTool(pi: ExtensionAPI, runtime: YpiRuntime
 					fork: params.fork,
 					mode: params.mode === "implement" ? "implement" : "review",
 					scope: params.scope,
+					routing: params.routing,
 					caller: "tool",
 					signal,
 					onAdmitted(callCount) {

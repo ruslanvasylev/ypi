@@ -87,6 +87,7 @@ echo "RLM_MAX_CALLS=$RLM_MAX_CALLS"
 echo "RLM_PROVIDER=$RLM_PROVIDER"},{
 echo "RLM_MODEL=$RLM_MODEL"
 echo "RLM_THINKING_LEVEL=${RLM_THINKING_LEVEL:-}"
+echo "YPI_ROOT_AUTO_ROUTE=${YPI_ROOT_AUTO_ROUTE:-}"
 echo "RLM_SYSTEM_PROMPT=$RLM_SYSTEM_PROMPT"
 echo "RLM_PROMPT_FILE=$RLM_PROMPT_FILE"
 PREVIOUS=""
@@ -431,6 +432,7 @@ assert_contains "T14e: launcher loads canonical extension" "-e $PROJECT_DIR/exte
 assert_contains "T14e: launcher explicitly loads packaged skills" "--skill $PROJECT_DIR/skills" "$OUTPUT"
 assert_not_contains "T14e: launcher does not limit tools" "--tools" "$OUTPUT"
 assert_not_contains "T14e: launcher does not build system prompt" "--system-prompt" "$OUTPUT"
+assert_contains "T14e: fresh root enables ypi model policy" "YPI_ROOT_AUTO_ROUTE=1" "$OUTPUT"
 
 # T14f: ypi root launcher honors RLM_PROVIDER/RLM_MODEL env overrides
 OUTPUT=$(
@@ -440,6 +442,7 @@ OUTPUT=$(
 )
 assert_contains "T14f: launcher provider from env" "--provider openrouter" "$OUTPUT"
 assert_contains "T14f: launcher model from env" "--model openai/gpt-5.5:xhigh" "$OUTPUT"
+assert_not_contains "T14f: environment model disables automatic root selection" "YPI_ROOT_AUTO_ROUTE=1" "$OUTPUT"
 
 # T14g: explicit ypi CLI provider/model wins over environment routing and child env seeding
 OUTPUT=$(
@@ -453,6 +456,22 @@ assert_not_contains "T14g: launcher provider not duplicated" "--provider openrou
 assert_not_contains "T14g: launcher model not duplicated" "--model openai/gpt-5.5:xhigh" "$OUTPUT"
 assert_contains "T14g: launcher explicit provider clears env" "RLM_PROVIDER=" "$OUTPUT"
 assert_contains "T14g: launcher explicit model clears env" "RLM_MODEL=" "$OUTPUT"
+
+OUTPUT=$(
+    RLM_THINKING_LEVEL=high \
+    "$PROJECT_DIR/ypi" -p --no-session "Launcher effort routing?"
+)
+assert_contains "T14h: environment thinking reaches Pi" "--thinking high" "$OUTPUT"
+OUTPUT=$(
+    RLM_THINKING_LEVEL=high \
+    "$PROJECT_DIR/ypi" --thinking low -p --no-session "Launcher explicit effort?"
+)
+assert_contains "T14h: explicit thinking wins" "--thinking low" "$OUTPUT"
+assert_not_contains "T14h: environment thinking is not duplicated" "--thinking high" "$OUTPUT"
+OUTPUT=$(
+    "$PROJECT_DIR/ypi" --continue -p "Restored session?"
+)
+assert_not_contains "T14h: restored session disables automatic model selection" "YPI_ROOT_AUTO_ROUTE=1" "$OUTPUT"
 
 # T14d: RLM_PROMPT_FILE is set and contains the original prompt (symbolic access)
 OUTPUT=$(

@@ -25,6 +25,7 @@ export interface ChildOutputSnapshot {
 	textTruncated: boolean;
 	jsonEventTruncated: boolean;
 	jsonCostIncomplete: boolean;
+	actualModel?: { provider: string; model: string };
 }
 
 export interface NormalizedChildOutput {
@@ -32,6 +33,7 @@ export interface NormalizedChildOutput {
 	stderr: string;
 	warnings: string[];
 	cost?: ChildUsageSummary;
+	actualModel?: { provider: string; model: string };
 }
 
 export interface BoundedCapture {
@@ -49,7 +51,7 @@ export interface ChildToolActivity {
 export interface JsonStreamDecoder {
 	append(chunk: string): boolean;
 	finish(): void;
-	result(): { text: string; cost?: ChildUsageSummary; textTruncated: boolean; jsonEventTruncated: boolean; jsonCostIncomplete: boolean };
+	result(): { text: string; cost?: ChildUsageSummary; actualModel?: { provider: string; model: string }; textTruncated: boolean; jsonEventTruncated: boolean; jsonCostIncomplete: boolean };
 }
 
 export function createBoundedCapture(limit: number): BoundedCapture {
@@ -106,6 +108,7 @@ export function createJsonDecoder(
 	let peakContextTokens = 0;
 	let over272kTurns = 0;
 	let sawTurnEnd = false;
+	let actualModel: { provider: string; model: string } | undefined;
 	const usageNumber = (value: unknown): number => {
 		const parsed = Number(value || 0);
 		return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
@@ -136,6 +139,9 @@ export function createJsonDecoder(
 			}
 			if (event.type === "turn_end") {
 				sawTurnEnd = true;
+				if (typeof event.message?.provider === "string" && typeof event.message?.model === "string") {
+					actualModel = { provider: event.message.provider, model: event.message.model };
+				}
 				const usage = event.message?.usage || {};
 				const turnInput = usageNumber(usage.input);
 				const turnOutput = usageNumber(usage.output);
@@ -218,6 +224,7 @@ export function createJsonDecoder(
 				textTruncated: text.truncated,
 				jsonEventTruncated,
 				jsonCostIncomplete,
+				actualModel,
 			};
 		},
 	};
@@ -236,6 +243,7 @@ export function normalizeChildOutput(result: ChildOutputSnapshot): NormalizedChi
 		stderr: truncate(result.stderr.trim()),
 		warnings,
 		cost: result.cost,
+		actualModel: result.actualModel,
 	};
 }
 

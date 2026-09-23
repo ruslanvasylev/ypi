@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ensureEnvironment } from "./env.ts";
+import type { RoutingRequest, RouteProfile, ThinkingLevel } from "./internal/model-routing.ts";
 import { remainingTimeoutSeconds } from "./guardrails.ts";
 import { cancelAsyncJob, createAsyncJob, discardAsyncJob, finishAsyncJob, launchAsyncWorker, markAsyncJobAdmitted, markAsyncJobChildPid, readAsyncJob, waitForAsyncAdmission, waitForAsyncTerminal } from "./internal/cli-async.ts";
 import { resolveContextSource, type ContextSource } from "./internal/cli-input.ts";
@@ -13,6 +14,7 @@ interface CliFlags {
 	fork: boolean;
 	async: boolean;
 	prompt: string;
+	routing?: RoutingRequest;
 }
 
 interface CliExecutionOptions {
@@ -40,7 +42,7 @@ function activeRuntime(): YpiRuntime {
 }
 
 function usage(): never {
-	console.error('Usage: rlm_query [--fork] [--async] "your prompt here"');
+	console.error('Usage: rlm_query [--fork] [--async] [--profile worker|explorer|reviewer|inherit] [--provider ID --model ID] [--thinking LEVEL] [--escalate-from ATTEMPT --escalate-issue ISSUE --escalate-stage 1|2 --escalate-kind reasoning|correctness] "your prompt here"');
 	process.exit(1);
 }
 
@@ -57,6 +59,8 @@ function rejectRetiredFlags(args: string[]): void {
 function parseFlags(args: string[]): CliFlags {
 	let fork = false;
 	let async = false;
+	const routing: RoutingRequest = {};
+	let escalation: Partial<NonNullable<RoutingRequest["escalation"]>> = {};
 	let index = 0;
 	flagLoop: while (args[index]?.startsWith("--")) {
 		switch (args[index]) {
@@ -68,6 +72,15 @@ function parseFlags(args: string[]): CliFlags {
 				async = true;
 				index++;
 				break;
+			case "--profile": routing.profile = args[++index] as RouteProfile; index++; break;
+			case "--provider": routing.provider = args[++index]; index++; break;
+			case "--model": routing.model = args[++index]; index++; break;
+			case "--thinking": routing.thinkingLevel = args[++index] as ThinkingLevel; routing.userChosenHighEffort = ["xhigh", "max"].includes(routing.thinkingLevel); index++; break;
+			case "--justify-high-effort": routing.justification = args[++index]; index++; break;
+			case "--escalate-from": escalation.previousAttempt = args[++index]; index++; break;
+			case "--escalate-issue": escalation.issue = args[++index]; index++; break;
+			case "--escalate-stage": escalation.stage = Number(args[++index]) as 1 | 2; index++; break;
+			case "--escalate-kind": escalation.kind = args[++index] as "reasoning" | "correctness"; index++; break;
 			default:
 				// Preserve the historical parser: an unknown --token becomes the prompt.
 				break flagLoop;
@@ -75,7 +88,8 @@ function parseFlags(args: string[]): CliFlags {
 	}
 	const prompt = args[index];
 	if (!prompt) usage();
-	return { fork, async, prompt };
+	if (Object.keys(escalation).length > 0) routing.escalation = escalation as RoutingRequest["escalation"];
+	return { fork, async, prompt, routing: Object.keys(routing).length ? routing : undefined };
 }
 
 function parentContext(cwd = process.cwd()) {
@@ -125,10 +139,11 @@ function errorExitCode(error: unknown): number {
 	return 1;
 }
 
-async function executeRequest(runtime: YpiRuntime, flags: Pick<CliFlags, "prompt" | "fork">, source: ContextSource, options: CliExecutionOptions = {}) {
+async function executeRequest(runtime: YpiRuntime, flags: Pick<CliFlags, "prompt" | "fork" | "routing">, source: ContextSource, options: CliExecutionOptions = {}) {
 	return runRecursiveChild(runtime, {
 		prompt: flags.prompt,
 		fork: flags.fork,
+		routing: flags.routing,
 		caller: "cli",
 		context: source.context,
 		contextPath: source.contextPath,
@@ -159,7 +174,7 @@ async function runWorker(jobPath: string): Promise<void> {
 		let code = 0;
 		let output = "";
 		try {
-			const result = await executeRequest(runtime, { prompt: job.prompt, fork: job.fork }, { contextPath: job.contextPath }, {
+			const result = await executeRequest(runtime, { prompt: job.prompt, fork: job.fork, routing: job.routing }, { contextPath: job.contextPath }, {
 				cwd: job.cwd,
 				extensionPath: job.extensionPath,
 				treeStartTimeSeconds: job.treeStartTimeSeconds,
@@ -241,6 +256,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
 				job = createAsyncJob({
 					prompt: flags.prompt,
 					fork: flags.fork,
+					routing: flags.routing,
 					cwd: process.cwd(),
 					context: source.context,
 					contextPath: source.contextPath,

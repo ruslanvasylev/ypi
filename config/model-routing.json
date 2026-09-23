@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "revision": "2026-09-22.1",
+  "provider": "openai-codex",
+  "profiles": {
+    "worker": { "family": "sol", "thinkingLevel": "medium" },
+    "explorer": { "family": "luna", "thinkingLevel": "medium" },
+    "reviewer": { "family": "astra", "thinkingLevel": "high" }
+  },
+  "escalation": [
+    { "profile": "worker", "thinkingLevel": "high" },
+    { "profile": "reviewer", "thinkingLevel": "high" }
+  ]
+}

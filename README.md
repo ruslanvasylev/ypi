@@ -70,6 +70,17 @@ The native tool accepts:
 | `fork` | Copy the current parent session into the child session before execution. |
 | `mode` | `review` by default, or root-only `implement`. |
 | `scope` | Required for `implement`: literal repository-relative file or directory path prefixes owned by that child. |
+| `routing` | Optional ypi route: `profile`, paired `provider` and `model`, `thinkingLevel`, or a recorded `escalation`. |
+
+ypi selects the newest stable authenticated model within each configured family
+from Pi's available catalog: worker uses Sol at medium effort, explorer uses
+Luna at medium, and reviewer uses Astra at high. The ypi-owned policy is
+`config/model-routing.json`. The wrapper applies the worker route to a new
+session when no model was chosen explicitly or restored. It does not change
+Pi's saved defaults. A child call can use `profile: "inherit"` to keep the
+parent route. Escalation requires a previous attempt, an unresolved reasoning
+or correctness issue, and stage 1 or 2; independent later calls start at their
+normal profile. This routing does not depend on Agent Protocol.
 
 The shell adapter reads standard input when `RLM_STDIN` marks it as explicit or
 when stdin is non-interactive. A non-empty read wins; otherwise it falls back
@@ -79,7 +90,16 @@ to the file named by `CONTEXT`. Its public flags are:
 | Flag | Meaning |
 |---|---|
 | `--async` | Admit a background review call and return its job paths. |
+| `--escalate-from` | Previous attempt identifier for a justified escalation. |
+| `--escalate-issue` | Named unresolved reasoning or correctness issue. |
+| `--escalate-kind` | `reasoning` or `correctness`. |
+| `--escalate-stage` | Bounded escalation stage `1` or `2`. |
 | `--fork` | Copy the current parent session into the child session. |
+| `--justify-high-effort` | Reason recorded when a later bounded escalation requests `xhigh` or `max`. |
+| `--model` | Explicit child model ID; pair with `--provider`. |
+| `--profile` | `worker`, `explorer`, `reviewer`, or `inherit`. |
+| `--provider` | Explicit child provider; pair with `--model`. |
+| `--thinking` | Explicit child thinking level. |
 <!-- rlm-query-flags:end -->
 
 For example:

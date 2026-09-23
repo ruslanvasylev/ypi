@@ -140,6 +140,8 @@ MIN_ROOT=$(mktemp -d "${HOME}/scratch/ypi-minimal-extension.XXXXXX")
 mkdir -p "$MIN_ROOT/extensions"
 cp "$PROJECT_DIR/extensions/recursive.ts" "$MIN_ROOT/extensions/recursive.ts"
 cp -R "$PROJECT_DIR/extensions/ypi" "$MIN_ROOT/extensions/ypi"
+mkdir -p "$MIN_ROOT/config"
+cp "$PROJECT_DIR/config/model-routing.json" "$MIN_ROOT/config/model-routing.json"
 
 if [ ! -e "$MIN_ROOT/rlm_query" ] && [ ! -e "$MIN_ROOT/SYSTEM_PROMPT.md" ]; then
     pass "minimal root has no shell helper or external prompt"

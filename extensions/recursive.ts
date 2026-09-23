@@ -8,9 +8,10 @@
  * shell-compatible rlm_query command are convenience layers around this path.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ensureEnvironment, shouldExposeRecursion } from "./ypi/env.ts";
 import { registerNativeRlmQueryTool } from "./ypi/native-tool.ts";
+import { routingCatalogSnapshot, selectRootDefault } from "./ypi/internal/model-routing.ts";
 import { createRootPromptLease } from "./ypi/internal/root-prompt.ts";
 import { registerRootImplementerBatchPolicy } from "./ypi/internal/root-batch-policy.ts";
 import { registerImplementWriteScope } from "./ypi/internal/write-scope.ts";
@@ -31,6 +32,15 @@ interface ActiveExtensionRecord {
 	token: object;
 }
 
+function projectRoutingCatalog(ctx: ExtensionContext) {
+	if ((process.env.RLM_DEPTH || "0") !== "0") return undefined;
+	const scoped = ctx.scopedModels?.length > 0 ? new Set(ctx.scopedModels.map(({ model }) => `${model.provider}/${model.id}`)) : undefined;
+	const available = ctx.modelRegistry?.getAvailable?.().filter((model) => !scoped || scoped.has(`${model.provider}/${model.id}`));
+	if (available) process.env.YPI_MODEL_CATALOG = routingCatalogSnapshot(available);
+	else delete process.env.YPI_MODEL_CATALOG;
+	return available;
+}
+
 export default function (pi: ExtensionAPI) {
 	const registry = globalThis as typeof globalThis & { [ACTIVE_EXTENSION]?: ActiveExtensionRecord };
 	if (registry[ACTIVE_EXTENSION]) {
@@ -49,13 +59,36 @@ export default function (pi: ExtensionAPI) {
 	}
 	debug(`__YPI_EXTENSION_LOADED__ root=${runtime.root}`);
 
-	pi.on("session_start", (_event, ctx) => {
+	pi.on("session_start", async (event, ctx) => {
+		let selectedAtStart: ReturnType<typeof selectRootDefault>;
+		const newSession = event.reason === "startup" && (ctx.sessionManager.getEntries?.() || []).every((entry) => entry.type === "model_change" || entry.type === "thinking_level_change");
+		if ((process.env.RLM_DEPTH || "0") === "0") {
+			const available = projectRoutingCatalog(ctx);
+			if (available && process.env.YPI_ROOT_AUTO_ROUTE === "1" && newSession) {
+				const selected = selectRootDefault(available);
+				if (selected) {
+					const model = available.find((candidate) => candidate.provider === selected.provider && candidate.id === selected.model)!;
+					if (await pi.setModel(model)) {
+						selectedAtStart = selected;
+						if (process.env.YPI_ROOT_EXPLICIT_THINKING !== "1") pi.setThinkingLevel(selected.thinkingLevel as Parameters<typeof pi.setThinkingLevel>[0]);
+						debug(`__YPI_ROOT_ROUTE__ ${selected.provider}/${selected.model}:${pi.getThinkingLevel()} policy=${selected.policyRevision}`);
+					}
+				}
+			}
+		}
 		ensureEnvironment(runtime, ctx, pi);
+		if (selectedAtStart) {
+			// ctx.model is the event snapshot; setModel changes the live session.
+			process.env.RLM_PROVIDER = selectedAtStart.provider;
+			process.env.RLM_MODEL = selectedAtStart.model;
+			process.env.RLM_THINKING_LEVEL = pi.getThinkingLevel();
+		}
 		updateStatus(ctx);
 	});
 
 	pi.on("before_agent_start", (event, ctx) => {
 		rootPrompt.capture(event.prompt);
+		projectRoutingCatalog(ctx);
 		ensureEnvironment(runtime, ctx, pi);
 		updateStatus(ctx);
 		if ((process.env.RLM_DEPTH || "0") === "0") {
