@@ -1,4 +1,5 @@
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { maxDepth, sharedSessionsEnabled } from "../env.ts";
 import type { YpiRuntime } from "../runtime.ts";
 
@@ -11,6 +12,21 @@ export function childExtensionsEnabled(childDepth: number): boolean {
 		enabled = process.env.RLM_CHILD_EXTENSIONS !== "0";
 	}
 	return enabled;
+}
+
+export function childAmbientExtensionsEnabled(runtimeRoot: string): boolean {
+	const policy = process.env.RLM_AMBIENT_EXTENSIONS;
+	if (policy === "0") return false;
+	if (policy === "1") return true;
+	// Match the root wrapper's auto policy. A separate Pi process discovers
+	// installed extensions afresh, so do not infer safety from the parent turn.
+	const detector = path.join(runtimeRoot, "scripts", "detect-ambient-recursion-conflict");
+	const result = spawnSync(detector, [], {
+		env: process.env,
+		stdio: "ignore",
+		timeout: 3_000,
+	});
+	return result.status === 0;
 }
 
 function removePathEntry(currentPath: string | undefined, entry: string): string | undefined {

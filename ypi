@@ -223,8 +223,8 @@ fi
 #   unset / "auto"               allow unless scripts/detect-ambient-recursion-conflict
 #                                finds a conflicting copy; detection failure
 #                                isolates (fail closed)
-# Children are unaffected: they stay canonical-only unless the variable is
-# explicitly "1" (see runtime-core), and implementers are always isolated.
+# Review children use the same conflict-checked policy (see runtime-core).
+# Implementers always remain canonical-only.
 YPI_ALLOW_AMBIENT=false
 case "${RLM_AMBIENT_EXTENSIONS:-auto}" in
     1)

@@ -1059,23 +1059,42 @@ fi
 MOCK_PI
 chmod +x "$MOCK_BIN/pi"
 
-# G34: children isolate ambient extension copies by default and load only exact ypi; non-extension discovery remains enabled
+# G34: review children discover installed context extensions when no recursion
+# copy conflicts; canonical ypi remains explicit.
+G34_SAFE_AGENT="$TEST_TMP/g34-safe-agent"
+G34_CONFLICT_AGENT="$TEST_TMP/g34-conflict-agent"
+mkdir -p "$G34_SAFE_AGENT" "$G34_CONFLICT_AGENT"
+printf '%s\n' '{"packages":["/installed/context-adapter"]}' > "$G34_SAFE_AGENT/settings.json"
+printf '%s\n' '{"packages":["npm:pi-recursive"]}' > "$G34_CONFLICT_AGENT/settings.json"
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
+    PI_CODING_AGENT_DIR="$G34_SAFE_AGENT" \
     RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
     YPI_EXTENSION_PATH="$PROJECT_DIR/extensions/recursive.ts" \
     RLM_PROVIDER=test RLM_MODEL=test \
     rlm_query "Extensions default test"
 )
-assert_contains "G34: ambient extension copies disabled by default" "--no-extensions" "$OUTPUT"
+assert_not_contains "G34: safe installed extensions reach review child" "--no-extensions" "$OUTPUT"
 assert_not_contains "G34: skill discovery enabled by default" "--no-skills" "$OUTPUT"
 assert_contains "G34: ypi extension explicitly loaded" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
+OUTPUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" PI_CODING_AGENT_DIR="$G34_CONFLICT_AGENT" \
+    RLM_DEPTH=0 RLM_MAX_DEPTH=3 YPI_EXTENSION_PATH="$PROJECT_DIR/extensions/recursive.ts" \
+    RLM_PROVIDER=test RLM_MODEL=test rlm_query "Conflicting extensions"
+)
+assert_contains "G34a: conflicting recursion extension isolates child" "--no-extensions" "$OUTPUT"
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
     YPI_EXTENSION_PATH="$PROJECT_DIR/extensions/recursive.ts" RLM_AMBIENT_EXTENSIONS=1 \
     RLM_PROVIDER=test RLM_MODEL=test rlm_query "Ambient extension compatibility"
 )
-assert_not_contains "G34b: ambient extension compatibility is explicit" "--no-extensions" "$OUTPUT"
+assert_not_contains "G34b: explicit ambient override remains available" "--no-extensions" "$OUTPUT"
+OUTPUT=$(
+    CONTEXT="$TEST_TMP/ctx.txt" PI_CODING_AGENT_DIR="$G34_SAFE_AGENT" \
+    RLM_DEPTH=0 RLM_MAX_DEPTH=3 YPI_EXTENSION_PATH="$PROJECT_DIR/extensions/recursive.ts" \
+    RLM_AMBIENT_EXTENSIONS=0 RLM_PROVIDER=test RLM_MODEL=test rlm_query "Extension isolation override"
+)
+assert_contains "G34c: explicit ambient opt-out isolates child" "--no-extensions" "$OUTPUT"
 
 # G35: RLM_EXTENSIONS=0 disables even ypi's explicit extension
 OUTPUT=$(
@@ -1089,15 +1108,16 @@ OUTPUT=$(
 assert_contains "G35: RLM_EXTENSIONS=0 disables" "--no-extensions" "$OUTPUT"
 assert_not_contains "G35: no explicit extension when disabled" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
 
-# G36: max depth nodes keep the exact ypi extension while ambient copies stay disabled
+# G36: max depth nodes still load the exact ypi extension and safe ambient packages.
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
+    PI_CODING_AGENT_DIR="$G34_SAFE_AGENT" \
     RLM_MAX_DEPTH=3 \
     YPI_EXTENSION_PATH="$PROJECT_DIR/extensions/recursive.ts" \
     RLM_PROVIDER=test RLM_MODEL=test \
     with_tree_authority 2 rlm_query "Max depth extensions test"
 )
-assert_contains "G36: max depth disables ambient extension copies" "--no-extensions" "$OUTPUT"
+assert_not_contains "G36: max depth retains safe installed extensions" "--no-extensions" "$OUTPUT"
 assert_contains "G36: max depth has ypi extension" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
 
 # G37: RLM_CHILD_EXTENSIONS=0 disables root-to-child extension loading
@@ -1133,7 +1153,7 @@ OUTPUT=$(
 )
 assert_contains "G38b: child discovery off disables non-extension skills" "--no-skills" "$OUTPUT"
 assert_contains "G38b: child discovery off disables context files" "--no-context-files" "$OUTPUT"
-assert_contains "G38b: child discovery off retains canonical-only extension mode" "--no-extensions" "$OUTPUT"
+assert_not_contains "G38b: non-extension discovery opt-out leaves installed extensions available" "--no-extensions" "$OUTPUT"
 assert_contains "G38b: child discovery off still loads exact ypi" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
 
 # G38c: combine child discovery and extension opt-outs for full package/resource isolation

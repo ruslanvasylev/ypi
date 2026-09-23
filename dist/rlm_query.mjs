@@ -2474,6 +2474,7 @@ import path25 from "node:path";
 
 // extensions/ypi/internal/child-config.ts
 import path10 from "node:path";
+import { spawnSync as spawnSync2 } from "node:child_process";
 var READ_ONLY_EXCLUDED_BUILTINS = ["bash", "edit", "write"];
 var IMPLEMENT_TOOL_ALLOWLIST = ["read", "grep", "find", "ls", "edit", "write", "rlm_query"];
 function childExtensionsEnabled(childDepth) {
@@ -2482,6 +2483,20 @@ function childExtensionsEnabled(childDepth) {
     enabled = process.env.RLM_CHILD_EXTENSIONS !== "0";
   }
   return enabled;
+}
+function childAmbientExtensionsEnabled(runtimeRoot) {
+  const policy = process.env.RLM_AMBIENT_EXTENSIONS;
+  if (policy === "0")
+    return false;
+  if (policy === "1")
+    return true;
+  const detector = path10.join(runtimeRoot, "scripts", "detect-ambient-recursion-conflict");
+  const result = spawnSync2(detector, [], {
+    env: process.env,
+    stdio: "ignore",
+    timeout: 3000
+  });
+  return result.status === 0;
 }
 function removePathEntry(currentPath, entry) {
   if (!currentPath)
@@ -3732,7 +3747,7 @@ function closeTranscriptProof(lease) {
 }
 
 // extensions/ypi/internal/workspace-policy.ts
-import { spawnSync as spawnSync2 } from "node:child_process";
+import { spawnSync as spawnSync3 } from "node:child_process";
 import {
   existsSync as existsSync7,
   lstatSync as lstatSync8,
@@ -4788,7 +4803,7 @@ function assertWithinDeadline(input, result, operation) {
   throw error;
 }
 function setupGit(input, root, args, environment = {}, stdinText) {
-  const result = withPrivateUmask(() => spawnSync2("git", [...INTERNAL_GIT_CONFIG, ...args], {
+  const result = withPrivateUmask(() => spawnSync3("git", [...INTERNAL_GIT_CONFIG, ...args], {
     cwd: root,
     encoding: "utf8",
     input: stdinText,
@@ -4808,7 +4823,7 @@ function checkedSetupGit(input, root, args, operation, environment = {}, preserv
   return preserveOutput ? rawOutput(result) : output(result);
 }
 function finalizationGit(root, args, operation, environment = {}, stdinText, preserveOutput = false) {
-  const result = withPrivateUmask(() => spawnSync2("git", [...INTERNAL_GIT_CONFIG, ...args], {
+  const result = withPrivateUmask(() => spawnSync3("git", [...INTERNAL_GIT_CONFIG, ...args], {
     cwd: root,
     encoding: "utf8",
     input: stdinText,
@@ -4826,7 +4841,7 @@ function finalizationGit(root, args, operation, environment = {}, stdinText, pre
   return preserveOutput ? rawOutput(result) : output(result);
 }
 function assertWorktreeUnregistered2(root, worktree) {
-  const result = withPrivateUmask(() => spawnSync2("git", [...INTERNAL_GIT_CONFIG, ...WORKTREE_INVENTORY_ARGUMENTS], {
+  const result = withPrivateUmask(() => spawnSync3("git", [...INTERNAL_GIT_CONFIG, ...WORKTREE_INVENTORY_ARGUMENTS], {
     cwd: root,
     stdio: ["ignore", "pipe", "pipe"],
     timeout: WORKSPACE_FINALIZATION_TIMEOUT_MS,
@@ -4989,7 +5004,7 @@ function checkIgnored(root, relativePath, baseline) {
     "-z",
     "--stdin"
   ] : ["check-ignore", "-q", "-z", "--stdin"];
-  const result = spawnSync2("git", [...INTERNAL_GIT_CONFIG, ...args], {
+  const result = spawnSync3("git", [...INTERNAL_GIT_CONFIG, ...args], {
     cwd: root,
     encoding: "utf8",
     input: `${relativePath}\x00`,
@@ -5063,7 +5078,7 @@ function assertCheckoutOwnership(root, baselineHead, baselineTree) {
   }
 }
 function bestEffortChangedPaths(root, baselineHead) {
-  const command = (args) => withPrivateUmask(() => spawnSync2("git", [...INTERNAL_GIT_CONFIG, ...args], {
+  const command = (args) => withPrivateUmask(() => spawnSync3("git", [...INTERNAL_GIT_CONFIG, ...args], {
     cwd: root,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
@@ -5195,7 +5210,7 @@ function bestEffortDiscardSetupWorktree(root, record) {
       return "workspace container is unavailable";
     }
     const worktreeRoot = record.worktreeRoot;
-    const result = withPrivateUmask(() => spawnSync2("git", [...INTERNAL_GIT_CONFIG, "worktree", "remove", "--force", worktreeRoot], {
+    const result = withPrivateUmask(() => spawnSync3("git", [...INTERNAL_GIT_CONFIG, "worktree", "remove", "--force", worktreeRoot], {
       cwd: root,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
@@ -5922,7 +5937,7 @@ Inherited concurrency-slot resume also failed: ${resumeFailure.message}` : prima
       args.push("--session", resources.childSession);
     else
       args.push("--no-session");
-    if (requestedMode === "implement" || !extensionsEnabled || process.env.RLM_AMBIENT_EXTENSIONS !== "1")
+    if (requestedMode === "implement" || !extensionsEnabled || !childAmbientExtensionsEnabled(runtime.root))
       args.push("--no-extensions");
     if (extensionsEnabled && extensionPath && existsSync9(extensionPath))
       args.push("-e", extensionPath);
