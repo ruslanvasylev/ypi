@@ -14,6 +14,7 @@ import {
 } from "./internal/private-path.ts";
 import {
 	buildChildEnvironment,
+	childAmbientExtensionsEnabled,
 	childExtensionsEnabled,
 	IMPLEMENT_TOOL_ALLOWLIST,
 	READ_ONLY_EXCLUDED_BUILTINS,
@@ -400,10 +401,9 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 		if (process.env.RLM_CHILD_DISCOVERY === "0") args.push("--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve");
 		if (resources.childSession) args.push("--session", resources.childSession);
 		else args.push("--no-session");
-		// Pi cannot unregister an older ambient ypi copy. Load only the exact
-		// canonical child extension by default; ambient extension discovery is an
-		// explicit compatibility opt-in for callers that accept version conflicts.
-		if (requestedMode === "implement" || !extensionsEnabled || process.env.RLM_AMBIENT_EXTENSIONS !== "1") args.push("--no-extensions");
+		// Review children use the same conflict-checked installed extension
+		// discovery as the root. Implementers always remain canonical-only.
+		if (requestedMode === "implement" || !extensionsEnabled || !childAmbientExtensionsEnabled(runtime.root)) args.push("--no-extensions");
 		if (extensionsEnabled && extensionPath && existsSync(extensionPath)) args.push("-e", extensionPath);
 		else if (resources.standaloneSystemPromptFile) args.push("--system-prompt", resources.standaloneSystemPromptFile);
 
