@@ -5980,7 +5980,7 @@ Inherited concurrency-slot resume also failed: ${resumeFailure.message}` : prima
     });
     const elapsed = Math.max(0, Math.round((Date.now() - started) / 1000));
     const output2 = normalizeChildOutput(processResult);
-    if (output2.actualModel && (output2.actualModel.provider !== provider || output2.actualModel.model !== model)) {
+    if (provider && model && output2.actualModel && (output2.actualModel.provider !== provider || output2.actualModel.model !== model)) {
       output2.warnings.push(`Observed Pi model ${output2.actualModel.provider}/${output2.actualModel.model} differs from selected ${provider}/${model}`);
     }
     const usageAttribution = {

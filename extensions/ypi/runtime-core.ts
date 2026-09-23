@@ -462,7 +462,7 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 		});
 		const elapsed = Math.max(0, Math.round((Date.now() - started) / 1000));
 		const output = normalizeChildOutput(processResult);
-		if (output.actualModel && (output.actualModel.provider !== provider || output.actualModel.model !== model)) {
+		if (provider && model && output.actualModel && (output.actualModel.provider !== provider || output.actualModel.model !== model)) {
 			output.warnings.push(`Observed Pi model ${output.actualModel.provider}/${output.actualModel.model} differs from selected ${provider}/${model}`);
 		}
 		const usageAttribution = {
