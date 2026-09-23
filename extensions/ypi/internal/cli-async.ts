@@ -4,6 +4,7 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { safeTraceId } from "../env.ts";
+import type { RoutingRequest } from "./model-routing.ts";
 import { atomicCopyFile, atomicCreateFile, atomicWriteFile } from "./atomic-file.ts";
 import { createPrivateTempDirectory, withPrivateUmask } from "./private-path.ts";
 
@@ -20,6 +21,7 @@ export class AsyncAdmissionError extends Error {
 export interface AsyncJobInput {
 	prompt: string;
 	fork: boolean;
+	routing?: RoutingRequest;
 	cwd: string;
 	context?: string;
 	contextPath?: string;
@@ -30,6 +32,7 @@ export interface AsyncJobInput {
 export interface AsyncJob {
 	prompt: string;
 	fork: boolean;
+	routing?: RoutingRequest;
 	cwd: string;
 	contextPath?: string;
 	ownedContextPath?: string;
@@ -89,6 +92,7 @@ export function createAsyncJob(input: AsyncJobInput): AsyncJob {
 		return {
 			prompt: input.prompt,
 			fork: input.fork,
+			routing: input.routing,
 			cwd: input.cwd,
 			contextPath: ownedContextPath,
 			ownedContextPath,

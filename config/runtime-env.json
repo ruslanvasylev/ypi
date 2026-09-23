@@ -38,6 +38,10 @@
     { "name": "RLM_TIMEOUT", "visibility": "public" },
     { "name": "RLM_TRACE_ID", "visibility": "public" },
     { "name": "YPI_EXTENSION_DEBUG", "visibility": "public" },
+    { "name": "YPI_MODEL_CATALOG", "visibility": "internal" },
+    { "name": "YPI_ROOT_AUTO_ROUTE", "visibility": "internal" },
+    { "name": "YPI_ROOT_EXPLICIT_THINKING", "visibility": "internal" },
+    { "name": "YPI_RECURSIVE_RUN_DIR", "visibility": "internal" },
     { "name": "YPI_NODE_BIN", "visibility": "public" },
     { "name": "YPI_PI_BIN", "visibility": "public" },
     { "name": "YPI_PROMPT_INCLUDE_RUNTIME_SOURCE", "visibility": "public" },
@@ -93,6 +97,15 @@
   },
   "cli_flags": [
     { "name": "--async", "argument": null },
-    { "name": "--fork", "argument": null }
+    { "name": "--escalate-from", "argument": "attempt" },
+    { "name": "--escalate-issue", "argument": "issue" },
+    { "name": "--escalate-kind", "argument": "reasoning|correctness" },
+    { "name": "--escalate-stage", "argument": "1|2" },
+    { "name": "--fork", "argument": null },
+    { "name": "--justify-high-effort", "argument": "reason" },
+    { "name": "--model", "argument": "id" },
+    { "name": "--profile", "argument": "worker|explorer|reviewer|inherit" },
+    { "name": "--provider", "argument": "id" },
+    { "name": "--thinking", "argument": "level" }
   ]
 }

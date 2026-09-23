@@ -13,7 +13,8 @@ to adapters. It owns:
 - atomic tree-wide call allocation;
 - generation-bound tree-wide child-concurrency admission;
 - optional tree-wide timeout accounting;
-- provider, model, and thinking-level routing by child depth;
+- provider, model, and thinking-level routing by ypi profile, explicit request,
+  and legacy child environment override;
 - exact prompt, root charter, context, and session transport;
 - child environment allowlisting and discovery isolation;
 - canonical extension selection;
@@ -24,6 +25,17 @@ to adapters. It owns:
 
 Private owners under `extensions/ypi/internal/` implement these policies. An
 adapter must not bypass them or duplicate their decisions.
+
+`config/model-routing.json` is the ypi-owned model policy. The root wrapper
+chooses the newest stable authenticated Sol model from Pi's available, scoped
+catalog for a fresh session, unless CLI or environment choices take precedence.
+An existing session keeps its active model. This selection changes only the
+current Pi session. The root projects a compact catalog snapshot for shell
+and native recursive calls. Explicit per-call routes take precedence over
+legacy child environment overrides; omitted profiles default to worker.
+An explicit `inherit` profile preserves the parent route. Escalation is local
+to one request and needs a prior attempt plus a named reasoning or correctness
+issue. The Agent Protocol extension has no routing authority in ypi.
 
 ## Implementer State Ownership
 
@@ -76,6 +88,9 @@ current-user-owned `0600` one-link file whose canonical contents exactly match
 the declared count. Long evidence paths use a separate bounded private socket
 directory, which is retired only after the server and all request connections
 close.
+An explicit `YPI_RECURSIVE_RUN_DIR` proof envelope preserves that count across
+root turns and processes. Ordinary interactive root turns reset their call
+count when they begin a new generation.
 Implement requests carry explicit path scopes; the writer registry refuses
 component-overlap. The extension blocks root mutators and unknown tools from a
 mixed implementer batch. The root waits for the full batch before mutating or
@@ -85,7 +100,7 @@ integrating.
 
 `extensions/ypi/cli.ts` owns only:
 
-- `--fork` and `--async` parsing;
+- `--fork`, `--async`, and per-call route flag parsing;
 - explicit, piped, or file-backed context selection;
 - background job metadata, immutable input snapshots, sentinel, and
   cancellation behavior;

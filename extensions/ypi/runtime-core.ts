@@ -17,9 +17,9 @@ import {
 	childExtensionsEnabled,
 	IMPLEMENT_TOOL_ALLOWLIST,
 	READ_ONLY_EXCLUDED_BUILTINS,
-	resolveChildRoute,
 	retainSelectedProviderEnvironment,
 } from "./internal/child-config.ts";
+import { resolveRoute, type ResolvedRoute, type RoutingRequest } from "./internal/model-routing.ts";
 import {
 	acquireConcurrencySlot,
 	suspendInheritedConcurrencySlot,
@@ -70,6 +70,7 @@ export interface RecursiveChildRequest {
 	signal?: AbortSignal;
 	mode?: ChildMode;
 	scope?: string[];
+	routing?: RoutingRequest;
 }
 
 export interface RecursiveChildDetails {
@@ -93,6 +94,8 @@ export interface RecursiveChildDetails {
 	jsonCostIncomplete: boolean;
 	cancelled: boolean;
 	usage?: ChildUsageSummary;
+	routing: ResolvedRoute;
+	actualModel?: { provider: string; model: string };
 }
 
 export interface RecursiveChildResult {
@@ -199,6 +202,13 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 	if (requestedMode === "implement" && (depth > 0 || process.env.RLM_WRITE_MODE_CEILING === "review")) {
 		throw new RecursiveChildError("Writable recursion is root-only and cannot be escalated by a child. Continue implementation in the current agent or delegate a read-only review.", 1);
 	}
+	let routing: ResolvedRoute;
+	try {
+		routing = resolveRoute(request.parent, childDepth, request.routing);
+	} catch (error) {
+		throw new RecursiveChildError(error instanceof Error ? error.message : String(error), 1);
+	}
+	const { provider, model, thinkingLevel } = routing;
 	if (depth === 0) process.env.RLM_START_TIME = String(request.treeStartTimeSeconds ?? Math.floor(Date.now() / 1000));
 	const terminateTreeOnRootAbort = () => {
 		if (depth === 0) void terminateRootTreeCoordinator("root-request-cancelled");
@@ -275,7 +285,6 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 	// cannot be disabled by a review-oriented child-extension override.
 	const extensionsEnabled = requestedMode === "implement" ? true : childExtensionsEnabled(childDepth);
 	const fullResourceIsolation = !extensionsEnabled && process.env.RLM_CHILD_DISCOVERY === "0";
-	const { provider, model, thinkingLevel } = resolveChildRoute(request.parent, childDepth);
 	let resources;
 	try {
 		resources = acquireChildResources({
@@ -413,6 +422,7 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 		// child_depth fields remain additive trace metadata.
 		const legacyJjPosture = resources.workspace.readOnly ? "off" : "on";
 		trace(`[${nowTraceTime()}] depth=${depth}→${childDepth} PID=${process.pid} call=${callCount} trace=${traceId} generation=${treeGeneration} caller=${request.caller} fork=${request.fork === true} mode=${requestedMode} workspace=${resources.workspace.mode} jj=${legacyJjPosture}`);
+		trace(`[${nowTraceTime()}] ROUTE call=${callCount} profile=${routing.profile} provider=${JSON.stringify(provider.slice(0, 120))} model=${JSON.stringify(model.slice(0, 120))} thinking=${thinkingLevel} source=${routing.source} policy=${routing.policyRevision}`);
 		const started = Date.now();
 		resources.workspace.prepareChildLaunch();
 		const processResult = await runChildProcess({
@@ -452,6 +462,9 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 		});
 		const elapsed = Math.max(0, Math.round((Date.now() - started) / 1000));
 		const output = normalizeChildOutput(processResult);
+		if (provider && model && output.actualModel && (output.actualModel.provider !== provider || output.actualModel.model !== model)) {
+			output.warnings.push(`Observed Pi model ${output.actualModel.provider}/${output.actualModel.model} differs from selected ${provider}/${model}`);
+		}
 		const usageAttribution = {
 			trace_id: traceId,
 			tree_generation: treeGeneration,
@@ -462,6 +475,12 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 			provider,
 			model,
 			thinking_level: thinkingLevel,
+			profile: routing.profile,
+			route_source: routing.source,
+			policy_revision: routing.policyRevision,
+			...(output.actualModel ? { actual_provider: output.actualModel.provider, actual_model: output.actualModel.model } : {}),
+			...(routing.escalation ? { escalation_issue: routing.escalation.issue, previous_attempt: routing.escalation.previousAttempt, escalation_stage: routing.escalation.stage } : {}),
+			...(routing.highEffortJustification ? { high_effort_justification: routing.highEffortJustification } : {}),
 			mode: requestedMode,
 			fork: request.fork === true,
 			prompt_chars: request.prompt.length,
@@ -518,6 +537,8 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 			jsonCostIncomplete: processResult.jsonCostIncomplete,
 			cancelled: processResult.cancelled,
 			usage: output.cost,
+			routing,
+			actualModel: output.actualModel,
 		};
 		const usageOutput = formatUsageObservation(details);
 		if (processResult.code !== 0) {

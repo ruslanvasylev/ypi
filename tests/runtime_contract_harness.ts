@@ -196,12 +196,13 @@ async function invokeNative(
 	prompt: string,
 	explicitContext?: string,
 	inheritedDepth?: string,
+	routing?: Record<string, unknown>,
 ): Promise<{ observation?: Observation; error?: string }> {
 	applyNativeEnv(inheritedDepth ? { ...env, RLM_DEPTH: "0" } : env);
 	if (inheritedDepth) process.env.RLM_DEPTH = inheritedDepth;
 	try {
 		if (!nativeTool) throw new Error("native rlm_query tool not registered");
-		await nativeTool.execute("contract-call", { prompt, context: explicitContext }, undefined, undefined, extensionContext());
+		await nativeTool.execute("contract-call", { prompt, context: explicitContext, routing }, undefined, undefined, extensionContext());
 		return { observation: parseObservation() };
 	} catch (error) {
 		return { error: error instanceof Error ? error.message : String(error) };
@@ -212,6 +213,7 @@ async function invokeCli(
 	env: Record<string, string>,
 	prompt: string,
 	inheritedDepth?: string,
+	flags: string[] = [],
 ): Promise<{ observation?: Observation; error?: string; code: number }> {
 	writeFileSync(logFile, "");
 	const command = inheritedDepth
@@ -221,9 +223,10 @@ async function invokeCli(
 			inheritedDepth,
 			"--",
 			path.join(projectRoot, "rlm_query"),
+			...flags,
 			prompt,
 		]
-		: [path.join(projectRoot, "rlm_query"), prompt];
+		: [path.join(projectRoot, "rlm_query"), ...flags, prompt];
 	const child = Bun.spawn(command, {
 		cwd: projectRoot,
 		env,
@@ -446,6 +449,20 @@ async function run(): Promise<void> {
 			"both adapters emitted routed observations",
 			`native=${JSON.stringify(routedNative.error)} cli=${JSON.stringify(routedCli.error)} code=${routedCli.code}`,
 		);
+	}
+
+	const profileCatalog = JSON.stringify([
+		{ provider: "openai-codex", id: "gpt-6-sol", reasoning: true, input: ["text"] },
+		{ provider: "openai-codex", id: "gpt-6-luna", reasoning: true, input: ["text"] },
+		{ provider: "openai-codex", id: "gpt-6-astra", reasoning: true, input: ["text"] },
+	]);
+	const profileNative = await invokeNative({ ...baseEnv("native-profile"), YPI_MODEL_CATALOG: profileCatalog }, prompt, undefined, undefined, { profile: "explorer" });
+	const profileCli = await invokeCli({ ...baseEnv("cli-profile"), YPI_MODEL_CATALOG: profileCatalog }, prompt, undefined, ["--profile", "explorer"]);
+	if (profileNative.observation && profileCli.observation) {
+		for (const key of ["RLM_PROVIDER", "RLM_MODEL", "RLM_THINKING_LEVEL"]) equal(`profile-routed ${key}`, profileNative.observation[key], profileCli.observation[key]);
+		equal("profile-routed explorer chooses Luna", profileCli.observation.RLM_MODEL, "gpt-6-luna");
+	} else {
+		record(false, "both adapters emitted profile observations", `native=${profileNative.error} cli=${profileCli.error}`);
 	}
 
 	const malformedNative = await invokeNative({ ...baseEnv("native-malformed"), RLM_DEPTH: "0junk" }, prompt);

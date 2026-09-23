@@ -68,8 +68,16 @@ else
 fi
 
 SOURCE_TAG=""
-if git -C "$SOURCE_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-	SOURCE_TAG="$(git -C "$SOURCE_ROOT" describe --tags --exact-match HEAD 2>/dev/null || true)"
+source_git() (
+	# Git exports the caller repository's local variables while running hooks.
+	# Remove them before inspecting the nested Pi checkout.
+	while IFS= read -r name; do
+		unset "$name"
+	done < <(git rev-parse --local-env-vars)
+	git -C "$SOURCE_ROOT" "$@"
+)
+if source_git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+	SOURCE_TAG="$(source_git describe --tags --exact-match HEAD 2>/dev/null || true)"
 else
 	fail "Pi source root is not a Git checkout: $SOURCE_ROOT"
 fi

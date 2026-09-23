@@ -5,41 +5,6 @@ import type { YpiRuntime } from "../runtime.ts";
 export const READ_ONLY_EXCLUDED_BUILTINS = ["bash", "edit", "write"] as const;
 export const IMPLEMENT_TOOL_ALLOWLIST = ["read", "grep", "find", "ls", "edit", "write", "rlm_query"] as const;
 
-export interface ParentRouteContext {
-	provider?: string;
-	model?: string;
-	thinkingLevel?: string;
-}
-
-function commaEntry(value: string | undefined, oneBasedIndex: number): string {
-	if (!value || oneBasedIndex < 1) return "";
-	const parts = value.split(",").map((part) => part.trim());
-	return parts[oneBasedIndex - 1] || "";
-}
-
-export function resolveChildRoute(parent: ParentRouteContext, childDepth: number): { provider: string; model: string; thinkingLevel: string } {
-	let provider = process.env.RLM_PROVIDER || parent.provider || "";
-	let model = process.env.RLM_MODEL || parent.model || "";
-	let thinkingLevel = process.env.RLM_THINKING_LEVEL || parent.thinkingLevel || "";
-
-	const depthModel = commaEntry(process.env.RLM_CHILD_MODELS, childDepth);
-	const depthProvider = commaEntry(process.env.RLM_CHILD_PROVIDERS, childDepth);
-	const depthThinking = commaEntry(process.env.RLM_CHILD_THINKING_LEVELS, childDepth);
-
-	if (childDepth > 0) {
-		if (depthModel) model = depthModel;
-		else if (process.env.RLM_CHILD_MODEL) model = process.env.RLM_CHILD_MODEL;
-
-		if (depthProvider) provider = depthProvider;
-		else if (process.env.RLM_CHILD_PROVIDER && (depthModel || process.env.RLM_CHILD_MODEL)) provider = process.env.RLM_CHILD_PROVIDER;
-
-		if (depthThinking) thinkingLevel = depthThinking;
-		else if (process.env.RLM_CHILD_THINKING_LEVEL) thinkingLevel = process.env.RLM_CHILD_THINKING_LEVEL;
-	}
-
-	return { provider, model, thinkingLevel };
-}
-
 export function childExtensionsEnabled(childDepth: number): boolean {
 	let enabled = process.env.RLM_EXTENSIONS !== "0";
 	if (childDepth > 0 && process.env.RLM_CHILD_EXTENSIONS) {

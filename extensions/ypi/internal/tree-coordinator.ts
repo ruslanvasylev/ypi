@@ -1190,7 +1190,9 @@ export function beginRootTreeCoordinator(reason = "root-turn"): void {
 	if (localCoordinator && localCoordinator.status !== "terminal") {
 		markLocalCoordinatorTerminal(localCoordinator, reason);
 	}
-	process.env.RLM_CALL_COUNT = "0";
+	// A persisted proof envelope owns one counter across root processes and turns.
+	// Ordinary sessions still start each independent root turn at zero.
+	if (!process.env.YPI_RECURSIVE_RUN_DIR) process.env.RLM_CALL_COUNT = "0";
 	localCoordinator = startLocalCoordinator(localCoordinator);
 }
 

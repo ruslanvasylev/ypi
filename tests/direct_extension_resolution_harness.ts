@@ -25,6 +25,8 @@ try {
 		path.join(packageRoot, "extensions", "ypi"),
 		{ recursive: true },
 	);
+	mkdirSync(path.join(packageRoot, "config"), { recursive: true });
+	cpSync(path.join(projectRoot, "config", "model-routing.json"), path.join(packageRoot, "config", "model-routing.json"));
 	mkdirSync(path.join(packageRoot, "scripts"), { recursive: true });
 	cpSync(
 		path.join(projectRoot, "scripts", "launch-recursive-child.ts"),

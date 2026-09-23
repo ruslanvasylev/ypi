@@ -1047,6 +1047,33 @@ async function run(): Promise<void> {
 	process.env.RLM_DEPTH = "0";
 	process.env.RLM_MAX_DEPTH = "2";
 	process.env.RLM_JSON = "0";
+	ensureEnvironment(runtime, context(), pi);
+	process.env.YPI_MODEL_CATALOG = JSON.stringify([
+		{ provider: "openai-codex", id: "gpt-6-sol", reasoning: true, input: ["text"] },
+		{ provider: "openai-codex", id: "gpt-6-luna", reasoning: true, input: ["text"] },
+		{ provider: "openai-codex", id: "gpt-6-astra", reasoning: true, input: ["text"] },
+	]);
+	await Promise.all([
+		tool!.execute("route-explorer", { prompt: "explore", routing: { profile: "explorer" } }, undefined, undefined, context()),
+		tool!.execute("route-reviewer", { prompt: "review", routing: { profile: "reviewer" } }, undefined, undefined, context()),
+	]);
+	assertContains("N7d: concurrent explorer uses Luna", readLog(), "--model gpt-6-luna");
+	assertContains("N7d: concurrent reviewer uses Astra", readLog(), "--model gpt-6-astra");
+	resetLog();
+	await tool!.execute("route-escalated", { prompt: "retry proof", routing: { escalation: { previousAttempt: "c1", issue: "missing case", kind: "correctness", stage: 1 } } }, undefined, undefined, context());
+	assertContains("N7d: escalation raises Sol effort", readLog(), "--model gpt-6-sol --thinking high");
+	resetLog();
+	await tool!.execute("route-normal", { prompt: "normal", routing: { profile: "worker" } }, undefined, undefined, context());
+	assertContains("N7d: next task resets to Sol medium", readLog(), "--model gpt-6-sol --thinking medium");
+	resetLog();
+	await expectThrow("N7d: unavailable explicit model fails", "unavailable", () => tool!.execute("route-invalid", { prompt: "invalid", routing: { provider: "openai-codex", model: "gpt-99-sol" } }, undefined, undefined, context()));
+	assertNotContains("N7d: unavailable route spawns no child", readLog(), "ARGS:");
+
+	clearYpiEnv();
+	resetLog();
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	process.env.RLM_JSON = "0";
 	ensureEnvironment(runtime, context());
 	await invoke();
 	assertContains("N8: ambient extension copies are disabled by default", readLog(), "--no-extensions");
@@ -1315,6 +1342,23 @@ async function run(): Promise<void> {
 			&& existsSync(path.join(sessionDir, `parallel_g${secondTreeGeneration}_d1_c1.jsonl`)),
 		"N11b: generation reset preserves both independently owned sessions",
 	);
+
+	clearYpiEnv();
+	resetLog();
+	const envelopeCounter = path.join(scratch, "envelope.counter");
+	writeFileSync(envelopeCounter, "2\n", { mode: 0o600 });
+	chmodSync(envelopeCounter, 0o600);
+	process.env.YPI_RECURSIVE_RUN_DIR = scratch;
+	process.env.RLM_CALL_COUNTER_FILE = envelopeCounter;
+	process.env.RLM_CALL_COUNT = "2";
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	process.env.RLM_JSON = "0";
+	ensureEnvironment(runtime, context());
+	beginRootTreeCoordinator("persisted-envelope-next-turn");
+	await invoke("continued proof envelope");
+	assertContains("N11b: persisted envelope continues its call count", readLog(), "RLM_CALL_COUNT=3");
+	record(readFileSync(envelopeCounter, "utf8") === "3\n", "N11b: persisted counter advances without reset");
 
 	clearYpiEnv();
 	resetLog();

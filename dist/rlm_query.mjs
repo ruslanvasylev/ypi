@@ -2260,6 +2260,7 @@ function createAsyncJob(input) {
     return {
       prompt: input.prompt,
       fork: input.fork,
+      routing: input.routing,
       cwd: input.cwd,
       contextPath: ownedContextPath,
       ownedContextPath,
@@ -2475,35 +2476,6 @@ import path25 from "node:path";
 import path10 from "node:path";
 var READ_ONLY_EXCLUDED_BUILTINS = ["bash", "edit", "write"];
 var IMPLEMENT_TOOL_ALLOWLIST = ["read", "grep", "find", "ls", "edit", "write", "rlm_query"];
-function commaEntry(value, oneBasedIndex) {
-  if (!value || oneBasedIndex < 1)
-    return "";
-  const parts = value.split(",").map((part) => part.trim());
-  return parts[oneBasedIndex - 1] || "";
-}
-function resolveChildRoute(parent, childDepth) {
-  let provider = process.env.RLM_PROVIDER || parent.provider || "";
-  let model = process.env.RLM_MODEL || parent.model || "";
-  let thinkingLevel = process.env.RLM_THINKING_LEVEL || parent.thinkingLevel || "";
-  const depthModel = commaEntry(process.env.RLM_CHILD_MODELS, childDepth);
-  const depthProvider = commaEntry(process.env.RLM_CHILD_PROVIDERS, childDepth);
-  const depthThinking = commaEntry(process.env.RLM_CHILD_THINKING_LEVELS, childDepth);
-  if (childDepth > 0) {
-    if (depthModel)
-      model = depthModel;
-    else if (process.env.RLM_CHILD_MODEL)
-      model = process.env.RLM_CHILD_MODEL;
-    if (depthProvider)
-      provider = depthProvider;
-    else if (process.env.RLM_CHILD_PROVIDER && (depthModel || process.env.RLM_CHILD_MODEL))
-      provider = process.env.RLM_CHILD_PROVIDER;
-    if (depthThinking)
-      thinkingLevel = depthThinking;
-    else if (process.env.RLM_CHILD_THINKING_LEVEL)
-      thinkingLevel = process.env.RLM_CHILD_THINKING_LEVEL;
-  }
-  return { provider, model, thinkingLevel };
-}
 function childExtensionsEnabled(childDepth) {
   let enabled = process.env.RLM_EXTENSIONS !== "0";
   if (childDepth > 0 && process.env.RLM_CHILD_EXTENSIONS) {
@@ -2699,6 +2671,138 @@ function buildChildEnvironment(baseEnv, overrides, runtime, childDepth) {
   }
   return env;
 }
+// config/model-routing.json
+var model_routing_default = {
+  schema_version: 1,
+  revision: "2026-09-22.1",
+  provider: "openai-codex",
+  profiles: {
+    worker: { family: "sol", thinkingLevel: "medium" },
+    explorer: { family: "luna", thinkingLevel: "medium" },
+    reviewer: { family: "astra", thinkingLevel: "high" }
+  },
+  escalation: [
+    { profile: "worker", thinkingLevel: "high" },
+    { profile: "reviewer", thinkingLevel: "high" }
+  ]
+};
+
+// extensions/ypi/internal/model-routing.ts
+var levels = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+var profiles = new Set(["worker", "explorer", "reviewer", "inherit"]);
+var MAX_CATALOG_BYTES = 1e5;
+function catalogFromEnvironment() {
+  const raw = process.env.YPI_MODEL_CATALOG;
+  if (!raw)
+    return;
+  if (Buffer.byteLength(raw) > MAX_CATALOG_BYTES)
+    throw new Error("YPI_MODEL_CATALOG exceeds the routing snapshot limit");
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("YPI_MODEL_CATALOG is invalid JSON");
+  }
+  if (!Array.isArray(parsed) || parsed.some((item) => !item || typeof item !== "object" || typeof item.provider !== "string" || typeof item.id !== "string" || typeof item.reasoning !== "boolean")) {
+    throw new Error("YPI_MODEL_CATALOG has invalid model entries");
+  }
+  return parsed;
+}
+function familyVersion(id, family) {
+  const match = /^gpt-(\d+)(?:\.(\d+))?-(sol|luna|astra)$/.exec(id);
+  if (!match || match[3] !== family)
+    return;
+  return [Number(match[1]), Number(match[2] || 0)];
+}
+function newestFamily(catalog, family, provider, level) {
+  const candidates = catalog.filter((model) => model.provider === provider && model.input?.includes("text") !== false && model.reasoning && model.thinkingLevelMap?.[level] !== null && familyVersion(model.id, family));
+  candidates.sort((a, b) => {
+    const left = familyVersion(a.id, family);
+    const right = familyVersion(b.id, family);
+    return right[0] - left[0] || right[1] - left[1];
+  });
+  return candidates[0];
+}
+function validateThinking(level, model) {
+  if (!levels.has(level))
+    throw new Error(`Invalid thinking level ${JSON.stringify(level)}; use off, minimal, low, medium, high, xhigh, or max`);
+  if (!model)
+    return;
+  if (level !== "off" && !model.reasoning)
+    throw new Error(`Model ${model.provider}/${model.id} does not support thinking`);
+  if (model.thinkingLevelMap?.[level] === null)
+    throw new Error(`Model ${model.provider}/${model.id} does not support thinking level ${level}`);
+}
+function entry(value, oneBasedIndex) {
+  return value?.split(",")[oneBasedIndex - 1]?.trim() || "";
+}
+function resolveRoute(parent, childDepth, request = {}, catalog = catalogFromEnvironment()) {
+  const profile = request.profile ?? "worker";
+  if (!profiles.has(profile))
+    throw new Error(`Unknown ypi route profile ${JSON.stringify(profile)}`);
+  if ((request.provider !== undefined || request.model !== undefined) && (!request.provider?.trim() || !request.model?.trim()))
+    throw new Error("Explicit routing requires non-empty provider and model together");
+  if (request.profile === "inherit" && (request.provider || request.model || request.thinkingLevel || request.escalation || request.justification))
+    throw new Error("profile=inherit cannot combine with explicit overrides or escalation");
+  if (request.profile && request.profile !== "inherit" && request.provider)
+    throw new Error("Choose a ypi profile or an explicit provider/model pair, not both");
+  if (request.escalation && request.profile)
+    throw new Error("Escalation selects its own profile; omit routing.profile");
+  if (request.escalation) {
+    const escalation = request.escalation;
+    if (!escalation.previousAttempt?.trim() || !escalation.issue?.trim() || ![1, 2].includes(escalation.stage) || !["reasoning", "correctness"].includes(escalation.kind)) {
+      throw new Error("Escalation requires a previous attempt, named reasoning/correctness issue, and stage 1 or 2");
+    }
+    if (request.provider || request.model || request.thinkingLevel && !["xhigh", "max"].includes(request.thinkingLevel))
+      throw new Error("Escalation cannot combine with explicit provider, model, or routine thinking level");
+  }
+  if ((request.thinkingLevel === "xhigh" || request.thinkingLevel === "max") && !request.userChosenHighEffort && !(request.justification?.trim() && request.escalation?.stage === 2)) {
+    throw new Error("xhigh/max per-call routing requires an explicit shell choice or a justified stage-2 escalation");
+  }
+  const inherited = {
+    provider: process.env.RLM_PROVIDER || parent.provider || "",
+    model: process.env.RLM_MODEL || parent.model || "",
+    thinkingLevel: process.env.RLM_THINKING_LEVEL || parent.thinkingLevel || ""
+  };
+  let route = { ...inherited, profile, source: "inherit", policyRevision: model_routing_default.revision, escalation: request.escalation };
+  const depthModel = childDepth > 0 ? entry(process.env.RLM_CHILD_MODELS, childDepth) || process.env.RLM_CHILD_MODEL : "";
+  const depthProvider = childDepth > 0 ? entry(process.env.RLM_CHILD_PROVIDERS, childDepth) || process.env.RLM_CHILD_PROVIDER : "";
+  const depthThinking = childDepth > 0 ? entry(process.env.RLM_CHILD_THINKING_LEVELS, childDepth) || process.env.RLM_CHILD_THINKING_LEVEL : "";
+  const explicitProfile = request.profile !== undefined && profile !== "inherit";
+  if (depthProvider && !depthModel && !explicitProfile && !request.provider && profile !== "inherit" && !request.escalation)
+    throw new Error("RLM_CHILD_PROVIDER(S) requires a matching RLM_CHILD_MODEL(S) at this depth");
+  if (profile !== "inherit" && !request.provider && (explicitProfile || request.escalation || !depthModel)) {
+    const selectedProfile = request.escalation ? model_routing_default.escalation[request.escalation.stage - 1].profile : profile;
+    const definition = model_routing_default.profiles[selectedProfile];
+    if (!catalog && (explicitProfile || request.escalation))
+      throw new Error(`ypi profile ${selectedProfile} needs Pi's authenticated model catalog; launch from ypi or pass an explicit provider and model`);
+    const level = request.escalation ? model_routing_default.escalation[request.escalation.stage - 1].thinkingLevel : definition.thinkingLevel;
+    const selected = catalog && newestFamily(catalog, definition.family, model_routing_default.provider, level);
+    if (catalog && !selected)
+      throw new Error(`No authenticated, scoped ${model_routing_default.provider} ${definition.family} model is available for ypi profile ${selectedProfile}; choose an explicit route or profile=inherit`);
+    if (selected)
+      route = { ...route, provider: selected.provider, model: selected.id, thinkingLevel: level, source: request.escalation ? "escalation" : "profile" };
+    else
+      route.source = "catalog-unavailable";
+  }
+  if (profile !== "inherit" && !explicitProfile && !request.escalation && (depthModel || depthThinking || depthProvider && depthModel)) {
+    route = { ...route, model: depthModel || route.model, provider: depthProvider && depthModel ? depthProvider : route.provider, thinkingLevel: depthThinking || route.thinkingLevel, source: "child-env" };
+  }
+  if (request.provider && request.model)
+    route = { ...route, provider: request.provider, model: request.model, thinkingLevel: request.thinkingLevel || (catalog ? model_routing_default.profiles.worker.thinkingLevel : route.thinkingLevel), source: "explicit" };
+  if (request.thinkingLevel)
+    route = { ...route, thinkingLevel: request.thinkingLevel, source: request.escalation ? "escalation" : "explicit" };
+  if (request.justification?.trim())
+    route.highEffortJustification = request.justification.trim().slice(0, 240);
+  if ((!route.provider || !route.model) && (catalog || request.profile || request.model || request.provider || request.escalation))
+    throw new Error("No provider/model route is available; configure Pi authentication or pass an explicit provider and model");
+  const matched = catalog?.find((model) => model.provider === route.provider && model.id === route.model);
+  if (catalog && !matched && route.provider && route.model)
+    throw new Error(`Model ${route.provider}/${route.model} is unavailable in Pi's authenticated, scoped catalog`);
+  if (route.thinkingLevel && (catalog || request.thinkingLevel))
+    validateThinking(route.thinkingLevel, matched);
+  return Object.freeze(route);
+}
 
 // extensions/ypi/internal/child-output.ts
 var MAX_TOOL_OUTPUT_CHARS = 60 * 1024;
@@ -2758,6 +2862,7 @@ function createJsonDecoder(onText, onToolActivity) {
   let peakContextTokens = 0;
   let over272kTurns = 0;
   let sawTurnEnd = false;
+  let actualModel;
   const usageNumber = (value) => {
     const parsed = Number(value || 0);
     return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
@@ -2789,6 +2894,9 @@ function createJsonDecoder(onText, onToolActivity) {
       }
       if (event.type === "turn_end") {
         sawTurnEnd = true;
+        if (typeof event.message?.provider === "string" && typeof event.message?.model === "string") {
+          actualModel = { provider: event.message.provider, model: event.message.model };
+        }
         const usage = event.message?.usage || {};
         const turnInput = usageNumber(usage.input);
         const turnOutput = usageNumber(usage.output);
@@ -2870,7 +2978,8 @@ function createJsonDecoder(onText, onToolActivity) {
         } : undefined,
         textTruncated: text.truncated,
         jsonEventTruncated,
-        jsonCostIncomplete
+        jsonCostIncomplete,
+        actualModel
       };
     }
   };
@@ -2887,7 +2996,8 @@ function normalizeChildOutput(result) {
     text: result.text,
     stderr: truncate(result.stderr.trim()),
     warnings,
-    cost: result.cost
+    cost: result.cost,
+    actualModel: result.actualModel
   };
 }
 function formatCombinedChildOutput(output) {
@@ -3061,6 +3171,7 @@ function runChildProcess(options) {
           textTruncated: options.jsonMode ? json.textTruncated : plainText.truncated,
           jsonEventTruncated: options.jsonMode ? json.jsonEventTruncated : false,
           jsonCostIncomplete: options.jsonMode ? json.jsonCostIncomplete : false,
+          actualModel: options.jsonMode ? json.actualModel : undefined,
           timedOut,
           cancelled
         });
@@ -3668,11 +3779,11 @@ function normalizeImplementScope(scope) {
   if (scope.length > 64) {
     throw new Error("Implement scope accepts at most 64 path prefixes");
   }
-  const normalized = [...new Set(scope.map((entry) => {
-    if (typeof entry !== "string") {
+  const normalized = [...new Set(scope.map((entry2) => {
+    if (typeof entry2 !== "string") {
       throw new Error("Implement scope must contain only repository-relative path strings");
     }
-    return normalizeRepositoryRelativePath(entry, "Implement scope");
+    return normalizeRepositoryRelativePath(entry2, "Implement scope");
   }))].sort(compareCodePoints);
   const reduced = [];
   for (const candidate of normalized) {
@@ -3741,7 +3852,7 @@ function canonicalValue(value) {
     return value.map(canonicalValue);
   if (!value || typeof value !== "object")
     return value;
-  return Object.fromEntries(Object.entries(value).filter(([key]) => key !== "recordDigest").sort(([left], [right]) => left.localeCompare(right)).map(([key, entry]) => [key, canonicalValue(entry)]));
+  return Object.fromEntries(Object.entries(value).filter(([key]) => key !== "recordDigest").sort(([left], [right]) => left.localeCompare(right)).map(([key, entry2]) => [key, canonicalValue(entry2)]));
 }
 function implementerLeaseRecordDigest(record) {
   return createHash3("sha256").update(JSON.stringify(canonicalValue(record))).digest("hex");
@@ -4157,14 +4268,14 @@ function readImplementerLeaseRecords(commonGitDir) {
     return [];
   assertRegistryDirectory(paths.leases);
   const entries = readdirSync3(paths.leases, { withFileTypes: true });
-  const unexpected = entries.find((entry) => !entry.isDirectory());
+  const unexpected = entries.find((entry2) => !entry2.isDirectory());
   if (unexpected) {
     throw new Error(`Implementer lease registry contains unexpected entry ${path19.join(paths.leases, unexpected.name)}. Run rlm_cleanup --repo <checkout> and inspect it before admitting more writers.`);
   }
-  return entries.map((entry) => {
-    const recordPath = path19.join(paths.leases, entry.name, "lease.json");
+  return entries.map((entry2) => {
+    const recordPath = path19.join(paths.leases, entry2.name, "lease.json");
     try {
-      return readImplementerLeaseFile(path19.join(paths.leases, entry.name), entry.name, commonGitDir);
+      return readImplementerLeaseFile(path19.join(paths.leases, entry2.name), entry2.name, commonGitDir);
     } catch (error) {
       const cause = error instanceof Error ? error.message : String(error);
       throw new Error(`${cause}. Run rlm_cleanup --repo <checkout> and inspect ${recordPath} before admitting more writers.`);
@@ -4439,7 +4550,7 @@ function retireEmptyWorkspaceContainer(record, options = {}) {
   };
   assertExactContainer();
   const entries = readdirSync4(container);
-  const retiredNames = entries.filter((entry) => entry.startsWith(".owner-retired-") && /^[.]owner-retired-[0-9a-f]{32}$/.test(entry));
+  const retiredNames = entries.filter((entry2) => entry2.startsWith(".owner-retired-") && /^[.]owner-retired-[0-9a-f]{32}$/.test(entry2));
   let retiredOwnerPath;
   if (entries.length === 0) {
     options.afterQuarantineUnlink?.();
@@ -4839,7 +4950,7 @@ function createConfinementState(input, root, baselineHead, leaseDirectory, scope
   atomicCreateFile(scopeFile, scope.join("\x00"));
   const gitDir = checkedSetupGit(input, root, ["rev-parse", "--absolute-git-dir"], "Git directory discovery");
   const gitlinks = parseGitlinks(checkedSetupGit(input, root, ["ls-files", "--stage", "-z"], "Submodule inventory", {}, true), root);
-  atomicCreateFile(submodulePathsFile, gitlinks.map((entry) => entry.path).join("\x00"));
+  atomicCreateFile(submodulePathsFile, gitlinks.map((entry2) => entry2.path).join("\x00"));
   materializeBaselineIgnoreFiles(input, root, baselineHead, baselineIgnoreRoot);
   recordImplementerLeaseResource(record, leaseDirectory, "writes");
   recordImplementerLeaseResource(record, leaseDirectory, "scope");
@@ -4894,7 +5005,7 @@ function checkIgnored(root, relativePath, baseline) {
   throw new Error(`Could not evaluate ${baseline ? "baseline" : "final"} ignore rules for ${relativePath}${stderr(result) ? `: ${stderr(result)}` : ""}`);
 }
 function isWithinSubmodule(relativePath, gitlinks) {
-  return gitlinks.some((entry) => relativePath === entry.path || relativePath.startsWith(`${entry.path}/`));
+  return gitlinks.some((entry2) => relativePath === entry2.path || relativePath.startsWith(`${entry2.path}/`));
 }
 function auditedPaths(confinement, root) {
   verifyImplementerConfinement(confinement.confinementFile, confinement.confinementIdentity);
@@ -4921,23 +5032,23 @@ function auditedPaths(confinement, root) {
   return uniquePaths(paths);
 }
 function assertSubmodulesUnchanged(root, gitlinks) {
-  for (const entry of gitlinks) {
-    const submoduleRoot = path23.join(root, ...entry.path.split("/"));
-    if (!entry.initialized) {
+  for (const entry2 of gitlinks) {
+    const submoduleRoot = path23.join(root, ...entry2.path.split("/"));
+    if (!entry2.initialized) {
       if (existsSync7(path23.join(submoduleRoot, ".git"))) {
-        throw new Error(`Previously uninitialized submodule was initialized during implementation: ${entry.path}`);
+        throw new Error(`Previously uninitialized submodule was initialized during implementation: ${entry2.path}`);
       }
       if (existsSync7(submoduleRoot) && readdirSync5(submoduleRoot).length > 0) {
-        throw new Error(`Implementer created content inside an uninitialized submodule path: ${entry.path}`);
+        throw new Error(`Implementer created content inside an uninitialized submodule path: ${entry2.path}`);
       }
       continue;
     }
     if (!existsSync7(submoduleRoot))
-      throw new Error(`Initialized submodule path disappeared during implementation: ${entry.path}`);
-    const head = finalizationGit(submoduleRoot, ["rev-parse", "HEAD"], `Submodule HEAD check for ${entry.path}`);
-    const status = finalizationGit(submoduleRoot, ["status", "--porcelain=v2", "--untracked-files=all", "--ignore-submodules=none"], `Submodule cleanliness check for ${entry.path}`);
-    if (head !== entry.oid || status) {
-      throw new Error(`Submodule changed during implementation and cannot be salvaged by the superproject: ${entry.path}`);
+      throw new Error(`Initialized submodule path disappeared during implementation: ${entry2.path}`);
+    const head = finalizationGit(submoduleRoot, ["rev-parse", "HEAD"], `Submodule HEAD check for ${entry2.path}`);
+    const status = finalizationGit(submoduleRoot, ["status", "--porcelain=v2", "--untracked-files=all", "--ignore-submodules=none"], `Submodule cleanliness check for ${entry2.path}`);
+    if (head !== entry2.oid || status) {
+      throw new Error(`Submodule changed during implementation and cannot be salvaged by the superproject: ${entry2.path}`);
     }
   }
 }
@@ -5634,6 +5745,13 @@ async function runRecursiveChild(runtime, request) {
   if (requestedMode === "implement" && (depth > 0 || process.env.RLM_WRITE_MODE_CEILING === "review")) {
     throw new RecursiveChildError("Writable recursion is root-only and cannot be escalated by a child. Continue implementation in the current agent or delegate a read-only review.", 1);
   }
+  let routing;
+  try {
+    routing = resolveRoute(request.parent, childDepth, request.routing);
+  } catch (error) {
+    throw new RecursiveChildError(error instanceof Error ? error.message : String(error), 1);
+  }
+  const { provider, model, thinkingLevel } = routing;
   if (depth === 0)
     process.env.RLM_START_TIME = String(request.treeStartTimeSeconds ?? Math.floor(Date.now() / 1000));
   const terminateTreeOnRootAbort = () => {
@@ -5700,7 +5818,6 @@ Inherited concurrency-slot resume also failed: ${resumeFailure.message}` : prima
   }
   const extensionsEnabled = requestedMode === "implement" ? true : childExtensionsEnabled(childDepth);
   const fullResourceIsolation = !extensionsEnabled && process.env.RLM_CHILD_DISCOVERY === "0";
-  const { provider, model, thinkingLevel } = resolveChildRoute(request.parent, childDepth);
   let resources;
   try {
     resources = acquireChildResources({
@@ -5823,6 +5940,7 @@ Inherited concurrency-slot resume also failed: ${resumeFailure.message}` : prima
     request.onAdmitted?.(callCount);
     const legacyJjPosture = resources.workspace.readOnly ? "off" : "on";
     trace(`[${nowTraceTime()}] depth=${depth}→${childDepth} PID=${process.pid} call=${callCount} trace=${traceId} generation=${treeGeneration} caller=${request.caller} fork=${request.fork === true} mode=${requestedMode} workspace=${resources.workspace.mode} jj=${legacyJjPosture}`);
+    trace(`[${nowTraceTime()}] ROUTE call=${callCount} profile=${routing.profile} provider=${JSON.stringify(provider.slice(0, 120))} model=${JSON.stringify(model.slice(0, 120))} thinking=${thinkingLevel} source=${routing.source} policy=${routing.policyRevision}`);
     const started = Date.now();
     resources.workspace.prepareChildLaunch();
     const processResult = await runChildProcess({
@@ -5862,6 +5980,9 @@ Inherited concurrency-slot resume also failed: ${resumeFailure.message}` : prima
     });
     const elapsed = Math.max(0, Math.round((Date.now() - started) / 1000));
     const output2 = normalizeChildOutput(processResult);
+    if (provider && model && output2.actualModel && (output2.actualModel.provider !== provider || output2.actualModel.model !== model)) {
+      output2.warnings.push(`Observed Pi model ${output2.actualModel.provider}/${output2.actualModel.model} differs from selected ${provider}/${model}`);
+    }
     const usageAttribution = {
       trace_id: traceId,
       tree_generation: treeGeneration,
@@ -5872,6 +5993,12 @@ Inherited concurrency-slot resume also failed: ${resumeFailure.message}` : prima
       provider,
       model,
       thinking_level: thinkingLevel,
+      profile: routing.profile,
+      route_source: routing.source,
+      policy_revision: routing.policyRevision,
+      ...output2.actualModel ? { actual_provider: output2.actualModel.provider, actual_model: output2.actualModel.model } : {},
+      ...routing.escalation ? { escalation_issue: routing.escalation.issue, previous_attempt: routing.escalation.previousAttempt, escalation_stage: routing.escalation.stage } : {},
+      ...routing.highEffortJustification ? { high_effort_justification: routing.highEffortJustification } : {},
       mode: requestedMode,
       fork: request.fork === true,
       prompt_chars: request.prompt.length,
@@ -5926,7 +6053,9 @@ Inherited concurrency-slot resume also failed: ${resumeFailure.message}` : prima
       jsonEventTruncated: processResult.jsonEventTruncated,
       jsonCostIncomplete: processResult.jsonCostIncomplete,
       cancelled: processResult.cancelled,
-      usage: output2.cost
+      usage: output2.cost,
+      routing,
+      actualModel: output2.actualModel
     };
     const usageOutput = formatUsageObservation(details);
     if (processResult.code !== 0) {
@@ -6069,7 +6198,7 @@ function activeRuntime() {
   };
 }
 function usage() {
-  console.error('Usage: rlm_query [--fork] [--async] "your prompt here"');
+  console.error('Usage: rlm_query [--fork] [--async] [--profile worker|explorer|reviewer|inherit] [--provider ID --model ID] [--thinking LEVEL] [--escalate-from ATTEMPT --escalate-issue ISSUE --escalate-stage 1|2 --escalate-kind reasoning|correctness] "your prompt here"');
   process.exit(1);
 }
 function rejectRetiredFlags(args) {
@@ -6085,6 +6214,8 @@ function rejectRetiredFlags(args) {
 function parseFlags(args) {
   let fork = false;
   let async = false;
+  const routing = {};
+  let escalation = {};
   let index = 0;
   flagLoop:
     while (args[index]?.startsWith("--")) {
@@ -6097,6 +6228,43 @@ function parseFlags(args) {
           async = true;
           index++;
           break;
+        case "--profile":
+          routing.profile = args[++index];
+          index++;
+          break;
+        case "--provider":
+          routing.provider = args[++index];
+          index++;
+          break;
+        case "--model":
+          routing.model = args[++index];
+          index++;
+          break;
+        case "--thinking":
+          routing.thinkingLevel = args[++index];
+          routing.userChosenHighEffort = ["xhigh", "max"].includes(routing.thinkingLevel);
+          index++;
+          break;
+        case "--justify-high-effort":
+          routing.justification = args[++index];
+          index++;
+          break;
+        case "--escalate-from":
+          escalation.previousAttempt = args[++index];
+          index++;
+          break;
+        case "--escalate-issue":
+          escalation.issue = args[++index];
+          index++;
+          break;
+        case "--escalate-stage":
+          escalation.stage = Number(args[++index]);
+          index++;
+          break;
+        case "--escalate-kind":
+          escalation.kind = args[++index];
+          index++;
+          break;
         default:
           break flagLoop;
       }
@@ -6104,7 +6272,9 @@ function parseFlags(args) {
   const prompt = args[index];
   if (!prompt)
     usage();
-  return { fork, async, prompt };
+  if (Object.keys(escalation).length > 0)
+    routing.escalation = escalation;
+  return { fork, async, prompt, routing: Object.keys(routing).length ? routing : undefined };
 }
 function parentContext(cwd = process.cwd()) {
   return {
@@ -6160,6 +6330,7 @@ async function executeRequest(runtime, flags, source, options = {}) {
   return runRecursiveChild(runtime, {
     prompt: flags.prompt,
     fork: flags.fork,
+    routing: flags.routing,
     caller: "cli",
     context: source.context,
     contextPath: source.contextPath,
@@ -6197,7 +6368,7 @@ async function runWorker(jobPath) {
     let code = 0;
     let output2 = "";
     try {
-      const result = await executeRequest(runtime, { prompt: job.prompt, fork: job.fork }, { contextPath: job.contextPath }, {
+      const result = await executeRequest(runtime, { prompt: job.prompt, fork: job.fork, routing: job.routing }, { contextPath: job.contextPath }, {
         cwd: job.cwd,
         extensionPath: job.extensionPath,
         treeStartTimeSeconds: job.treeStartTimeSeconds,
@@ -6278,6 +6449,7 @@ async function main(args = process.argv.slice(2)) {
         job = createAsyncJob({
           prompt: flags.prompt,
           fork: flags.fork,
+          routing: flags.routing,
           cwd: process.cwd(),
           context: source.context,
           contextPath: source.contextPath,
