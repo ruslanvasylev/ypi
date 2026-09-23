@@ -19,6 +19,12 @@ else
 	fail "exact repository candidate passes"
 fi
 
+if GIT_DIR="$(git -C "$PROJECT_DIR" rev-parse --absolute-git-dir)" "$CHECK" >/dev/null; then
+	pass "Git hook environment still resolves the Pi submodule tag"
+else
+	fail "Git hook environment resolves the parent repository instead of Pi"
+fi
+
 if sed -n '/uses: actions\/checkout@v4/,/uses: oven-sh\/setup-bun@v2/p' "$PROJECT_DIR/.github/workflows/ci.yml" \
 	| grep -Eq '^[[:space:]]+submodules:[[:space:]]+(true|recursive)[[:space:]]*$'; then
 	pass "CI initializes the pinned Pi source submodule"
