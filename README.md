@@ -338,7 +338,7 @@ scripts/check-upstream --dry-run
 scripts/check-upstream
 ```
 
-The pinned Pi 0.87.0 includes upstream fixes for compaction context transforms
+The pinned Pi 0.87.1 includes upstream fixes for compaction context transforms
 losing prompt or tool state. Its SDK imports without the extra `pi-server`
 dependency needed by the earlier 0.85.0 workaround. Cumulative summary growth
 remains a separate concern; see [compaction file history](docs/compaction-context.md).

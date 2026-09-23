@@ -32,6 +32,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   runtime-variable and shell-flag registry across code and README.
 
 ### Changed
+- Pin the repository Pi dependency and source submodule to 0.87.1.
 - The canonical TypeScript runtime is now the only recursion engine used by the
   native tool and shell adapter.
 - Writable delegation is Git-only and root-only. Implementers cannot spawn shell
