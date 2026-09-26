@@ -9,6 +9,7 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { acquireChildResources } from "../extensions/ypi/internal/child-resources.ts";
@@ -135,6 +136,19 @@ try {
 	assertMode(lease.isolatedPiRoot!, 0o700);
 	assertMode(path.join(lease.isolatedPiRoot!, "agent"), 0o700);
 	assertMode(workspaceRoot, 0o700);
+
+	// The pinned Pi opens its file-backed provider catalog store on every start,
+	// offline and without a model call; the sealed inventory must survive it.
+	const isolatedAgentDir = path.join(lease.isolatedPiRoot!, "agent");
+	const piStart = spawnSync("sh", ["-c", "umask 022; exec pi --list-models"], {
+		cwd: fixture,
+		encoding: "utf-8",
+		env: { ...process.env, PI_CODING_AGENT_DIR: isolatedAgentDir, PI_OFFLINE: "1" },
+		timeout: 60_000,
+	});
+	if (piStart.status !== 0) {
+		throw new Error(`pinned Pi failed to start offline in the isolated agent dir: ${piStart.stderr}`);
+	}
 
 	const leaseRoot = path.join(common, "ypi-implementers", "leases");
 	assertMode(path.join(common, "ypi-implementers"), 0o700);

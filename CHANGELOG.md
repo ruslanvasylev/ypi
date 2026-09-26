@@ -53,6 +53,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   record in addition to child completion, transcript append, and receipt
   integrity.
 
+### Fixed
+- **Isolated children under Pi 0.87**: Pi now opens file-backed credential
+  (`auth.json`) and provider catalog (`models-store.json`) stores in its agent
+  dir on every start and creates them when missing. Every fully isolated
+  child therefore failed cleanup (`Private runtime tree gained or lost
+  entries`) and `rlm_query` exited 1 after answering. The sealed isolated
+  agent dir now holds both stores (the projected credential or an empty
+  store), which Pi rewrites in place; the lifecycle harness starts the real
+  pinned Pi offline against it.
+
 ### Removed
 - The alternate native and shell recursion engines and their runtime selectors.
 - Registry publication, curl installation, companion-package staging, and

@@ -5436,6 +5436,10 @@ function acquireWorkspace(input) {
 }
 
 // extensions/ypi/internal/child-resources.ts
+var PI_AUTH_STORE_FILE = "auth.json";
+var PI_MODELS_STORE_FILE = "models-store.json";
+var EMPTY_PI_STORE = `{}
+`;
 function createContextFile(input) {
   if (input.context !== undefined) {
     const owner = createOwnedPrivateTempDirectory(path24.join(tmpdir6(), "ypi_ctx_"));
@@ -5564,7 +5568,7 @@ function projectSelectedProviderAuth(agentDir, selectedProvider) {
   if (!selectedProvider)
     return false;
   const parentAgentDir = configuredParentAgentDir();
-  const sourceAuthPath = path24.join(parentAgentDir, "auth.json");
+  const sourceAuthPath = path24.join(parentAgentDir, PI_AUTH_STORE_FILE);
   if (!existsSync8(sourceAuthPath))
     return false;
   let parsed;
@@ -5589,7 +5593,7 @@ function projectSelectedProviderAuth(agentDir, selectedProvider) {
     configurable: false,
     writable: false
   });
-  const targetAuthPath = path24.join(agentDir, "auth.json");
+  const targetAuthPath = path24.join(agentDir, PI_AUTH_STORE_FILE);
   atomicCreateFile(targetAuthPath, `${JSON.stringify(projected, null, 2)}
 `);
   return true;
@@ -5610,7 +5614,15 @@ function acquireChildResources(input) {
       const isolatedAgentDir = path24.join(isolatedPiOwner.path, "agent");
       createPrivateDirectory(isolatedAgentDir);
       const projectedAuth = projectSelectedProviderAuth(isolatedAgentDir, input.selectedProvider);
-      isolatedPiTree = sealOwnedPrivateDirectory(isolatedPiOwner, projectedAuth ? ["agent", path24.join("agent", "auth.json")] : ["agent"]);
+      if (!projectedAuth) {
+        atomicCreateFile(path24.join(isolatedAgentDir, PI_AUTH_STORE_FILE), EMPTY_PI_STORE);
+      }
+      atomicCreateFile(path24.join(isolatedAgentDir, PI_MODELS_STORE_FILE), EMPTY_PI_STORE);
+      isolatedPiTree = sealOwnedPrivateDirectory(isolatedPiOwner, [
+        "agent",
+        path24.join("agent", PI_AUTH_STORE_FILE),
+        path24.join("agent", PI_MODELS_STORE_FILE)
+      ]);
     }
     const childSession = childSessionFile(input);
     if (transcriptsRequired()) {
