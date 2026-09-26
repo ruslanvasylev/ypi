@@ -26,6 +26,11 @@ import {
 } from "./transcript.ts";
 import { acquireWorkspace, type ChildMode, type WorkspaceLease } from "./workspace-policy.ts";
 
+/** Pi's file-backed credential and provider catalog stores in the agent dir. */
+const PI_AUTH_STORE_FILE = "auth.json";
+const PI_MODELS_STORE_FILE = "models-store.json";
+const EMPTY_PI_STORE = "{}\n";
+
 export interface ChildResourceInput {
 	prompt: string;
 	context?: string;
@@ -221,7 +226,7 @@ function configuredParentAgentDir(): string {
 function projectSelectedProviderAuth(agentDir: string, selectedProvider: string | undefined): boolean {
 	if (!selectedProvider) return false;
 	const parentAgentDir = configuredParentAgentDir();
-	const sourceAuthPath = path.join(parentAgentDir, "auth.json");
+	const sourceAuthPath = path.join(parentAgentDir, PI_AUTH_STORE_FILE);
 	if (!existsSync(sourceAuthPath)) return false;
 
 	let parsed: unknown;
@@ -246,7 +251,7 @@ function projectSelectedProviderAuth(agentDir: string, selectedProvider: string 
 		configurable: false,
 		writable: false,
 	});
-	const targetAuthPath = path.join(agentDir, "auth.json");
+	const targetAuthPath = path.join(agentDir, PI_AUTH_STORE_FILE);
 	atomicCreateFile(targetAuthPath, `${JSON.stringify(projected, null, 2)}\n`);
 	return true;
 }
@@ -276,10 +281,18 @@ export function acquireChildResources(input: ChildResourceInput): ChildResourceL
 				isolatedAgentDir,
 				input.selectedProvider,
 			);
-			isolatedPiTree = sealOwnedPrivateDirectory(
-				isolatedPiOwner,
-				projectedAuth ? ["agent", path.join("agent", "auth.json")] : ["agent"],
-			);
+			// Pi opens file-backed credential and provider catalog stores on every
+			// start and creates them when missing; sealed empty stores are rewritten
+			// in place, so cleanup still sees exactly the declared inventory.
+			if (!projectedAuth) {
+				atomicCreateFile(path.join(isolatedAgentDir, PI_AUTH_STORE_FILE), EMPTY_PI_STORE);
+			}
+			atomicCreateFile(path.join(isolatedAgentDir, PI_MODELS_STORE_FILE), EMPTY_PI_STORE);
+			isolatedPiTree = sealOwnedPrivateDirectory(isolatedPiOwner, [
+				"agent",
+				path.join("agent", PI_AUTH_STORE_FILE),
+				path.join("agent", PI_MODELS_STORE_FILE),
+			]);
 		}
 		const childSession = childSessionFile(input);
 		if (transcriptsRequired()) {
