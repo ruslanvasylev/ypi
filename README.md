@@ -127,8 +127,11 @@ launch more recursive work after the root dies. Cost and token values are
 observational telemetry and never an admission or termination control.
 
 The root keeps its normal Pi tools. Review children exclude mutation and
-process-spawning tools. Child extension discovery is canonical-only unless the
-caller explicitly accepts ambient extension compatibility. Provider, model,
+process-spawning tools. They discover installed Pi extensions when the root's
+conflict check is clear, while loading canonical ypi explicitly. A conflicting
+or unreadable extension surface stays isolated; implementers stay
+canonical-only. This lets an installed context extension expose its tools to
+children without ypi owning its policy. Provider, model,
 and thinking level inherit from the active root route unless child-specific or
 depth-specific routing is configured.
 
@@ -227,7 +230,7 @@ against the source and must contain exactly the public variables.
 |---|---|---|
 | `CONTEXT` | unset | Context file used when no explicit non-empty input is supplied. |
 | `PI_TRACE_FILE` | private temporary file | Append-only lifecycle trace destination. |
-| `RLM_AMBIENT_EXTENSIONS` | `auto` | Root policy: allow, isolate, or detect conflicting recursion extensions. |
+| `RLM_AMBIENT_EXTENSIONS` | `auto` | Root and review-child policy: allow, isolate, or detect conflicting recursion extensions. |
 | `RLM_CHILD_DISCOVERY` | enabled | Set to `0` to isolate child skills, templates, themes, context files, and approvals. |
 | `RLM_CHILD_EXTENSIONS` | parent policy | Override extension loading for recursive children. |
 | `RLM_CHILD_MODEL` | root model | Model for every child depth. |

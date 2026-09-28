@@ -1071,14 +1071,30 @@ async function run(): Promise<void> {
 
 	clearYpiEnv();
 	resetLog();
+	const safeAgentDir = path.join(scratch, "safe-extension-agent");
+	const conflictingAgentDir = path.join(scratch, "conflicting-extension-agent");
+	mkdirSync(safeAgentDir, { recursive: true });
+	mkdirSync(conflictingAgentDir, { recursive: true });
+	writeFileSync(path.join(safeAgentDir, "settings.json"), '{"packages":["/installed/context-adapter"]}\n');
+	writeFileSync(path.join(conflictingAgentDir, "settings.json"), '{"packages":["npm:pi-recursive"]}\n');
+	process.env.PI_CODING_AGENT_DIR = safeAgentDir;
 	process.env.RLM_DEPTH = "0";
 	process.env.RLM_MAX_DEPTH = "2";
 	process.env.RLM_JSON = "0";
 	ensureEnvironment(runtime, context());
 	await invoke();
-	assertContains("N8: ambient extension copies are disabled by default", readLog(), "--no-extensions");
+	assertNotContains("N8: safe installed extensions reach review child", readLog(), "--no-extensions");
 	assertNotContains("N8: skill discovery is enabled by default", readLog(), "--no-skills");
 	assertContains("N8: ypi extension remains explicit", readLog(), `-e ${runtime.extensionPath}`);
+	resetLog();
+	process.env.PI_CODING_AGENT_DIR = conflictingAgentDir;
+	await invoke();
+	assertContains("N8a: conflicting recursion extension isolates child", readLog(), "--no-extensions");
+	resetLog();
+	process.env.PI_CODING_AGENT_DIR = safeAgentDir;
+	process.env.RLM_AMBIENT_EXTENSIONS = "0";
+	await invoke();
+	assertContains("N8a: explicit ambient opt-out isolates child", readLog(), "--no-extensions");
 
 	clearYpiEnv();
 	resetLog();
@@ -1098,12 +1114,13 @@ async function run(): Promise<void> {
 	process.env.RLM_DEPTH = "0";
 	process.env.RLM_MAX_DEPTH = "2";
 	process.env.RLM_CHILD_DISCOVERY = "0";
+	process.env.PI_CODING_AGENT_DIR = safeAgentDir;
 	process.env.RLM_JSON = "0";
 	ensureEnvironment(runtime, context());
 	await invoke();
 	assertContains("N8c: child discovery override disables non-extension skill discovery", readLog(), "--no-skills");
 	assertContains("N8c: child discovery override disables context files", readLog(), "--no-context-files");
-	assertContains("N8c: child discovery override keeps canonical-only extension mode", readLog(), "--no-extensions");
+	assertNotContains("N8c: non-extension discovery opt-out leaves installed extensions available", readLog(), "--no-extensions");
 	assertContains("N8c: child discovery override still loads exact ypi", readLog(), `-e ${runtime.extensionPath}`);
 
 	clearYpiEnv();
