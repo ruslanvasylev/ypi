@@ -243,7 +243,7 @@ against the source and must contain exactly the public variables.
 | `RLM_MAX_CONCURRENT_CALLS` | `3` | Maximum active recursive child generations; excess calls wait without consuming the total-call allowance again. |
 | `RLM_MAX_DEPTH` | `3` | Maximum recursion depth. |
 | `RLM_MODEL` | active Pi model | Root route and inherited child model. |
-| `RLM_PROVIDER` | active Pi provider | Root route and inherited child provider. |
+| `RLM_PROVIDER` | active Pi provider | Root route and inherited child provider. An explicit provider requires `RLM_MODEL` or CLI `--model`. |
 | `RLM_REQUIRE_TRANSCRIPTS` | `0` | Set to `1` to require a private explicit session directory, stable-inode JSONL append proof, a durable receipt, and a post-cleanup lifecycle-terminal record for every admitted child. |
 | `RLM_SESSION_DIR` | active Pi session directory | Directory for shared child sessions. |
 | `RLM_SHARED_SESSIONS` | `1` | Set to `0` to prevent child session sharing. |

@@ -131,10 +131,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --provider=*)
             HAS_PROVIDER=true
-            PASS_ARGS+=("$1")
+            PASS_ARGS+=(--provider "${1#--provider=}")
             shift
             ;;
         --model)
+            if [[ $# -lt 2 || -z "$2" || "$2" = --* ]]; then
+                echo "ypi: --model requires a model value. Pass --model <model>." >&2
+                exit 2
+            fi
             HAS_MODEL=true
             PASS_ARGS+=("$1")
             shift
@@ -144,8 +148,12 @@ while [[ $# -gt 0 ]]; do
             fi
             ;;
         --model=*)
+            if [ -z "${1#--model=}" ]; then
+                echo "ypi: --model requires a model value. Pass --model <model>." >&2
+                exit 2
+            fi
             HAS_MODEL=true
-            PASS_ARGS+=("$1")
+            PASS_ARGS+=(--model "${1#--model=}")
             shift
             ;;
         --thinking)
@@ -211,6 +219,14 @@ while [[ $# -gt 0 ]]; do
 done
 if [ -n "$SESSION_DIR_OVERRIDE" ] && [ -z "${RLM_SESSION_DIR:-}" ]; then
     export RLM_SESSION_DIR="$SESSION_DIR_OVERRIDE"
+fi
+
+# Validate the effective route after parsing CLI overrides. Provider-only
+# launches are silently ignored by older Pi releases and rejected by newer
+# ones; require a model here so both root and descendants use the intended route.
+if [[ ( "$HAS_PROVIDER" = true || -n "${RLM_PROVIDER:-}" ) && "$HAS_MODEL" = false && -z "${RLM_MODEL:-}" ]]; then
+    echo "ypi: --provider requires --model. Set RLM_MODEL alongside RLM_PROVIDER, or pass --model <model>." >&2
+    exit 2
 fi
 
 # Ambient extension policy for the root session. Pi has no API for
