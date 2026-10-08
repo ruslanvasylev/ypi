@@ -313,7 +313,7 @@ if should_run "E9"; then
     else
         echo "--- E9: Full ypi run invokes rlm_query recursively ---"
 
-        TRACE_E9="$TEST_TMP/trace_e9.log"
+        TRACE_E9="${RLM_SESSION_DIR:-$TEST_TMP}/trace_e9_$$.log"
         STDOUT_E9="$TEST_TMP/e9_stdout.txt"
         STDERR_E9="$TEST_TMP/e9_stderr.txt"
         PROMPT_E9="Use the rlm_query tool exactly once with this exact prompt: Reply with exactly CHILD_OK. Then reply with exactly the child answer and no other text."
@@ -355,9 +355,12 @@ if should_run "E9"; then
             fail "E9: full ypi recursive child call" "expected exactly one depth=0→1 trace entry, got $CALLS; trace=$(tail -10 "$TRACE_E9" 2>/dev/null || true)"
         elif grep -q "Reply with exactly CHILD_OK" "$TRACE_E9"; then
             fail "E9: full ypi recursive child call" "lifecycle trace leaked delegated prompt text; trace=$(tail -10 "$TRACE_E9" 2>/dev/null || true)"
-        elif ! grep -q "COMPLETED exit=0" "$TRACE_E9"; then
+        elif ! grep -qE 'depth=0 COMPLETED child_depth=1 exit=0|depth=0 child_depth=1 COMPLETED exit=0' "$TRACE_E9"; then
             fail "E9: full ypi recursive child call" "child did not complete cleanly; trace=$(tail -10 "$TRACE_E9" 2>/dev/null || true)"
+        elif ! grep -q 'LIFECYCLE_TERMINAL exit=0.*cleanup=verified' "$TRACE_E9"; then
+            fail "E9: full ypi recursive child call" "child cleanup has no verified terminal record"
         else
+            echo "    Recursive trace: $TRACE_E9"
             cat "$TRACE_E9" >> "$TEST_TMP/trace.log"
             pass "E9: full ypi recursive child call" "$ELAPSED"
         fi
