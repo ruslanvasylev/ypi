@@ -323,6 +323,10 @@ if should_run "E9"; then
         # isolated call counter so ambient sessions and earlier E2E cases cannot
         # change its one-child assertion.
         unset CONTEXT RLM_CALL_COUNT
+        E9_SESSION_DIR="${RLM_SESSION_DIR:-$TEST_TMP/e9_sessions}"
+        if [ -z "${RLM_SESSION_DIR:-}" ]; then
+            mkdir -m 700 "$E9_SESSION_DIR"
+        fi
         export RLM_CALL_COUNTER_FILE="$TEST_TMP/e9.counter"
         rm -f "$RLM_CALL_COUNTER_FILE"
         START=$(date +%s)
@@ -331,7 +335,7 @@ if should_run "E9"; then
         RLM_MAX_DEPTH=1 \
         RLM_JSON=1 \
         PI_TRACE_FILE="$TRACE_E9" \
-        timeout 90 "$PROJECT_DIR/ypi" -p --no-session \
+        timeout 90 "$PROJECT_DIR/ypi" -p --session-dir "$E9_SESSION_DIR" \
             --provider "$RLM_PROVIDER" \
             --model "$RLM_MODEL" \
             "$PROMPT_E9" \
