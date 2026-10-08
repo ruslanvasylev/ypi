@@ -115,6 +115,16 @@ with tempfile.TemporaryDirectory(prefix="ypi-root-analytics-") as raw_scratch:
         "PI_TRACE_FILE": os.fspath(trace_file),
         "RLM_SESSION_DIR": os.fspath(scratch / "must-not-be-scanned"),
     })
+    pending_file = scratch / "pending-user.jsonl"
+    pending_file.write_text("\n".join(json.dumps(row) for row in [
+        {"type": "session", "version": 3, "id": "pending", "timestamp": "2026-10-07T00:00:00Z", "cwd": os.fspath(ROOT)},
+        {"type": "message", "id": "first-user", "parentId": None, "timestamp": "2026-10-07T00:00:01Z", "message": {"role": "user", "content": [{"type": "text", "text": "pending"}], "timestamp": 0}},
+    ]) + "\n")
+    pending_file.chmod(0o600)
+    pending_environment = dict(environment, RLM_SESSION_FILE=os.fspath(pending_file))
+    pending_environment.pop("YPI_ROOT_SESSION_FILE_IDENTITY", None)
+    pending_root = json.loads(run_cost(pending_environment).stdout)["root"]
+    check(pending_root["tokens"] == 0 and pending_root["turns"] == 0, "session readers accept the first user before any assistant entry")
     result = run_cost(environment)
     payload = json.loads(result.stdout)
     plain_result = subprocess.run(

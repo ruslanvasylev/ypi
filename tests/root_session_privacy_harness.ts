@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
 	canonicalRootSessionFilePath,
 	hardenActiveRootSessionFile,
@@ -46,6 +47,21 @@ try {
 	console.log("\n=== Active root transcript privacy ===");
 	process.env.RLM_DEPTH = "0";
 	delete process.env.YPI_ROOT_SESSION_FILE_IDENTITY;
+	const pendingDir = path.join(scratch, "pending-session");
+	mkdirSync(pendingDir, { mode: 0o700 });
+	const oldUmask = process.umask(0o002);
+	try {
+		const pending = SessionManager.create(scratch, pendingDir);
+		pending.appendMessage({ role: "user", content: [{ type: "text", text: "First user, no assistant yet" }], timestamp: 0 });
+		const pendingFile = pending.getSessionFile()!;
+		record((lstatSync(pendingFile).mode & 0o777) === 0o664, "Pi persists the first user with the process umask before an assistant exists");
+		record(pending.getEntries().every((entry) => entry.type !== "message" || entry.message.role !== "assistant"), "early session contains no assistant entry");
+		hardenActiveRootSessionFile(pendingFile);
+		record((lstatSync(pendingFile).mode & 0o777) === 0o600, "existing hardening accepts the early persisted session");
+	} finally {
+		process.umask(oldUmask);
+		delete process.env.YPI_ROOT_SESSION_FILE_IDENTITY;
+	}
 	const active = path.join(scratch, "active.jsonl");
 	const historical = path.join(scratch, "historical.jsonl");
 	writeFileSync(active, "{}\n", { mode: 0o664 });

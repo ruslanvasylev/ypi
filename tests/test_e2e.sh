@@ -51,6 +51,17 @@ rm -f "$RLM_CALL_COUNTER_FILE"
 export PI_TRACE_FILE="$TEST_TMP/trace.log"
 trap 'rm -rf "$TEST_TMP"' EXIT
 
+# Each CLI invocation is a fresh process. Adopt the exact persisted allocation
+# before continuing this suite; an unset seed cannot adopt an existing counter.
+# Keep the counter authoritative, including after a timed-out child.
+rlm_query() {
+    local seed="${RLM_CALL_COUNT:-0}"
+    if [ -f "$RLM_CALL_COUNTER_FILE" ]; then
+        seed=$(tr -d '[:space:]' < "$RLM_CALL_COUNTER_FILE")
+    fi
+    RLM_CALL_COUNT="$seed" "$PROJECT_DIR/rlm_query" "$@"
+}
+
 echo ""
 echo "=== E2E Tests (provider=$RLM_PROVIDER model=$RLM_MODEL) ==="
 echo "    Trace: $PI_TRACE_FILE"
@@ -99,16 +110,18 @@ if should_run "E2"; then
     fi
 fi
 
-# ─── E3: Leaf node — depth at max, no tools ──────────────────────────────
+# ─── E3: Leaf child — depth at max, no recursion tool ────────────────────
 
 if should_run "E3"; then
-    echo "--- E3: Leaf node (at max depth, no tools) ---"
+    echo "--- E3: Leaf child (at max depth, no recursion tool) ---"
     cat > "$TEST_TMP/ctx_e3.txt" << 'EOF'
 The capital of France is Paris.
 EOF
     export CONTEXT="$TEST_TMP/ctx_e3.txt"
-    export RLM_DEPTH=2
-    export RLM_MAX_DEPTH=3
+    # Launch a real child at its limit; a fabricated nonzero root depth has
+    # no coordinator authority and must be rejected by the runtime.
+    export RLM_DEPTH=0
+    export RLM_MAX_DEPTH=1
 
     START=$(date +%s)
     OUTPUT=$(rlm_query "What is the capital of France? Reply with ONLY the city name." 2>/dev/null || echo "ERROR")
@@ -183,10 +196,10 @@ EOF
         OUTPUT=$(rlm_query "Write the full essay as requested." 2>&1 || true)
         ELAPSED=$(( $(date +%s) - START ))
 
-        if [ "$ELAPSED" -lt 30 ]; then
+        if [ "$ELAPSED" -lt 30 ] && echo "$OUTPUT" | grep -qi 'timed out'; then
             pass "E5: timeout killed long task" "$ELAPSED"
         else
-            fail "E5: timeout" "took ${ELAPSED}s, expected < 30s"
+            fail "E5: timeout" "expected timeout within 30s, took ${ELAPSED}s; $(echo "$OUTPUT" | head -3)"
         fi
 
         unset RLM_TIMEOUT
@@ -275,32 +288,38 @@ EOF
 fi
 
 # ─── E8: Architectural invariant — self-similarity across depths ────────
-# A child at depth 1 should behave identically to depth 0 for the same task.
+# Real children at depths 1 and 2 should answer the same task. Descendant depth
+# must come from live admission, never a standalone RLM_DEPTH override.
 
 if should_run "E8"; then
-    echo "--- E8: Self-similarity — same answer at depth 0 and depth 1 ---"
+    echo "--- E8: Self-similarity — same answer at child depths 1 and 2 ---"
     cat > "$TEST_TMP/ctx_e8.txt" << 'EOF'
 The capital of France is Paris.
 The capital of Japan is Tokyo.
 EOF
     export CONTEXT="$TEST_TMP/ctx_e8.txt"
+    export PI_TRACE_FILE="$TEST_TMP/trace_e8.log"
+    export RLM_MAX_DEPTH=2
 
     START=$(date +%s)
 
     export RLM_DEPTH=0
     OUT_D0=$(rlm_query "What is the capital of Japan? Reply with ONLY the city name." 2>/dev/null || echo "ERROR")
 
-    export RLM_DEPTH=1
-    OUT_D1=$(rlm_query "What is the capital of Japan? Reply with ONLY the city name." 2>/dev/null || echo "ERROR")
+    OUT_D1=$(rlm_query "For this self-similarity test, delegate exactly once with the native rlm_query tool. Give the child this context: 'The capital of France is Paris. The capital of Japan is Tokyo.' Ask it: 'What is the capital of Japan? Reply with ONLY the city name.' Return only the child's answer." 2>/dev/null || echo "ERROR")
 
     ELAPSED=$(( $(date +%s) - START ))
     export RLM_DEPTH=0
+    export RLM_MAX_DEPTH=3
 
-    if echo "$OUT_D0" | grep -qi "Tokyo" && echo "$OUT_D1" | grep -qi "Tokyo"; then
+    if echo "$OUT_D0" | grep -qi "Tokyo" && echo "$OUT_D1" | grep -qi "Tokyo" &&
+       grep -q 'depth=1→2.*caller=tool' "$PI_TRACE_FILE" &&
+       grep -q 'depth=1 child_depth=2 LIFECYCLE_TERMINAL exit=0.*cleanup=verified' "$PI_TRACE_FILE"; then
         pass "E8: self-similarity across depths" "$ELAPSED"
     else
-        fail "E8: self-similarity" "depth0='$(echo "$OUT_D0" | head -1)' depth1='$(echo "$OUT_D1" | head -1)'"
+        fail "E8: self-similarity" "child1='$(echo "$OUT_D0" | head -1)' child2='$(echo "$OUT_D1" | head -1)'; require real nested call and cleanup"
     fi
+    export PI_TRACE_FILE="$TEST_TMP/trace.log"
 fi
 
 # ─── E9: Full ypi recursion — root agent invokes rlm_query itself ────────
@@ -313,7 +332,7 @@ if should_run "E9"; then
     else
         echo "--- E9: Full ypi run invokes rlm_query recursively ---"
 
-        TRACE_E9="$TEST_TMP/trace_e9.log"
+        TRACE_E9="${RLM_SESSION_DIR:-$TEST_TMP}/trace_e9_$$.log"
         STDOUT_E9="$TEST_TMP/e9_stdout.txt"
         STDERR_E9="$TEST_TMP/e9_stderr.txt"
         PROMPT_E9="Use the rlm_query tool exactly once with this exact prompt: Reply with exactly CHILD_OK. Then reply with exactly the child answer and no other text."
@@ -323,6 +342,10 @@ if should_run "E9"; then
         # isolated call counter so ambient sessions and earlier E2E cases cannot
         # change its one-child assertion.
         unset CONTEXT RLM_CALL_COUNT
+        E9_SESSION_DIR="${RLM_SESSION_DIR:-$TEST_TMP/e9_sessions}"
+        if [ -z "${RLM_SESSION_DIR:-}" ]; then
+            mkdir -m 700 "$E9_SESSION_DIR"
+        fi
         export RLM_CALL_COUNTER_FILE="$TEST_TMP/e9.counter"
         rm -f "$RLM_CALL_COUNTER_FILE"
         START=$(date +%s)
@@ -331,7 +354,7 @@ if should_run "E9"; then
         RLM_MAX_DEPTH=1 \
         RLM_JSON=1 \
         PI_TRACE_FILE="$TRACE_E9" \
-        timeout 90 "$PROJECT_DIR/ypi" -p --no-session \
+        timeout 90 "$PROJECT_DIR/ypi" -p --session-dir "$E9_SESSION_DIR" \
             --provider "$RLM_PROVIDER" \
             --model "$RLM_MODEL" \
             "$PROMPT_E9" \
@@ -351,9 +374,12 @@ if should_run "E9"; then
             fail "E9: full ypi recursive child call" "expected exactly one depth=0→1 trace entry, got $CALLS; trace=$(tail -10 "$TRACE_E9" 2>/dev/null || true)"
         elif grep -q "Reply with exactly CHILD_OK" "$TRACE_E9"; then
             fail "E9: full ypi recursive child call" "lifecycle trace leaked delegated prompt text; trace=$(tail -10 "$TRACE_E9" 2>/dev/null || true)"
-        elif ! grep -q "COMPLETED exit=0" "$TRACE_E9"; then
+        elif ! grep -qE 'depth=0 COMPLETED child_depth=1 exit=0|depth=0 child_depth=1 COMPLETED exit=0' "$TRACE_E9"; then
             fail "E9: full ypi recursive child call" "child did not complete cleanly; trace=$(tail -10 "$TRACE_E9" 2>/dev/null || true)"
+        elif ! grep -q 'LIFECYCLE_TERMINAL exit=0.*cleanup=verified' "$TRACE_E9"; then
+            fail "E9: full ypi recursive child call" "child cleanup has no verified terminal record"
         else
+            echo "    Recursive trace: $TRACE_E9"
             cat "$TRACE_E9" >> "$TEST_TMP/trace.log"
             pass "E9: full ypi recursive child call" "$ELAPSED"
         fi

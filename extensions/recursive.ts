@@ -20,7 +20,7 @@ import {
 	beginRootTreeCoordinator,
 	terminateRootTreeCoordinator,
 } from "./ypi/internal/tree-coordinator.ts";
-import { patchSystemPrompt } from "./ypi/prompt.ts";
+import { buildYpiPrompt } from "./ypi/prompt.ts";
 import { debug, resolveRuntime } from "./ypi/runtime.ts";
 import { updateStatus } from "./ypi/status.ts";
 
@@ -95,12 +95,16 @@ export default function (pi: ExtensionAPI) {
 			beginRootTreeCoordinator("root-turn-replaced");
 		}
 		debug("__YPI_EXTENSION_PROMPT_PATCHED__");
-		return { systemPrompt: patchSystemPrompt(runtime, event) };
+		const ypiPrompt = buildYpiPrompt(runtime);
+		if (process.env.YPI_EXTENSION_PROMPT_MODE === "replace") {
+			return { systemPrompt: ypiPrompt };
+		}
+		event.systemPromptOptions.sections.ypi = ypiPrompt;
 	});
 
-	// Pi persists the assistant entry before turn_end and before starting its
-	// first tool. Re-assert the exact active-file permission at both boundaries
-	// so newly created root transcripts are private before operator tools run.
+	// Pi creates the transcript at the first user message, after our pre-agent
+	// refresh. Re-assert exact active-file permissions at the first tool and
+	// turn_end boundaries, so it is private before operator tools run.
 	pi.on("tool_execution_start", (_event, ctx) => {
 		ensureEnvironment(runtime, ctx, pi);
 		updateStatus(ctx);

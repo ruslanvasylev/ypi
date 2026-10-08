@@ -1076,6 +1076,8 @@ OUTPUT=$(
     RLM_PROVIDER=test RLM_MODEL=test rlm_query "Ambient extension compatibility"
 )
 assert_not_contains "G34b: ambient extension compatibility is explicit" "--no-extensions" "$OUTPUT"
+assert_contains "G34b: ambient review disables built-in MCP" "--no-mcp" "$OUTPUT"
+assert_contains "G34b: review explicitly excludes MCP tools" "mcp__*" "$OUTPUT"
 
 # G35: RLM_EXTENSIONS=0 disables even ypi's explicit extension
 OUTPUT=$(
@@ -1191,6 +1193,7 @@ assert_contains "G39: canonical ypi extension still loaded explicitly" "-e $PROJ
 
 OUTPUT=$(PI_CODING_AGENT_DIR="$G39_CONFLICT" "$PROJECT_DIR/ypi" -p "ambient conflict test" 2>&1)
 assert_contains "G39b: renamed recursion-extension copy isolates ambient extensions" "--no-extensions" "$OUTPUT"
+assert_contains "G39b: isolated root keeps codemode available" "-e builtin:codemode" "$OUTPUT"
 assert_contains "G39b: isolation is explained with a doctor pointer" "ypi-doctor" "$OUTPUT"
 
 OUTPUT=$(PI_CODING_AGENT_DIR="$G39_RECURSIVE_PKG" "$PROJECT_DIR/ypi" -p "ambient package conflict test" 2>&1)

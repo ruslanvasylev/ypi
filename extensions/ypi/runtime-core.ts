@@ -395,7 +395,11 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 		if (provider) args.push("--provider", provider);
 		if (model) args.push("--model", model);
 		if (thinkingLevel) args.push("--thinking", thinkingLevel);
-		if (resources.workspace.readOnly) args.push("--exclude-tools", READ_ONLY_EXCLUDED_BUILTINS.join(","));
+		if (resources.workspace.readOnly) {
+			// Pi 1.0.4 keeps MCP tools unless the filter explicitly names MCP.
+			args.push("--exclude-tools", [...READ_ONLY_EXCLUDED_BUILTINS, "mcp__*"].join(","));
+			if (process.env.RLM_AMBIENT_EXTENSIONS === "1") args.push("--no-mcp");
+		}
 		else if (requestedMode === "implement") args.push("--tools", IMPLEMENT_TOOL_ALLOWLIST.join(","));
 		if (process.env.RLM_CHILD_DISCOVERY === "0") args.push("--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve");
 		if (resources.childSession) args.push("--session", resources.childSession);

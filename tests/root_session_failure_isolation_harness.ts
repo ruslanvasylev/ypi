@@ -80,21 +80,23 @@ try {
 	record(notifications.length === 1 && notifications[0].includes("telemetry disabled"), "hardening failure emits one bounded warning");
 	record(statuses.at(-1)?.includes("session telemetry") === true, "hardening failure remains visible in status");
 
-	const first = handlers.get("before_agent_start")?.({
+	const firstEvent = {
 		type: "before_agent_start",
 		prompt: "FIRST ROOT TURN",
 		systemPrompt: "base prompt",
-		systemPromptOptions: { cwd: process.cwd() },
-	}, context);
+		systemPromptOptions: { cwd: process.cwd(), sections: {} as Record<string, string> },
+	};
+	const first = handlers.get("before_agent_start")?.(firstEvent, context);
 	const firstGeneration = process.env.YPI_TREE_GENERATION;
-	const second = handlers.get("before_agent_start")?.({
+	const secondEvent = {
 		type: "before_agent_start",
 		prompt: "SECOND ROOT TURN",
 		systemPrompt: "base prompt",
-		systemPromptOptions: { cwd: process.cwd() },
-	}, context);
+		systemPromptOptions: { cwd: process.cwd(), sections: {} as Record<string, string> },
+	};
+	const second = handlers.get("before_agent_start")?.(secondEvent, context);
 	const secondGeneration = process.env.YPI_TREE_GENERATION;
-	record(first?.systemPrompt !== "base prompt" && second?.systemPrompt !== "base prompt", "system prompt patch survives repeated hardening failures");
+	record(!first?.systemPrompt && !second?.systemPrompt && Boolean(firstEvent.systemPromptOptions.sections.ypi) && Boolean(secondEvent.systemPromptOptions.sections.ypi), "prompt section survives repeated hardening failures without forcing");
 	record(Boolean(firstGeneration && secondGeneration && firstGeneration !== secondGeneration), "root generation rotates despite repeated hardening failures");
 	record(process.env.RLM_MODEL === "failure-model" && process.env.RLM_THINKING_LEVEL === "high", "model and thinking refresh survive hardening failure");
 	record(notifications.length === 1, "repeated identical hardening failures are notification-deduplicated");
@@ -107,6 +109,9 @@ try {
 	record(process.env.RLM_SESSION_DIR === realpathSync.native(realSessionDir), "recovered session directory is canonical");
 	record(Boolean(process.env.YPI_ROOT_SESSION_FILE_IDENTITY) && (lstatSync(canonicalSessionFile).mode & 0o777) === 0o600, "valid replacement recovers hardened root analytics");
 	record(statuses.at(-1)?.includes("session telemetry") === false, "successful recovery clears the warning status");
+	chmodSync(canonicalSessionFile, 0o664);
+	handlers.get("tool_execution_start")?.({ type: "tool_execution_start" }, context);
+	record((lstatSync(canonicalSessionFile).mode & 0o777) === 0o600, "tool-start boundary reasserts private transcript permissions");
 
 	await handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "test" }, context);
 } finally {

@@ -457,6 +457,47 @@ assert_not_contains "T14g: launcher model not duplicated" "--model openai/gpt-5.
 assert_contains "T14g: launcher explicit provider clears env" "RLM_PROVIDER=" "$OUTPUT"
 assert_contains "T14g: launcher explicit model clears env" "RLM_MODEL=" "$OUTPUT"
 
+# T14i: provider-only routes fail before Pi executes, including CLI providers.
+for PROVIDER_SOURCE in env cli cli-equals after-separator; do
+    set +e
+    case "$PROVIDER_SOURCE" in
+        env) OUTPUT=$(RLM_PROVIDER=anthropic "$PROJECT_DIR/ypi" -p "Provider only?" 2>&1) ;;
+        cli) OUTPUT=$("$PROJECT_DIR/ypi" --provider anthropic -p "Provider only?" 2>&1) ;;
+        cli-equals) OUTPUT=$("$PROJECT_DIR/ypi" --provider=anthropic -p "Provider only?" 2>&1) ;;
+        after-separator) OUTPUT=$(RLM_PROVIDER=anthropic "$PROJECT_DIR/ypi" -- --model positional-text 2>&1) ;;
+    esac
+    EXIT_CODE=$?
+    set -e
+    assert_exit_code "T14i: $PROVIDER_SOURCE provider-only rejected" 2 "$EXIT_CODE"
+    assert_contains "T14i: $PROVIDER_SOURCE rejection names fix" "--model" "$OUTPUT"
+    assert_not_contains "T14i: $PROVIDER_SOURCE rejection never executes Pi" "MOCK_PI_CALLED" "$OUTPUT"
+done
+OUTPUT=$(RLM_PROVIDER=anthropic "$PROJECT_DIR/ypi" --model claude-haiku -p "Mixed route?")
+assert_contains "T14i: env provider plus CLI model stays valid" "--provider anthropic" "$OUTPUT"
+assert_contains "T14i: effective CLI model reaches Pi" "--model claude-haiku" "$OUTPUT"
+OUTPUT=$(RLM_MODEL=claude-haiku "$PROJECT_DIR/ypi" --provider anthropic -p "Mixed route?")
+assert_contains "T14i: CLI provider plus env model stays valid" "--model claude-haiku" "$OUTPUT"
+OUTPUT=$("$PROJECT_DIR/ypi" --model anthropic/claude-haiku -p "Qualified model?")
+assert_contains "T14i: provider-qualified model stays valid" "--model anthropic/claude-haiku" "$OUTPUT"
+OUTPUT=$("$PROJECT_DIR/ypi" -- --provider positional-text)
+assert_contains "T14i: positional provider text is not a route" "MOCK_PI_CALLED" "$OUTPUT"
+OUTPUT=$("$PROJECT_DIR/ypi" --provider=anthropic --model=claude-haiku -p "Equals route?")
+assert_contains "T14i: equals provider normalized for Pi" "--provider anthropic" "$OUTPUT"
+assert_contains "T14i: equals model normalized for Pi" "--model claude-haiku" "$OUTPUT"
+for MODEL_VALUE in missing empty equals next-option; do
+    set +e
+    case "$MODEL_VALUE" in
+        missing) OUTPUT=$(RLM_PROVIDER=anthropic "$PROJECT_DIR/ypi" --model 2>&1) ;;
+        empty) OUTPUT=$(RLM_PROVIDER=anthropic "$PROJECT_DIR/ypi" --model "" 2>&1) ;;
+        equals) OUTPUT=$(RLM_PROVIDER=anthropic "$PROJECT_DIR/ypi" --model= 2>&1) ;;
+        next-option) OUTPUT=$(RLM_PROVIDER=anthropic "$PROJECT_DIR/ypi" --model --version 2>&1) ;;
+    esac
+    EXIT_CODE=$?
+    set -e
+    assert_exit_code "T14i: $MODEL_VALUE model rejected" 2 "$EXIT_CODE"
+    assert_not_contains "T14i: $MODEL_VALUE model never executes Pi" "MOCK_PI_CALLED" "$OUTPUT"
+done
+
 OUTPUT=$(
     RLM_THINKING_LEVEL=high \
     "$PROJECT_DIR/ypi" -p --no-session "Launcher effort routing?"

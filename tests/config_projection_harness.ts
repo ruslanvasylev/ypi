@@ -97,7 +97,9 @@ record(
 );
 
 const providerCases = [
-	{ provider: "anthropic", retained: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_OAUTH_TOKEN"] },
+	{ provider: "anthropic", retained: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_FEDERATION_RULE_ID", "ANTHROPIC_ORGANIZATION_ID", "ANTHROPIC_SERVICE_ACCOUNT_ID", "ANTHROPIC_IDENTITY_TOKEN_FILE", "ANTHROPIC_WORKSPACE_ID"] },
+	{ provider: "azure", retained: ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_RESOURCE_NAME", "AZURE_OPENAI_API_VERSION", "AZURE_OPENAI_DEPLOYMENT_NAME_MAP", "AZURE_API_VERSION"] },
+	{ provider: "typesafe", retained: ["TYPESAFE_API_KEY"] },
 	{ provider: "qwen-token-plan", retained: ["QWEN_TOKEN_PLAN_API_KEY"] },
 	{ provider: "qwen-token-plan-cn", retained: ["QWEN_TOKEN_PLAN_CN_API_KEY"] },
 	{ provider: "radius", retained: ["RADIUS_API_KEY"] },
