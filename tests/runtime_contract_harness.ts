@@ -554,7 +554,7 @@ async function run(): Promise<void> {
 		type: "before_agent_start",
 		prompt: "ROOT HUMAN CHARTER",
 		systemPrompt: "base",
-		systemPromptOptions: { cwd: projectRoot },
+		systemPromptOptions: { cwd: projectRoot, sections: {} },
 	}, lifecycleContext);
 	const capturedRootPrompt = process.env.RLM_ROOT_PROMPT_FILE;
 	record(Boolean(capturedRootPrompt && existsSync(capturedRootPrompt)), "root prompt is captured before agent start");

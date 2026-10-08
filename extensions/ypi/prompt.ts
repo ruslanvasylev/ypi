@@ -1,5 +1,4 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import type { BeforeAgentStartEvent } from "@earendil-works/pi-coding-agent";
 import { shellHelperEnabled } from "./env.ts";
 import { renderActiveTaskFilesSection } from "./internal/task-files.ts";
 import type { YpiRuntime } from "./runtime.ts";
@@ -102,17 +101,4 @@ export function buildYpiPrompt(runtime: YpiRuntime): string {
 		promptPath: process.env.RLM_PROMPT_FILE,
 		rootPromptPath: process.env.RLM_ROOT_PROMPT_FILE,
 	})}${runtimeSourcePointers(runtime)}${diagnosticRuntimeImplementationSection(runtime)}`;
-}
-
-export function patchSystemPrompt(runtime: YpiRuntime, event: BeforeAgentStartEvent): string {
-	const ypiPrompt = buildYpiPrompt(runtime);
-	const mode = process.env.YPI_EXTENSION_PROMPT_MODE || "append";
-
-	if (mode === "replace") {
-		return ypiPrompt;
-	}
-
-	return `${event.systemPrompt}
-
-${ypiPrompt}`;
 }

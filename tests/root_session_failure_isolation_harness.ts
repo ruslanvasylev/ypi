@@ -80,21 +80,23 @@ try {
 	record(notifications.length === 1 && notifications[0].includes("telemetry disabled"), "hardening failure emits one bounded warning");
 	record(statuses.at(-1)?.includes("session telemetry") === true, "hardening failure remains visible in status");
 
-	const first = handlers.get("before_agent_start")?.({
+	const firstEvent = {
 		type: "before_agent_start",
 		prompt: "FIRST ROOT TURN",
 		systemPrompt: "base prompt",
-		systemPromptOptions: { cwd: process.cwd() },
-	}, context);
+		systemPromptOptions: { cwd: process.cwd(), sections: {} as Record<string, string> },
+	};
+	const first = handlers.get("before_agent_start")?.(firstEvent, context);
 	const firstGeneration = process.env.YPI_TREE_GENERATION;
-	const second = handlers.get("before_agent_start")?.({
+	const secondEvent = {
 		type: "before_agent_start",
 		prompt: "SECOND ROOT TURN",
 		systemPrompt: "base prompt",
-		systemPromptOptions: { cwd: process.cwd() },
-	}, context);
+		systemPromptOptions: { cwd: process.cwd(), sections: {} as Record<string, string> },
+	};
+	const second = handlers.get("before_agent_start")?.(secondEvent, context);
 	const secondGeneration = process.env.YPI_TREE_GENERATION;
-	record(first?.systemPrompt !== "base prompt" && second?.systemPrompt !== "base prompt", "system prompt patch survives repeated hardening failures");
+	record(!first?.systemPrompt && !second?.systemPrompt && Boolean(firstEvent.systemPromptOptions.sections.ypi) && Boolean(secondEvent.systemPromptOptions.sections.ypi), "prompt section survives repeated hardening failures without forcing");
 	record(Boolean(firstGeneration && secondGeneration && firstGeneration !== secondGeneration), "root generation rotates despite repeated hardening failures");
 	record(process.env.RLM_MODEL === "failure-model" && process.env.RLM_THINKING_LEVEL === "high", "model and thinking refresh survive hardening failure");
 	record(notifications.length === 1, "repeated identical hardening failures are notification-deduplicated");
