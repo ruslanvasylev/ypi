@@ -102,9 +102,9 @@ export default function (pi: ExtensionAPI) {
 		event.systemPromptOptions.sections.ypi = ypiPrompt;
 	});
 
-	// Pi persists the assistant entry before turn_end and before starting its
-	// first tool. Re-assert the exact active-file permission at both boundaries
-	// so newly created root transcripts are private before operator tools run.
+	// Pi creates the transcript at the first user message, after our pre-agent
+	// refresh. Re-assert exact active-file permissions at the first tool and
+	// turn_end boundaries, so it is private before operator tools run.
 	pi.on("tool_execution_start", (_event, ctx) => {
 		ensureEnvironment(runtime, ctx, pi);
 		updateStatus(ctx);

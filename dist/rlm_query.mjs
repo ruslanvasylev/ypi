@@ -2518,7 +2518,7 @@ var CHILD_RUNTIME_EXCLUDED_KEYS = [
 ];
 var CHILD_RUNTIME_EXCLUDED_PREFIXES = ["YPI_EXPLICIT_"];
 var PROVIDER_ENV_KEYS = {
-  anthropic: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_OAUTH_TOKEN"],
+  anthropic: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_FEDERATION_RULE_ID", "ANTHROPIC_ORGANIZATION_ID", "ANTHROPIC_SERVICE_ACCOUNT_ID", "ANTHROPIC_IDENTITY_TOKEN_FILE", "ANTHROPIC_WORKSPACE_ID"],
   "github-copilot": ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"],
   huggingface: ["HF_TOKEN"],
   "ant-ling": ["ANT_LING_API_KEY"],
@@ -2526,7 +2526,7 @@ var PROVIDER_ENV_KEYS = {
   "qwen-token-plan-cn": ["QWEN_TOKEN_PLAN_CN_API_KEY"],
   "qwen-token-plan-individual": ["QWEN_TOKEN_PLAN_API_KEY"],
   openai: ["OPENAI_API_KEY"],
-  "azure-openai-responses": ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_RESOURCE_NAME", "AZURE_OPENAI_API_VERSION", "AZURE_OPENAI_DEPLOYMENT_NAME_MAP", "AZURE_API_VERSION"],
+  azure: ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_RESOURCE_NAME", "AZURE_OPENAI_API_VERSION", "AZURE_OPENAI_DEPLOYMENT_NAME_MAP", "AZURE_API_VERSION"],
   deepseek: ["DEEPSEEK_API_KEY"],
   nvidia: ["NVIDIA_API_KEY"],
   google: ["GEMINI_API_KEY"],
@@ -2559,7 +2559,8 @@ var PROVIDER_ENV_KEYS = {
   "xiaomi-token-plan-sgp": ["XIAOMI_TOKEN_PLAN_SGP_API_KEY"],
   "amazon-bedrock": ["AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_BEARER_TOKEN_BEDROCK", "AWS_REGION", "AWS_DEFAULT_REGION", "AWS_ENDPOINT_URL_BEDROCK_RUNTIME", "AWS_CONTAINER_CREDENTIALS_FULL_URI", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_WEB_IDENTITY_TOKEN_FILE"],
   ollama: ["OLLAMA_API_KEY"],
-  portkey: ["PORTKEY_API_KEY"]
+  portkey: ["PORTKEY_API_KEY"],
+  typesafe: ["TYPESAFE_API_KEY"]
 };
 var PROVIDER_ENV_ALLOWLIST = new Set([
   "ANTHROPIC_API_KEY",
@@ -2572,6 +2573,12 @@ var PROVIDER_ENV_ALLOWLIST = new Set([
   "HF_TOKEN",
   "ANT_LING_API_KEY",
   "OPENAI_API_KEY",
+  "ANTHROPIC_FEDERATION_RULE_ID",
+  "ANTHROPIC_ORGANIZATION_ID",
+  "ANTHROPIC_SERVICE_ACCOUNT_ID",
+  "ANTHROPIC_IDENTITY_TOKEN_FILE",
+  "ANTHROPIC_WORKSPACE_ID",
+  "TYPESAFE_API_KEY",
   "AZURE_OPENAI_API_KEY",
   "AZURE_OPENAI_BASE_URL",
   "AZURE_OPENAI_RESOURCE_NAME",
@@ -5924,9 +5931,11 @@ Inherited concurrency-slot resume also failed: ${resumeFailure.message}` : prima
       args.push("--model", model);
     if (thinkingLevel)
       args.push("--thinking", thinkingLevel);
-    if (resources.workspace.readOnly)
-      args.push("--exclude-tools", READ_ONLY_EXCLUDED_BUILTINS.join(","));
-    else if (requestedMode === "implement")
+    if (resources.workspace.readOnly) {
+      args.push("--exclude-tools", [...READ_ONLY_EXCLUDED_BUILTINS, "mcp__*"].join(","));
+      if (process.env.RLM_AMBIENT_EXTENSIONS === "1")
+        args.push("--no-mcp");
+    } else if (requestedMode === "implement")
       args.push("--tools", IMPLEMENT_TOOL_ALLOWLIST.join(","));
     if (process.env.RLM_CHILD_DISCOVERY === "0")
       args.push("--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve");

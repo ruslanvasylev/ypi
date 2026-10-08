@@ -287,6 +287,11 @@ multi-file checkpoint.
 
 The root transcript is hardened to `0600` at live persistence boundaries while
 historical files, directory modes, and the process umask remain untouched.
+Pi 1.0.4 creates it at the first user message, so its initial permissions follow
+the process umask until the first tool-start or turn-end hardening boundary.
+The first model call can occur during that interval; operator tools run only
+after hardening. Readers accept a persisted user message before any assistant
+entry.
 Benign ancestor aliases are resolved once and the canonical session and
 telemetry paths are projected to readers; a symlinked final component still
 fails closed. A root-session hardening failure disables only that analytics
@@ -303,6 +308,22 @@ of inferred. These values are observe-only and never change admission,
 cancellation, model, thinking level, depth, timeout, or call limits.
 
 ## Architecture
+
+The pinned Pi is 1.0.4. Isolated roots explicitly load `builtin:codemode`;
+`--tools` or Pi's existing `defaultTools` decides whether to activate it.
+Default children load only ypi and do not load built-in codemode, tool-search,
+MCP, or llama.cpp. The configured model policy needs no llama.cpp route.
+Review children exclude `mcp__*`; when ambient extensions are allowed they also
+pass `--no-mcp`. Implementers remain isolated with `--no-extensions`.
+ypi does not opt isolated roots or default children into built-in MCP.
+Fresh userless notification turns still lose per-run sections in Pi (#10267);
+`make test-extensions` reports that canary before such turns are enabled.
+ypi and tagged built-in MCP start no such notification turns. Prompt-section
+migration does not resolve forced prompts returned by other root extensions
+(#10489).
+The earlier 0.87.1 pin remains available in Git history for rollback; restore
+the package manifest, lock, version file, and Pi submodule together, reinstall
+with `bun install --frozen-lockfile`, then run alignment, doctor, and the gates.
 
 The runtime ownership boundary is:
 

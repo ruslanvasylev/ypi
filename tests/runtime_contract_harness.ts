@@ -478,8 +478,8 @@ async function run(): Promise<void> {
 	record(
 		!reviewNative.error
 			&& reviewCli.code === 0
-			&& reviewNative.observation?.ARGS.includes("<--exclude-tools><bash,edit,write>") === true
-			&& reviewCli.observation?.ARGS.includes("<--exclude-tools><bash,edit,write>") === true,
+			&& reviewNative.observation?.ARGS.includes("<--exclude-tools><bash,edit,write,mcp__*>") === true
+			&& reviewCli.observation?.ARGS.includes("<--exclude-tools><bash,edit,write,mcp__*>") === true,
 		"both adapters choose read-only review without workspace setup",
 		`native=${JSON.stringify(reviewNative.error)} CLI=${JSON.stringify(reviewCli.error)}`,
 	);
@@ -509,8 +509,8 @@ async function run(): Promise<void> {
 	const readOnlyCli = await invokeCli(baseEnv("cli-readonly"), prompt);
 	if (readOnlyNative.observation && readOnlyCli.observation) {
 		record(
-			readOnlyNative.observation.ARGS.includes("<--exclude-tools><bash,edit,write>")
-				&& readOnlyCli.observation.ARGS.includes("<--exclude-tools><bash,edit,write>"),
+			readOnlyNative.observation.ARGS.includes("<--exclude-tools><bash,edit,write,mcp__*>")
+				&& readOnlyCli.observation.ARGS.includes("<--exclude-tools><bash,edit,write,mcp__*>"),
 			"both adapters exclude built-in mutators without a global tool allowlist",
 		);
 	} else {

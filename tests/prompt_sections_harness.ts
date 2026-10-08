@@ -60,11 +60,14 @@ try {
 	assert.equal(process.env.RLM_ROOT_PROMPT_FILE, promptPath, "root task-file path is stable");
 	assert.equal(readFileSync(promptPath!, "utf8"), "SECOND ROOT TURN", "root charter contents refresh");
 	assert.notEqual(process.env.YPI_TREE_GENERATION, firstGeneration, "tree generation rotates each root turn");
-	const session = {
+	const session = Object.assign(Object.create(AgentSession.prototype), {
 		_runSystemPromptOptions: first.systemPromptOptions,
 		_toolRegistry: new Map([["read", { name: "read" }]]),
+		_toolDefinitions: new Map(),
+		_getToolExposure: () => "direct",
+		_isActivatable: () => true,
 		agent: { state: { tools: [] }, transformContext: undefined },
-	} as any;
+	});
 	const prepare = (AgentSession.prototype as any)._preparePromptAndToolLoadout;
 	const initial = { role: "system", content: "", sections: buildSystemPromptSections(first.systemPromptOptions), toolsAdded: [{ name: "read" }], timestamp: 0 };
 	const patch = prepare.call(session, second.systemPromptOptions, [initial]);
@@ -86,6 +89,31 @@ try {
 	const replaced = await plain.emitBeforeAgentStart("REPLACE ROOT", undefined, options);
 	assert.ok(replaced.systemPromptOptions.forceSystemPrompt?.startsWith(anchor), "replace retains exact ypi head");
 	assert.ok(!replaced.systemPromptOptions.forceSystemPrompt?.includes("You are an expert coding assistant"), "replace omits Pi base prompt");
+	// Probe #10267 through the real run/next-turn lifecycle without a model call.
+	// This diagnostic must be checked before enabling userless notification turns.
+	Object.assign(session, {
+		_baseSystemPromptOptions: { ...first.systemPromptOptions, sections: {}, forceSystemPrompt: undefined },
+		_runSystemPromptOptions: first.systemPromptOptions,
+		_pendingToolNames: new Set(),
+		_recordSelection() {},
+		_handlePostAgentRun: async () => false,
+		_runBeforeSettleBoundary: async () => false,
+		_flushPendingBashMessages() {},
+		_flushPendingCustomMessages() {},
+		_emitAgentSettled: async () => {},
+		getActiveToolNames: () => ["read"],
+		_compactBeforeNextAssistantResponse: async (context: any) => context,
+	});
+	(AgentSession.prototype as any)._installAgentNextTurnRefresh.call(session);
+	let carriesYpi = false;
+	session.agent.prompt = async () => {
+		await session.agent.prepareNextTurnWithContext({ context: { messages: [initial] } });
+		carriesYpi = Boolean(session._runSystemPromptOptions?.sections.ypi);
+	};
+	await (AgentSession.prototype as any)._runAgentPrompt.call(session, []);
+	assert.ok(carriesYpi, "user-started run retains the ypi section");
+	await (AgentSession.prototype as any)._runAgentPrompt.call(session, []);
+	console.log(JSON.stringify({ userlessPromptCanary: carriesYpi ? "SUPPORTED" : "UNSUPPORTED", issue: 10267, notificationTurnsEnabledByYpi: false }));
 	console.log(JSON.stringify({ promptSections: "PASS", variant: baseline ? "baseline" : "sections", appendForced: baseline, laterToolHoisted: baseline, stableSection: true, mixedHooksPreserveYpi: true, replaceUnchanged: true }));
 } finally {
 	await shutdown?.();

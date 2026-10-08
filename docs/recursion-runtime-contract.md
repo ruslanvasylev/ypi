@@ -194,7 +194,10 @@ the snapshot incomplete without accepting their values. Root aggregation
 counts only explicit Pi usage fields; nested
 `rlm_query` tool text/details are never reinterpreted as root model usage. The
 live extension hardens only the current root transcript to `0600`, without
-changing historical files, session-directory modes, or global umask. Ancestor
+changing historical files, session-directory modes, or global umask.
+Pi 1.0.4 creates the file at the first user message, before any assistant entry;
+initial file permissions follow the process umask until the first tool-start
+or turn-end hardening boundary, which may follow the first model call. Ancestor
 aliases are canonicalized before projection while a symlinked final component
 is rejected. Hardening failure clears the unsafe analytics projection and is
 visible in a deduplicated status warning, but prompt patching, generation

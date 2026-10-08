@@ -292,6 +292,11 @@ if [ "$YPI_ALLOW_AMBIENT" != true ]; then
     PI_ARGV+=(--no-extensions)
 fi
 PI_ARGV+=(-e "$YPI_EXTENSION")
+if [ "$YPI_ALLOW_AMBIENT" != true ]; then
+    # Keep codemode available under isolation. Pi's --tools/defaultTools still
+    # decide whether it is declared; this does not enable it by default.
+    PI_ARGV+=(-e builtin:codemode)
+fi
 if [ -d "$SCRIPT_DIR/skills" ]; then
     PI_ARGV+=(--skill "$SCRIPT_DIR/skills")
 fi

@@ -109,6 +109,9 @@ try {
 	record(process.env.RLM_SESSION_DIR === realpathSync.native(realSessionDir), "recovered session directory is canonical");
 	record(Boolean(process.env.YPI_ROOT_SESSION_FILE_IDENTITY) && (lstatSync(canonicalSessionFile).mode & 0o777) === 0o600, "valid replacement recovers hardened root analytics");
 	record(statuses.at(-1)?.includes("session telemetry") === false, "successful recovery clears the warning status");
+	chmodSync(canonicalSessionFile, 0o664);
+	handlers.get("tool_execution_start")?.({ type: "tool_execution_start" }, context);
+	record((lstatSync(canonicalSessionFile).mode & 0o777) === 0o600, "tool-start boundary reasserts private transcript permissions");
 
 	await handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "test" }, context);
 } finally {
