@@ -287,7 +287,7 @@ multi-file checkpoint.
 
 The root transcript is hardened to `0600` at live persistence boundaries while
 historical files, directory modes, and the process umask remain untouched.
-Pi 1.0.4 creates it at the first user message, so its initial permissions follow
+Pi 1.1.0 creates it at the first user message, so its initial permissions follow
 the process umask until the first tool-start or turn-end hardening boundary.
 The first model call can occur during that interval; operator tools run only
 after hardening. Readers accept a persisted user message before any assistant
@@ -309,7 +309,7 @@ cancellation, model, thinking level, depth, timeout, or call limits.
 
 ## Architecture
 
-The pinned Pi is 1.0.4. Isolated roots explicitly load `builtin:codemode`;
+The pinned Pi is 1.1.0. Isolated roots explicitly load `builtin:codemode`;
 `--tools` or Pi's existing `defaultTools` decides whether to activate it.
 Default children load only ypi and do not load built-in codemode, tool-search,
 MCP, or llama.cpp. The configured model policy needs no llama.cpp route.
@@ -321,7 +321,7 @@ Fresh userless notification turns still lose per-run sections in Pi (#10267);
 ypi and tagged built-in MCP start no such notification turns. Prompt-section
 migration does not resolve forced prompts returned by other root extensions
 (#10489).
-The earlier 0.87.1 pin remains available in Git history for rollback; restore
+The earlier 1.0.4 pin remains available in Git history for rollback; restore
 the package manifest, lock, version file, and Pi submodule together, reinstall
 with `bun install --frozen-lockfile`, then run alignment, doctor, and the gates.
 
@@ -379,14 +379,21 @@ scripts/check-upstream --dry-run
 scripts/check-upstream
 ```
 
-The pinned Pi 0.87.1 includes upstream fixes for compaction context transforms
+Pi 0.87.1 introduced upstream fixes for compaction context transforms
 losing prompt or tool state. Its SDK imports without the extra `pi-server`
 dependency needed by the earlier 0.85.0 workaround. Cumulative summary growth
 remains a separate concern; see [compaction file history](docs/compaction-context.md).
 
 `check-upstream` never installs or replaces the host Pi. It tests the exact
 repository binary; promote the host only after those gates and the configured
-extension canaries pass.
+extension canaries pass. For the installed-stack repin smoke, run a recorded
+`ypi -p --mode json --session <private-proof-path>` session in the usual project
+with `honcho_search`, `ap_status`, and `chrome_devtools_list_pages`. Check the
+saved `ypi` section, tool errors, AP context status, and transcript mode at the
+first tool boundary. Keep the same model and thinking level across versions.
+Honcho automatically retains these exchanges, so label them as integration
+tests. This smoke covers loading and tool calls; it does not certify the TUI,
+browser navigation, or long-session cache behavior.
 
 Before pushing an owned feature branch:
 
