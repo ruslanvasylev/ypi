@@ -51,6 +51,17 @@ rm -f "$RLM_CALL_COUNTER_FILE"
 export PI_TRACE_FILE="$TEST_TMP/trace.log"
 trap 'rm -rf "$TEST_TMP"' EXIT
 
+# Each CLI invocation is a fresh process. Adopt the exact persisted allocation
+# before continuing this suite; an unset seed cannot adopt an existing counter.
+# Keep the counter authoritative, including after a timed-out child.
+rlm_query() {
+    local seed="${RLM_CALL_COUNT:-0}"
+    if [ -f "$RLM_CALL_COUNTER_FILE" ]; then
+        seed=$(tr -d '[:space:]' < "$RLM_CALL_COUNTER_FILE")
+    fi
+    RLM_CALL_COUNT="$seed" "$PROJECT_DIR/rlm_query" "$@"
+}
+
 echo ""
 echo "=== E2E Tests (provider=$RLM_PROVIDER model=$RLM_MODEL) ==="
 echo "    Trace: $PI_TRACE_FILE"
@@ -183,10 +194,10 @@ EOF
         OUTPUT=$(rlm_query "Write the full essay as requested." 2>&1 || true)
         ELAPSED=$(( $(date +%s) - START ))
 
-        if [ "$ELAPSED" -lt 30 ]; then
+        if [ "$ELAPSED" -lt 30 ] && echo "$OUTPUT" | grep -qi 'timed out'; then
             pass "E5: timeout killed long task" "$ELAPSED"
         else
-            fail "E5: timeout" "took ${ELAPSED}s, expected < 30s"
+            fail "E5: timeout" "expected timeout within 30s, took ${ELAPSED}s; $(echo "$OUTPUT" | head -3)"
         fi
 
         unset RLM_TIMEOUT
