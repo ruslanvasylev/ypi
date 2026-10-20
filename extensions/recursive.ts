@@ -59,31 +59,74 @@ export default function (pi: ExtensionAPI) {
 	}
 	debug(`__YPI_EXTENSION_LOADED__ root=${runtime.root}`);
 
-	pi.on("session_start", async (event, ctx) => {
-		let selectedAtStart: ReturnType<typeof selectRootDefault>;
-		const newSession = event.reason === "startup" && (ctx.sessionManager.getEntries?.() || []).every((entry) => entry.type === "model_change" || entry.type === "thinking_level_change");
-		if ((process.env.RLM_DEPTH || "0") === "0") {
+	let automaticRootRouting = false;
+	let rootRouteFailure: string | undefined;
+	const explicitRoutingProvider = () => process.env.YPI_MODEL_ROUTING_PROVIDER !== undefined;
+	const reportRootRouteFailure = (ctx: ExtensionContext) => {
+		const message = `ypi automatic root routing blocked: ${rootRouteFailure}`;
+		if (ctx.hasUI) ctx.ui.notify(message, "error");
+		else console.error(message);
+	};
+	const applyAutomaticRootRoute = async (ctx: ExtensionContext) => {
+		try {
 			const available = projectRoutingCatalog(ctx);
-			if (available && process.env.YPI_ROOT_AUTO_ROUTE === "1" && newSession) {
-				const selected = selectRootDefault(available);
-				if (selected) {
-					const model = available.find((candidate) => candidate.provider === selected.provider && candidate.id === selected.model)!;
-					if (await pi.setModel(model)) {
-						selectedAtStart = selected;
-						if (process.env.YPI_ROOT_EXPLICIT_THINKING !== "1") pi.setThinkingLevel(selected.thinkingLevel as Parameters<typeof pi.setThinkingLevel>[0]);
-						debug(`__YPI_ROOT_ROUTE__ ${selected.provider}/${selected.model}:${pi.getThinkingLevel()} policy=${selected.policyRevision}`);
-					}
+			const selected = selectRootDefault(available || []);
+			if (!selected && explicitRoutingProvider()) throw new Error("selected provider model is unavailable in the routing catalog");
+			if (selected) {
+				const model = available?.find((candidate) => candidate.provider === selected.provider && candidate.id === selected.model);
+				if (!model || !await pi.setModel(model)) {
+					if (explicitRoutingProvider()) throw new Error("selected provider model could not be activated");
+					return undefined;
 				}
+				if (process.env.YPI_ROOT_EXPLICIT_THINKING !== "1") pi.setThinkingLevel(selected.thinkingLevel as Parameters<typeof pi.setThinkingLevel>[0]);
+				debug(`__YPI_ROOT_ROUTE__ ${selected.provider}/${selected.model}:${pi.getThinkingLevel()} policy=${selected.policyRevision}`);
 			}
+			rootRouteFailure = undefined;
+			return selected;
+		} catch (error) {
+			if (!explicitRoutingProvider()) throw error;
+			rootRouteFailure = error instanceof Error ? error.message : "selected provider route is unavailable";
+			reportRootRouteFailure(ctx);
+			return undefined;
 		}
+	};
+	const projectSelectedRootRoute = (selected: ReturnType<typeof selectRootDefault>) => {
+		if (!selected) return;
+		// ctx.model is an event snapshot; setModel changes the live session.
+		process.env.RLM_PROVIDER = selected.provider;
+		process.env.RLM_MODEL = selected.model;
+		process.env.RLM_THINKING_LEVEL = pi.getThinkingLevel();
+	};
+
+	pi.on("session_start", async (event, ctx) => {
+		const newSession = event.reason === "startup" && (ctx.sessionManager.getEntries?.() || []).every((entry) => entry.type === "model_change" || entry.type === "thinking_level_change");
+		automaticRootRouting = (process.env.RLM_DEPTH || "0") === "0" && process.env.YPI_ROOT_AUTO_ROUTE === "1" && newSession;
+		rootRouteFailure = undefined;
+		if (!automaticRootRouting) projectRoutingCatalog(ctx);
+		const selected = automaticRootRouting ? await applyAutomaticRootRoute(ctx) : undefined;
 		ensureEnvironment(runtime, ctx, pi);
-		if (selectedAtStart) {
-			// ctx.model is the event snapshot; setModel changes the live session.
-			process.env.RLM_PROVIDER = selectedAtStart.provider;
-			process.env.RLM_MODEL = selectedAtStart.model;
-			process.env.RLM_THINKING_LEVEL = pi.getThinkingLevel();
-		}
+		projectSelectedRootRoute(selected);
 		updateStatus(ctx);
+	});
+
+	// Pi contains hook exceptions. Explicit routing failures must consume input,
+	// rather than allowing the session's ambient model to generate a response.
+	pi.on("input", async (_event, ctx) => {
+		if (!automaticRootRouting || !rootRouteFailure || !explicitRoutingProvider()) return { action: "continue" };
+		const selected = await applyAutomaticRootRoute(ctx);
+		if (rootRouteFailure) return { action: "handled" };
+		ensureEnvironment(runtime, ctx, pi);
+		projectSelectedRootRoute(selected);
+		return { action: "continue" };
+	});
+
+	// Extension custom messages with triggerTurn bypass input. agent_start is
+	// awaited while the run has an abort signal, before any provider request.
+	pi.on("agent_start", (_event, ctx) => {
+		if (automaticRootRouting && rootRouteFailure && explicitRoutingProvider()) {
+			ctx.abort();
+			reportRootRouteFailure(ctx);
+		}
 	});
 
 	pi.on("before_agent_start", (event, ctx) => {

@@ -61,6 +61,42 @@ try {
 	delete process.env.YPI_MODEL_CATALOG;
 	assert.equal(resolveRoute(parent, 1).model, parent.model);
 	assert.throws(() => resolveRoute(parent, 1, { profile: "explorer" }), /needs Pi's authenticated model catalog/);
+	// A gateway alias must own every policy route without changing explicit
+	// overrides, inherited identities, family ranking, or effort policy.
+	const pooled = catalog.map((model) => ({ ...model, provider: "local-pool" }));
+	const both = [...catalog, ...pooled];
+	process.env.YPI_MODEL_ROUTING_PROVIDER = "local-pool";
+	process.env.YPI_MODEL_CATALOG = routingCatalogSnapshot(both);
+	assert.equal(selectRootDefault(both)?.provider, "local-pool");
+	assert.equal(selectRootDefault(both)?.model, "gpt-6.10-sol");
+	for (const profile of ["worker", "explorer", "reviewer"] as const) {
+		const route = resolveRoute(parent, 1, { profile });
+		assert.equal(route.provider, "local-pool");
+	}
+	assert.equal(resolveRoute(parent, 1).provider, "local-pool");
+	for (const stage of [1, 2] as const) {
+		const route = resolveRoute(parent, 1, { escalation: { previousAttempt: `c${stage}`, issue: "missing case", kind: "correctness", stage } });
+		assert.equal(route.provider, "local-pool");
+		assert.equal(route.thinkingLevel, "high");
+	}
+	assert.equal(resolveRoute(parent, 1, { profile: "inherit" }).provider, parent.provider);
+	assert.equal(resolveRoute(parent, 1, { provider: parent.provider, model: "gpt-6-sol" }).provider, parent.provider);
+	assert.throws(() => resolveRoute(parent, 1, { profile: "reviewer" }, catalog), /No authenticated, scoped local-pool astra/);
+	assert.throws(() => resolveRoute(parent, 1, { escalation: { previousAttempt: "c1", issue: "missing case", kind: "reasoning", stage: 2 } }, catalog), /No authenticated, scoped local-pool astra/);
+	assert.throws(() => selectRootDefault(catalog), /No authenticated, scoped local-pool sol/);
+	delete process.env.YPI_MODEL_CATALOG;
+	assert.throws(() => resolveRoute(parent, 1), /needs Pi's authenticated model catalog/);
+	assert.equal(resolveRoute(parent, 1, { profile: "inherit" }).provider, parent.provider);
+	assert.equal(resolveRoute(parent, 1, { provider: parent.provider, model: "gpt-6-sol" }).provider, parent.provider);
+	process.env.RLM_CHILD_PROVIDER = parent.provider;
+	process.env.RLM_CHILD_MODEL = "gpt-6-sol";
+	assert.equal(resolveRoute(parent, 1).provider, parent.provider);
+	delete process.env.RLM_CHILD_PROVIDER;
+	delete process.env.RLM_CHILD_MODEL;
+	process.env.YPI_MODEL_ROUTING_PROVIDER = " ";
+	assert.throws(() => selectRootDefault(both), /must name a provider/);
+	delete process.env.YPI_MODEL_ROUTING_PROVIDER;
+	assert.equal(selectRootDefault(both)?.provider, "openai-codex");
 	console.log("MODEL_ROUTING=PASS");
 } finally {
 	for (const key of Object.keys(process.env)) if (key.startsWith("RLM_") || key.startsWith("YPI_")) delete process.env[key];
