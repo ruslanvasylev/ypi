@@ -27,6 +27,9 @@ export RLM_PROVIDER="${RLM_PROVIDER:-openrouter}"
 export RLM_MODEL="${RLM_MODEL:-google/gemini-3-flash-preview}"
 export RLM_MAX_DEPTH="${RLM_MAX_DEPTH:-3}"
 export RLM_MAX_CALLS="${RLM_MAX_CALLS:-65536}"
+# Live runs must not load ambient packages (for example a memory extension that
+# records every exchange). G39 in test_guardrails.sh covers the ambient policy.
+export RLM_AMBIENT_EXTENSIONS=0
 E2E_MAX_CALLS_DEFAULT="$RLM_MAX_CALLS"
 PASS=0
 FAIL=0

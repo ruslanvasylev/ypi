@@ -114,7 +114,7 @@ TSEXT
 STDERR_FILE="$TEST_TMP/ext2_stderr.txt"
 STDOUT_FILE="$TEST_TMP/ext2_stdout.txt"
 
-timeout 30 "$PI_BIN" -p --no-session "${PI_E2E_ARGS[@]}" \
+timeout 30 "$PI_BIN" -p --no-session --no-extensions "${PI_E2E_ARGS[@]}" \
     -e "$TEST_TMP/test_hook.ts" \
     "Say OK" \
     >"$STDOUT_FILE" 2>"$STDERR_FILE" || true
@@ -157,7 +157,7 @@ TSEXT
 STDERR_FILE="$TEST_TMP/ext3_stderr.txt"
 STDOUT_FILE="$TEST_TMP/ext3_stdout.txt"
 
-timeout 30 "$PI_BIN" -p --no-session "${PI_E2E_ARGS[@]}" \
+timeout 30 "$PI_BIN" -p --no-session --no-extensions "${PI_E2E_ARGS[@]}" \
     -e "$TEST_TMP/test_theme.ts" \
     "Say OK" \
     >"$STDOUT_FILE" 2>"$STDERR_FILE" || true
@@ -198,7 +198,7 @@ TSEXT
 STDERR_FILE="$TEST_TMP/ext4_stderr.txt"
 STDOUT_FILE="$TEST_TMP/ext4_stdout.txt"
 
-timeout 30 "$PI_BIN" -p --no-session "${PI_E2E_ARGS[@]}" \
+timeout 30 "$PI_BIN" -p --no-session --no-extensions "${PI_E2E_ARGS[@]}" \
     -e "$TEST_TMP/test_status.ts" \
     "Say OK" \
     >"$STDOUT_FILE" 2>"$STDERR_FILE" || true
@@ -224,7 +224,9 @@ STDOUT_FILE="$TEST_TMP/ext5_stdout.txt"
 export RLM_DEPTH=0
 export RLM_MAX_DEPTH=1
 
-timeout 45 "$PROJECT_DIR/ypi" -p --no-session "${PI_E2E_ARGS[@]}" \
+# Isolate ambient packages (for example a memory extension that records every
+# exchange). G39 in test_guardrails.sh covers the wrapper's ambient policy.
+RLM_AMBIENT_EXTENSIONS=0 timeout 45 "$PROJECT_DIR/ypi" -p --no-session "${PI_E2E_ARGS[@]}" \
     "What is 2+2? Reply with ONLY the number." \
     >"$STDOUT_FILE" 2>"$STDERR_FILE" || true
 
@@ -263,7 +265,7 @@ STDERR_FILE="$TEST_TMP/ext7_stderr.txt"
 STDOUT_FILE="$TEST_TMP/ext7_stdout.txt"
 
 # Ask something that triggers bash tool
-timeout 45 "$PI_BIN" -p --no-session "${PI_E2E_ARGS[@]}" \
+timeout 45 "$PI_BIN" -p --no-session --no-extensions "${PI_E2E_ARGS[@]}" \
     -e "$TEST_TMP/test_tool_hook.ts" \
     "Run: echo TOOL_TEST_MARKER" \
     >"$STDOUT_FILE" 2>"$STDERR_FILE" || true

@@ -93,6 +93,10 @@ to the native provider. Explicit provider/model pairs and `profile: "inherit"`
 retain their existing precedence. Fully isolated children receive only the
 selected provider's `models.json` definition, including its model overrides;
 ambient settings, extensions, and other provider definitions remain excluded.
+They run offline with a private agent directory, where Pi can neither find nor
+download `fd` and `rg`. When the parent's Pi-managed tool directory
+(`<agent>/bin`) exists, it is appended to the end of the child's `PATH`, so
+`find` and `grep` work and system binaries keep precedence.
 
 The shell adapter reads standard input when `RLM_STDIN` marks it as explicit or
 when stdin is non-interactive. A non-empty read wins; otherwise it falls back
@@ -138,11 +142,16 @@ signals registered child process groups; a detached survivor cannot admit or
 launch more recursive work after the root dies. Cost and token values are
 observational telemetry and never an admission or termination control.
 
-The root keeps its normal Pi tools. Review children exclude mutation and
-process-spawning tools. Child extension discovery is canonical-only unless the
-caller explicitly accepts ambient extension compatibility. Provider, model,
-and thinking level inherit from the active root route unless child-specific or
-depth-specific routing is configured.
+The root keeps its normal Pi tools. Review children get Pi's read-only `read`,
+`grep`, `find`, and `ls` tools, plus `rlm_query` while recursion is available,
+and exclude mutation, process-spawning, and MCP tools (`bash`, `edit`, `write`,
+`mcp__*`). Pi activates only `read`, `bash`, `edit`, and `write` by default, so
+the runtime adds the search tools as `+name` modifiers instead of an allowlist;
+tools from explicitly allowed ambient extensions stay available. Child
+extension discovery is canonical-only unless the caller explicitly accepts
+ambient extension compatibility. Provider, model, and thinking level inherit
+from the active root route unless child-specific or depth-specific routing is
+configured.
 
 Use direct inspection for small inputs. Delegate only bounded work that
 benefits from a fresh context window. At deeper levels, prefer returning a
@@ -326,8 +335,9 @@ The pinned Pi is 1.3.0. Isolated roots explicitly load `builtin:codemode`;
 `--tools` or Pi's existing `defaultTools` decides whether to activate it.
 Default children load only ypi and do not load built-in codemode, tool-search,
 MCP, or llama.cpp. The configured model policy needs no llama.cpp route.
-Review children exclude `mcp__*`; when ambient extensions are allowed they also
-pass `--no-mcp`. Implementers remain isolated with `--no-extensions`.
+Review children pass `--tools +grep,+find,+ls` and exclude `bash`, `edit`,
+`write`, and `mcp__*`; when ambient extensions are allowed they also pass
+`--no-mcp`. Implementers remain isolated with `--no-extensions`.
 ypi does not opt isolated roots or default children into built-in MCP.
 Since Pi 1.2, idle extension messages with `triggerTurn` also run
 `before_agent_start` (upstream #10267 fix). ypi gives those runs its prompt
@@ -408,6 +418,12 @@ first tool boundary. Keep the same model and thinking level across versions.
 Honcho automatically retains these exchanges, so label them as integration
 tests. This smoke covers loading and tool calls; it does not certify the TUI,
 browser navigation, or long-session cache behavior.
+
+Scripted or agent-run `ypi -p` and `pi -p` calls must redirect standard input,
+for example `ypi -p "..." < /dev/null`. Print mode reads all non-terminal stdin
+before it starts, so an inherited pipe that never closes makes it wait
+indefinitely. Run `make test-fast` and the live test targets the same way from
+a non-interactive shell; the `rlm_query` shell adapter reads such stdin too.
 
 Before pushing an owned feature branch:
 

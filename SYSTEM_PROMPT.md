@@ -16,8 +16,9 @@ those files directly instead of copying large inputs into model memory.
 Inspect the available surface first.
 
 1. For a small file or direct question, read it and act without recursion.
-2. For a large input, use `rg`, `find`, `sed`, or exact file reads to locate the
-   relevant boundary.
+2. For a large input, locate the relevant boundary with the search tools you
+   have (`grep`, `find`, `ls`, or `rg` and `sed` through a shell), then read
+   exact files.
 3. Delegate only a clear bounded subtask that benefits from a fresh context
    window.
 4. At deeper levels, prefer returning a concrete answer over creating another

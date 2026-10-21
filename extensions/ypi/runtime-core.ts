@@ -13,9 +13,11 @@ import {
 	parsePrivateFileIdentity,
 } from "./internal/private-path.ts";
 import {
+	appendPathEntry,
 	buildChildEnvironment,
 	childExtensionsEnabled,
 	IMPLEMENT_TOOL_ALLOWLIST,
+	READ_ONLY_ADDED_BUILTINS,
 	READ_ONLY_EXCLUDED_BUILTINS,
 	retainSelectedProviderEnvironment,
 } from "./internal/child-config.ts";
@@ -384,6 +386,11 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 		if (resources.contextFile) env.CONTEXT = resources.contextFile;
 		if (resources.isolatedPiRoot) {
 			env.PI_CODING_AGENT_DIR = path.join(resources.isolatedPiRoot, "agent");
+			// Lowest PATH priority: system binaries keep precedence, and Pi's
+			// read-only find/grep still resolve the parent's managed fd and rg.
+			if (resources.parentPiToolDirectory) {
+				env.PATH = appendPathEntry(env.PATH, resources.parentPiToolDirectory);
+			}
 			// PI_PACKAGE_DIR identifies Pi's own shipped assets, not user package
 			// state. Preserve it so the pinned executable retains its real version;
 			// installed package config is isolated by PI_CODING_AGENT_DIR.
@@ -396,6 +403,7 @@ export async function runRecursiveChild(runtime: YpiRuntime, request: RecursiveC
 		if (model) args.push("--model", model);
 		if (thinkingLevel) args.push("--thinking", thinkingLevel);
 		if (resources.workspace.readOnly) {
+			args.push("--tools", READ_ONLY_ADDED_BUILTINS.map((name) => `+${name}`).join(","));
 			// Pi 1.0.4 keeps MCP tools unless the filter explicitly names MCP.
 			args.push("--exclude-tools", [...READ_ONLY_EXCLUDED_BUILTINS, "mcp__*"].join(","));
 			if (process.env.RLM_AMBIENT_EXTENSIONS === "1") args.push("--no-mcp");

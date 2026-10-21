@@ -16,6 +16,7 @@ const scratch = mkdtempSync(path.join(tmpdir(), "ypi_native_tool_test."));
 const fakePi = path.join(scratch, "pi");
 const logFile = path.join(scratch, "fake-pi.log");
 const sessionDir = path.join(scratch, "sessions");
+const inheritedPathTail = (process.env.PATH || "").split(path.delimiter).filter(Boolean).at(-1) || "";
 mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
 chmodSync(sessionDir, 0o700);
 
@@ -117,6 +118,7 @@ fi
   echo "PI_CODING_AGENT_DIR=\${PI_CODING_AGENT_DIR:-unset}"
   echo "PI_PACKAGE_DIR=\${PI_PACKAGE_DIR:-unset}"
   echo "PI_OFFLINE=\${PI_OFFLINE:-unset}"
+  echo "PATH_TAIL=\${PATH##*:}"
   if [ -f "\${PI_CODING_AGENT_DIR:-}/auth.json" ]; then
     echo "AUTH_FILE=present"
     echo "AUTH_MODE=$(stat -c '%a' "$PI_CODING_AGENT_DIR/auth.json")"
@@ -531,7 +533,15 @@ async function run(): Promise<void> {
 	assertContains("N5: child stdout returned", readOnlyText, "FAKE_CHILD_OK");
 	assertContains("N5: review child excludes built-in mutators", readLog(), "--exclude-tools bash,edit,write");
 	assertContains("N5: review child receives no write-scope authority", readLog(), "YPI_IMPLEMENT_ROOT=unset");
-	assertNotContains("N5: review child avoids a global tool allowlist", readLog(), "--tools ");
+	assertContains("N5: review child adds Pi's read-only search built-ins", readLog(), "--tools +grep,+find,+ls --exclude-tools bash,edit,write,mcp__*");
+	const reviewToolSelections = [...readLog().matchAll(/--tools (\S+)/g)].map((match) => match[1]);
+	record(
+		reviewToolSelections.length === 1
+			&& reviewToolSelections[0].split(",").every((entry) => entry.startsWith("+")),
+		"N5: review child modifies Pi's default tools instead of installing a global allowlist",
+		JSON.stringify(reviewToolSelections),
+	);
+	assertContains("N5: review child inherits PATH unchanged", readLog(), `PATH_TAIL=${inheritedPathTail}`);
 
 	const implementRoot = mkdtempSync(path.join(scratch, "implement-git."));
 	spawnSync("git", ["init", "-q"], { cwd: implementRoot, env: fixtureGitEnv() });
@@ -1105,6 +1115,7 @@ async function run(): Promise<void> {
 	assertContains("N8c: child discovery override disables context files", readLog(), "--no-context-files");
 	assertContains("N8c: child discovery override keeps canonical-only extension mode", readLog(), "--no-extensions");
 	assertContains("N8c: child discovery override still loads exact ypi", readLog(), `-e ${runtime.extensionPath}`);
+	assertContains("N8c: partial isolation inherits PATH unchanged", readLog(), `PATH_TAIL=${inheritedPathTail}`);
 
 	clearYpiEnv();
 	resetLog();
@@ -1121,6 +1132,7 @@ async function run(): Promise<void> {
 		{ mode: 0o600 },
 	);
 	writeFileSync(path.join(fullIsolationParentAgent, "settings.json"), '{"packages":["ambient-must-not-project"]}\n');
+	mkdirSync(path.join(fullIsolationParentAgent, "bin"), { mode: 0o700 });
 	process.env.HOME = scratch;
 	process.env.PI_CODING_AGENT_DIR = "~/full-isolation-parent-agent";
 	process.env.ANTHROPIC_API_KEY = "SELECTED_ENV_CANARY_MUST_NOT_LEAK";
@@ -1144,6 +1156,12 @@ async function run(): Promise<void> {
 	assertContains("N8d: full child isolation uses a private Pi agent root", fullIsolationLog, "PI_CODING_AGENT_DIR=");
 	assertNotContains("N8d: private Pi agent root is not the ambient default", fullIsolationLog, "PI_CODING_AGENT_DIR=~/full-isolation-parent-agent");
 	assertContains("N8d: full child isolation forces offline package resolution", fullIsolationLog, "PI_OFFLINE=1");
+	assertContains("N8d: full child isolation keeps read-only search built-ins", fullIsolationLog, "--tools +grep,+find,+ls --exclude-tools bash,edit,write,mcp__*");
+	assertContains(
+		"N8d: full child isolation appends the parent's Pi-managed tool directory last on PATH",
+		fullIsolationLog,
+		`PATH_TAIL=${path.join(fullIsolationParentAgent, "bin")}`,
+	);
 	assertNotContains("N8d: full child isolation avoids explicit ypi extension", fullIsolationLog, "-e ");
 	assertContains("N8d: selected provider auth is projected", fullIsolationLog, "AUTH_SELECTED=present");
 	assertContains("N8d: projected auth is private", fullIsolationLog, "AUTH_MODE=600");
@@ -1156,6 +1174,21 @@ async function run(): Promise<void> {
 	assertNotContains("N8d: other environment secret is absent from child diagnostics", fullIsolationLog, "OTHER_ENV_CANARY_MUST_NOT_LEAK");
 	const isolatedAgentMatch = /^PI_CODING_AGENT_DIR=(.+)$/m.exec(fullIsolationLog);
 	record(Boolean(isolatedAgentMatch && !existsSync(path.dirname(isolatedAgentMatch[1]))), "N8d: isolated auth root is removed after child completion");
+
+	clearYpiEnv();
+	resetLog();
+	const binlessParentAgent = path.join(scratch, "binless-parent-agent");
+	mkdirSync(binlessParentAgent, { recursive: true, mode: 0o700 });
+	process.env.PI_CODING_AGENT_DIR = binlessParentAgent;
+	process.env.RLM_DEPTH = "0";
+	process.env.RLM_MAX_DEPTH = "2";
+	process.env.RLM_CHILD_DISCOVERY = "0";
+	process.env.RLM_CHILD_EXTENSIONS = "0";
+	process.env.RLM_JSON = "0";
+	ensureEnvironment(runtime, context());
+	await invoke();
+	assertContains("N8e: full isolation without parent Pi-managed binaries runs", readLog(), "PI_OFFLINE=1");
+	assertContains("N8e: full isolation leaves PATH unchanged without a parent tool directory", readLog(), `PATH_TAIL=${inheritedPathTail}`);
 
 	clearYpiEnv();
 	resetLog();
