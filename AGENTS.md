@@ -147,6 +147,32 @@ Install local hooks once per clone:
 make install-hooks
 ```
 
+### Merging And Syncing
+
+The canonical checkout is the operator's live runtime, so it stays on `master`.
+Do feature work in a sibling worktree such as `../ypi-wt/<branch>`, never by
+switching the canonical checkout's branch.
+
+- Every change reaches `master` through a pull request on the approved
+  `origin`. Merge when the operator asks, after CI passes, with a merge commit
+  so commit bodies survive.
+- Change the Pi pin (`package.json`, `bun.lock`, `.pi-version`, `pi-mono`)
+  together with the host `pi`. `make doctor` reports host drift.
+- After merging, sync the canonical checkout and prove it:
+
+```bash
+git switch master
+git pull --ff-only origin master
+git submodule update --checkout pi-mono
+bun install --frozen-lockfile
+make doctor
+```
+
+- A local launcher may pin a validated ypi revision. Moving `master` stops it
+  until its routing checks are rerun and its pin is updated; do that before
+  handing the runtime back.
+- Remove merged worktrees and their local branches after the sync.
+
 ## Project Layout
 
 ```text
