@@ -3,6 +3,10 @@ import { maxDepth, sharedSessionsEnabled } from "../env.ts";
 import type { YpiRuntime } from "../runtime.ts";
 
 export const READ_ONLY_EXCLUDED_BUILTINS = ["bash", "edit", "write"] as const;
+// Pi 1.3 activates only read, bash, edit, and write by default. Review children
+// add its read-only search built-ins with `+name` modifiers, which extend that
+// default instead of replacing it, so allowed ambient extension tools remain.
+export const READ_ONLY_ADDED_BUILTINS = ["grep", "find", "ls"] as const;
 export const IMPLEMENT_TOOL_ALLOWLIST = ["read", "grep", "find", "ls", "edit", "write", "rlm_query"] as const;
 
 export function childExtensionsEnabled(childDepth: number): boolean {
@@ -16,6 +20,13 @@ export function childExtensionsEnabled(childDepth: number): boolean {
 function removePathEntry(currentPath: string | undefined, entry: string): string | undefined {
 	if (!currentPath) return currentPath;
 	return currentPath.split(path.delimiter).filter((candidate) => candidate && candidate !== entry).join(path.delimiter);
+}
+
+/** Append a lowest-priority PATH entry without reordering existing entries. */
+export function appendPathEntry(currentPath: string | undefined, entry: string): string {
+	if (!currentPath) return entry;
+	if (currentPath.split(path.delimiter).includes(entry)) return currentPath;
+	return `${currentPath}${path.delimiter}${entry}`;
 }
 
 export const CHILD_PLATFORM_ENV_KEYS = [

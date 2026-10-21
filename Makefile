@@ -172,6 +172,7 @@ test-extensions:
 	@bash tests/test_extensions.sh
 	@bun tests/prompt_sections_harness.ts
 	@bun tests/builtin_compatibility_harness.ts
+	@bun tests/review_child_tools_harness.ts
 
 # Extension E2E tests — REAL LLM calls, tests extension API compatibility
 test-extensions-e2e:

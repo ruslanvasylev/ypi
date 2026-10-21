@@ -1051,6 +1051,7 @@ echo "RLM_MODEL=$RLM_MODEL"
 echo "PI_CODING_AGENT_DIR=${PI_CODING_AGENT_DIR:-unset}"
 echo "PI_PACKAGE_DIR=${PI_PACKAGE_DIR:-unset}"
 echo "PI_OFFLINE=${PI_OFFLINE:-unset}"
+echo "PATH_TAIL=${PATH##*:}"
 if [ -f "${PI_CODING_AGENT_DIR:-}/auth.json" ]; then
 	echo "AUTH_FILE=present"
 	echo "AUTH_MODE=$(stat -c '%a' "$PI_CODING_AGENT_DIR/auth.json")"
@@ -1076,6 +1077,7 @@ OUTPUT=$(
 assert_contains "G34: ambient extension copies disabled by default" "--no-extensions" "$OUTPUT"
 assert_not_contains "G34: skill discovery enabled by default" "--no-skills" "$OUTPUT"
 assert_contains "G34: ypi extension explicitly loaded" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
+assert_contains "G34: review child adds read-only search built-ins" "--tools +grep,+find,+ls --exclude-tools bash,edit,write,mcp__*" "$OUTPUT"
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" RLM_DEPTH=0 RLM_MAX_DEPTH=3 \
     YPI_EXTENSION_PATH="$PROJECT_DIR/extensions/recursive.ts" RLM_AMBIENT_EXTENSIONS=1 \
@@ -1084,6 +1086,7 @@ OUTPUT=$(
 assert_not_contains "G34b: ambient extension compatibility is explicit" "--no-extensions" "$OUTPUT"
 assert_contains "G34b: ambient review disables built-in MCP" "--no-mcp" "$OUTPUT"
 assert_contains "G34b: review explicitly excludes MCP tools" "mcp__*" "$OUTPUT"
+assert_contains "G34b: ambient review keeps defaults and adds read-only search built-ins" "--tools +grep,+find,+ls --exclude-tools bash,edit,write,mcp__*" "$OUTPUT"
 
 # G35: RLM_EXTENSIONS=0 disables even ypi's explicit extension
 OUTPUT=$(
@@ -1150,6 +1153,7 @@ mkdir -m 700 "$G38C_PARENT_AGENT"
 printf '%s\n' '{"anthropic":{"type":"oauth","access":"G38C_SECRET_MUST_NOT_LEAK"},"other":{"type":"api_key","key":"OTHER_SECRET_MUST_NOT_LEAK"}}' > "$G38C_PARENT_AGENT/auth.json"
 chmod 600 "$G38C_PARENT_AGENT/auth.json"
 printf '%s\n' '{"packages":["ambient-must-not-project"]}' > "$G38C_PARENT_AGENT/settings.json"
+mkdir -m 700 "$G38C_PARENT_AGENT/bin"
 OUTPUT=$(
     CONTEXT="$TEST_TMP/ctx.txt" \
     HOME="$TEST_TMP" \
@@ -1168,6 +1172,8 @@ assert_contains "G38c: full child isolation disables non-extension skills" "--no
 assert_not_contains "G38c: full child isolation avoids explicit ypi extension" "-e $PROJECT_DIR/extensions/recursive.ts" "$OUTPUT"
 assert_not_contains "G38c: full isolation replaces the ambient Pi agent root" "PI_CODING_AGENT_DIR=~/g38c-parent-agent" "$OUTPUT"
 assert_contains "G38c: full isolation prevents package installation" "PI_OFFLINE=1" "$OUTPUT"
+assert_contains "G38c: full isolation keeps read-only search built-ins" "--tools +grep,+find,+ls --exclude-tools bash,edit,write,mcp__*" "$OUTPUT"
+assert_contains "G38c: full isolation resolves parent Pi-managed tools last on PATH" "PATH_TAIL=$G38C_PARENT_AGENT/bin" "$OUTPUT"
 assert_contains "G38c: selected provider auth is projected" "AUTH_SELECTED=present" "$OUTPUT"
 assert_contains "G38c: projected auth is private" "AUTH_MODE=600" "$OUTPUT"
 assert_contains "G38c: unselected provider auth is excluded" "AUTH_OTHER=absent" "$OUTPUT"

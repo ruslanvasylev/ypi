@@ -2,6 +2,7 @@ import {
 	existsSync,
 	mkdirSync,
 	readFileSync,
+	statSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
@@ -30,6 +31,8 @@ import { acquireWorkspace, type ChildMode, type WorkspaceLease } from "./workspa
 const PI_AUTH_STORE_FILE = "auth.json";
 const PI_MODELS_STORE_FILE = "models-store.json";
 const PI_MODELS_CONFIG_FILE = "models.json";
+/** Pi downloads fd and rg here and resolves this directory before PATH. */
+const PI_MANAGED_TOOL_DIRECTORY = "bin";
 const EMPTY_PI_STORE = "{}\n";
 
 export interface ChildResourceInput {
@@ -58,6 +61,8 @@ export interface ChildResourceLease {
 	transcriptProof?: TranscriptProofLease;
 	standaloneSystemPromptFile?: string;
 	isolatedPiRoot?: string;
+	/** Parent's existing Pi-managed tool directory, set only for full isolation. */
+	parentPiToolDirectory?: string;
 	workspace: WorkspaceLease;
 	cleanup(): Error[];
 }
@@ -224,6 +229,20 @@ function configuredParentAgentDir(): string {
 	return configured;
 }
 
+/**
+ * A fully isolated child has a private agent directory and runs offline, so Pi
+ * cannot find or download fd and rg there. Expose only the parent's existing
+ * Pi-managed tool directory; no parent configuration is projected.
+ */
+function parentPiManagedToolDirectory(): string | undefined {
+	const directory = path.resolve(configuredParentAgentDir(), PI_MANAGED_TOOL_DIRECTORY);
+	try {
+		return statSync(directory).isDirectory() ? directory : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 function projectSelectedProviderAuth(agentDir: string, selectedProvider: string | undefined): boolean {
 	if (!selectedProvider) return false;
 	const parentAgentDir = configuredParentAgentDir();
@@ -369,6 +388,7 @@ export function acquireChildResources(input: ChildResourceInput): ChildResourceL
 			transcriptProof,
 			standaloneSystemPromptFile: standaloneSystemPromptArtifact?.filePath,
 			isolatedPiRoot: isolatedPiTree?.path,
+			parentPiToolDirectory: input.fullResourceIsolation ? parentPiManagedToolDirectory() : undefined,
 			workspace,
 			cleanup() {
 				return cleanupChildResources({

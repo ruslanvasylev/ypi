@@ -18,7 +18,9 @@ to adapters. It owns:
 - exact prompt, root charter, context, and session transport;
 - child environment allowlisting and discovery isolation;
 - canonical extension selection;
-- read-only review mode and root-only implement mode;
+- read-only review mode, whose children get Pi's `read`, `grep`, `find`, and
+  `ls` (plus `rlm_query` while recursion is available) but no `bash`, `edit`,
+  `write`, or MCP tools, and root-only implement mode;
 - child process cancellation, exit classification, streaming bounds, and
   cleanup;
 - trace, token, and cost telemetry.

@@ -513,6 +513,13 @@ async function run(): Promise<void> {
 				&& readOnlyCli.observation.ARGS.includes("<--exclude-tools><bash,edit,write,mcp__*>"),
 			"both adapters exclude built-in mutators without a global tool allowlist",
 		);
+		const reviewToolArgs = "<--tools><+grep,+find,+ls><--exclude-tools><bash,edit,write,mcp__*>";
+		record(
+			readOnlyNative.observation.ARGS.includes(reviewToolArgs)
+				&& readOnlyCli.observation.ARGS.includes(reviewToolArgs),
+			"both adapters add Pi's read-only search built-ins to review children",
+			`native=${readOnlyNative.observation.ARGS} cli=${readOnlyCli.observation.ARGS}`,
+		);
 	} else {
 		record(false, "both adapters emitted read-only observations");
 	}

@@ -2475,6 +2475,7 @@ import path25 from "node:path";
 // extensions/ypi/internal/child-config.ts
 import path10 from "node:path";
 var READ_ONLY_EXCLUDED_BUILTINS = ["bash", "edit", "write"];
+var READ_ONLY_ADDED_BUILTINS = ["grep", "find", "ls"];
 var IMPLEMENT_TOOL_ALLOWLIST = ["read", "grep", "find", "ls", "edit", "write", "rlm_query"];
 function childExtensionsEnabled(childDepth) {
   let enabled = process.env.RLM_EXTENSIONS !== "0";
@@ -2487,6 +2488,13 @@ function removePathEntry(currentPath, entry) {
   if (!currentPath)
     return currentPath;
   return currentPath.split(path10.delimiter).filter((candidate) => candidate && candidate !== entry).join(path10.delimiter);
+}
+function appendPathEntry(currentPath, entry) {
+  if (!currentPath)
+    return entry;
+  if (currentPath.split(path10.delimiter).includes(entry))
+    return currentPath;
+  return `${currentPath}${path10.delimiter}${entry}`;
 }
 var CHILD_PLATFORM_ENV_KEYS = [
   "HOME",
@@ -3242,7 +3250,8 @@ function runChildProcess(options) {
 import {
   existsSync as existsSync8,
   mkdirSync as mkdirSync3,
-  readFileSync as readFileSync8
+  readFileSync as readFileSync8,
+  statSync
 } from "node:fs";
 import { homedir, tmpdir as tmpdir6 } from "node:os";
 import path24 from "node:path";
@@ -5455,6 +5464,7 @@ function acquireWorkspace(input) {
 var PI_AUTH_STORE_FILE = "auth.json";
 var PI_MODELS_STORE_FILE = "models-store.json";
 var PI_MODELS_CONFIG_FILE = "models.json";
+var PI_MANAGED_TOOL_DIRECTORY = "bin";
 var EMPTY_PI_STORE = `{}
 `;
 function createContextFile(input) {
@@ -5580,6 +5590,14 @@ function configuredParentAgentDir() {
     return path24.join(home, configured.slice(2));
   }
   return configured;
+}
+function parentPiManagedToolDirectory() {
+  const directory = path24.resolve(configuredParentAgentDir(), PI_MANAGED_TOOL_DIRECTORY);
+  try {
+    return statSync(directory).isDirectory() ? directory : undefined;
+  } catch {
+    return;
+  }
 }
 function projectSelectedProviderAuth(agentDir, selectedProvider) {
   if (!selectedProvider)
@@ -5713,6 +5731,7 @@ function acquireChildResources(input) {
       transcriptProof,
       standaloneSystemPromptFile: standaloneSystemPromptArtifact?.filePath,
       isolatedPiRoot: isolatedPiTree?.path,
+      parentPiToolDirectory: input.fullResourceIsolation ? parentPiManagedToolDirectory() : undefined,
       workspace,
       cleanup() {
         return cleanupChildResources({
@@ -5974,6 +5993,9 @@ Inherited concurrency-slot resume also failed: ${resumeFailure.message}` : prima
       env.CONTEXT = resources.contextFile;
     if (resources.isolatedPiRoot) {
       env.PI_CODING_AGENT_DIR = path25.join(resources.isolatedPiRoot, "agent");
+      if (resources.parentPiToolDirectory) {
+        env.PATH = appendPathEntry(env.PATH, resources.parentPiToolDirectory);
+      }
       env.PI_OFFLINE = "1";
     }
     const jsonMode = process.env.RLM_JSON !== "0";
@@ -5985,6 +6007,7 @@ Inherited concurrency-slot resume also failed: ${resumeFailure.message}` : prima
     if (thinkingLevel)
       args.push("--thinking", thinkingLevel);
     if (resources.workspace.readOnly) {
+      args.push("--tools", READ_ONLY_ADDED_BUILTINS.map((name) => `+${name}`).join(","));
       args.push("--exclude-tools", [...READ_ONLY_EXCLUDED_BUILTINS, "mcp__*"].join(","));
       if (process.env.RLM_AMBIENT_EXTENSIONS === "1")
         args.push("--no-mcp");
