@@ -153,6 +153,14 @@ ambient extension compatibility. Provider, model, and thinking level inherit
 from the active root route unless child-specific or depth-specific routing is
 configured.
 
+Pi deduplicates context files (`AGENTS.md`, `CLAUDE.md`) only by literal path,
+so a symlinked or copied file in the ancestor chain is sent again for each
+directory that holds it. Wherever the ypi extension is loaded, each run keeps
+one copy of byte-identical context text, the occurrence nearest the working
+directory. Files that differ by even one byte all remain, in Pi's order.
+Children started without the extension (`RLM_CHILD_EXTENSIONS=0`) keep Pi's
+duplicates.
+
 Use direct inspection for small inputs. Delegate only bounded work that
 benefits from a fresh context window. At deeper levels, prefer returning a
 concrete result over adding another child call.

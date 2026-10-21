@@ -1,4 +1,4 @@
-.PHONY: test test-unit test-guardrails test-timeout-range test-native test-runtime-contract test-eval-contracts test-concurrency test-atomic-file test-cli-async test-cost-ledger test-child-process test-transcripts test-session-tools test-root-analytics test-root-incident-crosscheck test-private-path-ownership test-implementer-registry-generation test-workspace-retirement-generation test-workspace-policy test-parallel-workspace test-implementer-recovery test-workspace-crash test-workspace-concurrent-crash test-write-scope test-publication-policy test-config-surface typecheck-runtime build-runtime-cli check-runtime-cli test-provider-allowlist test-pi-version-alignment test-extensions test-e2e test-recursion-e2e test-extensions-e2e eval-depth-ablation eval-runtime-parity test-fast doctor test-doctor pre-push-checks check-upstream install-hooks land ci-status ci-last-failure clean
+.PHONY: test test-unit test-guardrails test-timeout-range test-native test-runtime-contract test-eval-contracts test-concurrency test-atomic-file test-cli-async test-cost-ledger test-child-process test-transcripts test-session-tools test-root-analytics test-root-incident-crosscheck test-context-files test-private-path-ownership test-implementer-registry-generation test-workspace-retirement-generation test-workspace-policy test-parallel-workspace test-implementer-recovery test-workspace-crash test-workspace-concurrent-crash test-write-scope test-publication-policy test-config-surface typecheck-runtime build-runtime-cli check-runtime-cli test-provider-allowlist test-pi-version-alignment test-extensions test-e2e test-recursion-e2e test-extensions-e2e eval-depth-ablation eval-runtime-parity test-fast doctor test-doctor pre-push-checks check-upstream install-hooks land ci-status ci-last-failure clean
 
 # Fast tests — no LLM calls, uses mock pi
 test-unit:
@@ -75,6 +75,10 @@ test-compaction-context:
 
 test-root-incident-crosscheck:
 	@python3 tests/test_root_incident_crosscheck.py
+
+test-context-files:
+	@echo "Running context-file deduplication tests..."
+	@bun tests/context_files_harness.ts
 
 test-private-path-ownership:
 	@echo "Running private path ownership tests..."
@@ -164,7 +168,7 @@ test-doctor:
 	@bash tests/test_doctor.sh
 
 # All fast tests (no LLM calls)
-test-fast: typecheck-runtime check-runtime-cli test-unit test-guardrails test-timeout-range test-native test-runtime-contract test-eval-contracts test-concurrency test-atomic-file test-cli-async test-cost-ledger test-child-process test-cross-depth-cancellation test-transcripts test-session-tools test-root-analytics test-compaction-context test-root-incident-crosscheck test-private-path-ownership test-implementer-registry-generation test-workspace-retirement-generation test-workspace-policy test-parallel-workspace test-implementer-recovery test-workspace-crash test-workspace-concurrent-crash test-write-scope test-publication-policy test-config-surface test-provider-allowlist test-pi-version-alignment test-doctor
+test-fast: typecheck-runtime check-runtime-cli test-unit test-guardrails test-timeout-range test-native test-runtime-contract test-eval-contracts test-concurrency test-atomic-file test-cli-async test-cost-ledger test-child-process test-cross-depth-cancellation test-transcripts test-session-tools test-root-analytics test-compaction-context test-root-incident-crosscheck test-context-files test-private-path-ownership test-implementer-registry-generation test-workspace-retirement-generation test-workspace-policy test-parallel-workspace test-implementer-recovery test-workspace-crash test-workspace-concurrent-crash test-write-scope test-publication-policy test-config-surface test-provider-allowlist test-pi-version-alignment test-doctor
 
 # Extension compatibility — requires real pi installed
 test-extensions:
@@ -173,6 +177,7 @@ test-extensions:
 	@bun tests/prompt_sections_harness.ts
 	@bun tests/builtin_compatibility_harness.ts
 	@bun tests/review_child_tools_harness.ts
+	@bun tests/context_files_real_pi_harness.ts
 
 # Extension E2E tests — REAL LLM calls, tests extension API compatibility
 test-extensions-e2e:

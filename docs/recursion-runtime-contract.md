@@ -140,6 +140,19 @@ input. The active root request and delegated charter remain symbolically
 addressable. When a caller supplies exact context, the child receives its file
 path rather than a copy embedded into the prompt.
 
+Pi loads context files from the agent directory and from the working directory
+up to the filesystem root, outermost first, and skips only repeated literal
+paths. In `before_agent_start` the canonical extension removes each context
+file whose loaded text is byte-identical to a later entry, so a symlinked,
+hard-linked, or copied `AGENTS.md` reaches the model once, at the occurrence
+nearest the working directory. It compares text only, with no filesystem
+access; distinct files, including near duplicates, keep Pi's order. The edit
+applies to the run's prompt options, so every request in the run and the
+recorded system sections agree. Replace mode's forced text never contained
+context files and is unchanged. A full prompt forced by another extension whose
+hook runs before ypi's is not rewritten. With `YPI_EXTENSION_DEBUG=1` the
+extension reports `__YPI_CONTEXT_FILES_DEDUPLICATED__ removed=<n> bytes=<n>`.
+
 An asynchronous call snapshots its context, root charter, and fork source
 before acknowledging admission. Later mutation of the caller's files cannot
 change the admitted job.
