@@ -16,6 +16,7 @@ import { createRootPromptLease } from "./ypi/internal/root-prompt.ts";
 import { registerRootImplementerBatchPolicy } from "./ypi/internal/root-batch-policy.ts";
 import { registerImplementWriteScope } from "./ypi/internal/write-scope.ts";
 import { registerCompactionContextProjection } from "./ypi/internal/compaction-context.ts";
+import { deduplicatePromptContextFiles } from "./ypi/internal/context-files.ts";
 import {
 	beginRootTreeCoordinator,
 	terminateRootTreeCoordinator,
@@ -141,6 +142,10 @@ export default function (pi: ExtensionAPI) {
 		updateStatus(ctx);
 		if (userTurn && (process.env.RLM_DEPTH || "0") === "0") {
 			beginRootTreeCoordinator("root-turn-replaced");
+		}
+		const duplicates = deduplicatePromptContextFiles(event.systemPromptOptions);
+		if (duplicates.length > 0) {
+			debug(`__YPI_CONTEXT_FILES_DEDUPLICATED__ removed=${duplicates.length} bytes=${duplicates.reduce((total, { bytes }) => total + bytes, 0)}`);
 		}
 		debug("__YPI_EXTENSION_PROMPT_PATCHED__");
 		const ypiPrompt = buildYpiPrompt(runtime);
