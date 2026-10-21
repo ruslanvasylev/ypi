@@ -130,11 +130,16 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("before_agent_start", (event, ctx) => {
-		rootPrompt.capture(event.prompt);
+		// Pi 1.2+ also fires this for idle extension messages with triggerTurn
+		// (messageType "custom"); older Pi fires it only for user prompts. Only a
+		// user prompt replaces the root charter and recursion tree; custom runs
+		// keep both, but still receive ypi's prompt section below.
+		const userTurn = event.messageType !== "custom";
+		if (userTurn) rootPrompt.capture(event.prompt);
 		projectRoutingCatalog(ctx);
 		ensureEnvironment(runtime, ctx, pi);
 		updateStatus(ctx);
-		if ((process.env.RLM_DEPTH || "0") === "0") {
+		if (userTurn && (process.env.RLM_DEPTH || "0") === "0") {
 			beginRootTreeCoordinator("root-turn-replaced");
 		}
 		debug("__YPI_EXTENSION_PROMPT_PATCHED__");

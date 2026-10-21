@@ -50,16 +50,24 @@ try {
 		return result;
 	}
 	const options = { cwd: process.cwd(), selectedTools: ["read"], sections: {} };
+	// Pi 1.2+ passes a trigger: user prompts carry `prompt`; idle extension
+	// messages with triggerTurn arrive as messageType "custom".
+	const userTurn = (prompt: string) => ({ messageType: "user" as const, prompt });
 	const plain = runner();
-	const first = await plain.emitBeforeAgentStart("FIRST ROOT TURN", undefined, options);
+	const first = await plain.emitBeforeAgentStart(userTurn("FIRST ROOT TURN"), options);
 	assert.equal(first.systemPromptOptions.forceSystemPrompt !== undefined, baseline, "append must not force the prompt");
 	assert.ok((first.systemPromptOptions.forceSystemPrompt || first.systemPromptOptions.sections.ypi || "").includes(anchor), "ypi instructions are delivered");
 	const promptPath = process.env.RLM_ROOT_PROMPT_FILE;
 	const firstGeneration = process.env.YPI_TREE_GENERATION;
-	const second = await plain.emitBeforeAgentStart("SECOND ROOT TURN", undefined, options);
+	const second = await plain.emitBeforeAgentStart(userTurn("SECOND ROOT TURN"), options);
 	assert.equal(process.env.RLM_ROOT_PROMPT_FILE, promptPath, "root task-file path is stable");
 	assert.equal(readFileSync(promptPath!, "utf8"), "SECOND ROOT TURN", "root charter contents refresh");
 	assert.notEqual(process.env.YPI_TREE_GENERATION, firstGeneration, "tree generation rotates each root turn");
+	const secondGeneration = process.env.YPI_TREE_GENERATION;
+	const custom = await plain.emitBeforeAgentStart({ messageType: "custom", message: { role: "custom", customType: "fixture", content: "NOTIFICATION", display: false, timestamp: 3 } } as any, options);
+	assert.ok((custom.systemPromptOptions.forceSystemPrompt || custom.systemPromptOptions.sections.ypi || "").includes(anchor), "extension-triggered run receives ypi instructions");
+	assert.equal(readFileSync(promptPath!, "utf8"), "SECOND ROOT TURN", "extension-triggered run keeps the user charter");
+	assert.equal(process.env.YPI_TREE_GENERATION, secondGeneration, "extension-triggered run keeps the recursion tree");
 	const session = Object.assign(Object.create(AgentSession.prototype), {
 		_runSystemPromptOptions: first.systemPromptOptions,
 		_toolRegistry: new Map([["read", { name: "read" }]]),
@@ -82,39 +90,16 @@ try {
 		assert.deepEqual(projected[2].toolsAdded.map((tool: any) => tool.name), ["later_tool"]);
 	}
 	const forcing = (name: string) => ({ path: name, handlers: new Map([["before_agent_start", [(event: any) => ({ systemPrompt: `${event.systemPrompt}\n${name}` })]]]) });
-	const mixed = await runner([forcing("honcho-fixture"), forcing("ap-fixture")]).emitBeforeAgentStart("MIXED ROOT", undefined, options);
+	const mixed = await runner([forcing("honcho-fixture"), forcing("ap-fixture")]).emitBeforeAgentStart(userTurn("MIXED ROOT"), options);
 	assert.ok(mixed.systemPromptOptions.forceSystemPrompt?.includes(anchor), "later forcing hooks preserve ypi instructions");
 	assert.ok(mixed.systemPromptOptions.forceSystemPrompt?.endsWith("ap-fixture"), "forcing chain remains sequential");
 	process.env.YPI_EXTENSION_PROMPT_MODE = "replace";
-	const replaced = await plain.emitBeforeAgentStart("REPLACE ROOT", undefined, options);
+	const replaced = await plain.emitBeforeAgentStart(userTurn("REPLACE ROOT"), options);
 	assert.ok(replaced.systemPromptOptions.forceSystemPrompt?.startsWith(anchor), "replace retains exact ypi head");
 	assert.ok(!replaced.systemPromptOptions.forceSystemPrompt?.includes("You are an expert coding assistant"), "replace omits Pi base prompt");
-	// Probe #10267 through the real run/next-turn lifecycle without a model call.
-	// This diagnostic must be checked before enabling userless notification turns.
-	Object.assign(session, {
-		_baseSystemPromptOptions: { ...first.systemPromptOptions, sections: {}, forceSystemPrompt: undefined },
-		_runSystemPromptOptions: first.systemPromptOptions,
-		_pendingToolNames: new Set(),
-		_recordSelection() {},
-		_handlePostAgentRun: async () => false,
-		_runBeforeSettleBoundary: async () => false,
-		_flushPendingBashMessages() {},
-		_flushPendingCustomMessages() {},
-		_emitAgentSettled: async () => {},
-		getActiveToolNames: () => ["read"],
-		_compactBeforeNextAssistantResponse: async (context: any) => context,
-	});
-	(AgentSession.prototype as any)._installAgentNextTurnRefresh.call(session);
-	let carriesYpi = false;
-	session.agent.prompt = async () => {
-		await session.agent.prepareNextTurnWithContext({ context: { messages: [initial] } });
-		carriesYpi = Boolean(session._runSystemPromptOptions?.sections.ypi);
-	};
-	await (AgentSession.prototype as any)._runAgentPrompt.call(session, []);
-	assert.ok(carriesYpi, "user-started run retains the ypi section");
-	await (AgentSession.prototype as any)._runAgentPrompt.call(session, []);
-	console.log(JSON.stringify({ userlessPromptCanary: carriesYpi ? "SUPPORTED" : "UNSUPPORTED", issue: 10267, notificationTurnsEnabledByYpi: false }));
-	console.log(JSON.stringify({ promptSections: "PASS", variant: baseline ? "baseline" : "sections", appendForced: baseline, laterToolHoisted: baseline, stableSection: true, mixedHooksPreserveYpi: true, replaceUnchanged: true }));
+	// Pi 1.2+ routes idle extension-triggered runs through before_agent_start
+	// (upstream #10267 fix); the "custom" trigger assertions above cover ypi.
+	console.log(JSON.stringify({ promptSections: "PASS", variant: baseline ? "baseline" : "sections", appendForced: baseline, laterToolHoisted: baseline, stableSection: true, mixedHooksPreserveYpi: true, replaceUnchanged: true, customTurnKeepsTree: true, customTurnReceivesYpi: true }));
 } finally {
 	await shutdown?.();
 	for (const key of Object.keys(process.env)) delete process.env[key];
