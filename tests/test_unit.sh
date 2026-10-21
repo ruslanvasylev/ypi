@@ -513,6 +513,20 @@ OUTPUT=$(
     "$PROJECT_DIR/ypi" --continue -p "Restored session?"
 )
 assert_not_contains "T14h: restored session disables automatic model selection" "YPI_ROOT_AUTO_ROUTE=1" "$OUTPUT"
+OUTPUT=$(
+    "$PROJECT_DIR/ypi" --fork "$TEST_TMP/source-session.jsonl" -p "Forked session?"
+)
+assert_not_contains "T14h: forked session disables automatic model selection" "YPI_ROOT_AUTO_ROUTE=1" "$OUTPUT"
+# --session and --session-id may name a new session. The extension routes only
+# when the opened session has no conversation entries.
+OUTPUT=$(
+    "$PROJECT_DIR/ypi" --session "$TEST_TMP/new-session.jsonl" -p "Named session?"
+)
+assert_contains "T14h: named session defers fresh-session check to the extension" "YPI_ROOT_AUTO_ROUTE=1" "$OUTPUT"
+OUTPUT=$(
+    "$PROJECT_DIR/ypi" --session-id=0f0e0d0c -p "Named session id?"
+)
+assert_contains "T14h: session id defers fresh-session check to the extension" "YPI_ROOT_AUTO_ROUTE=1" "$OUTPUT"
 
 # T14d: RLM_PROMPT_FILE is set and contains the original prompt (symbolic access)
 OUTPUT=$(

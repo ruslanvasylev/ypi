@@ -76,8 +76,10 @@ ypi selects the newest stable authenticated model within each configured family
 from Pi's available catalog: worker uses Sol at medium effort, explorer uses
 Luna at medium, and reviewer uses Astra at high. The ypi-owned policy is
 `config/model-routing.json`. The wrapper applies the worker route to a new
-session when no model was chosen explicitly or restored. It does not change
-Pi's saved defaults. A child call can use `profile: "inherit"` to keep the
+session when no model was chosen explicitly or restored. A `--session` or
+`--session-id` that names a new session counts as new; one with conversation
+history keeps its model, as do `--continue`, `--resume` and `--fork`. It does
+not change Pi's saved defaults. A child call can use `profile: "inherit"` to keep the
 parent route. Escalation requires a previous attempt, an unresolved reasoning
 or correctness issue, and stage 1 or 2; independent later calls start at their
 normal profile. This routing does not depend on Agent Protocol.
