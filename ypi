@@ -175,7 +175,7 @@ while [[ $# -gt 0 ]]; do
             PASS_ARGS+=("$1")
             shift
             ;;
-        --session|--session-id|--fork)
+        --fork)
             HAS_RESTORED_SESSION=true
             PASS_ARGS+=("$1")
             shift
@@ -184,10 +184,20 @@ while [[ $# -gt 0 ]]; do
                 shift
             fi
             ;;
-        --session=*|--session-id=*|--fork=*)
+        --fork=*)
             HAS_RESTORED_SESSION=true
             PASS_ARGS+=("$1")
             shift
+            ;;
+        # A named session may be new. The extension routes only when the opened
+        # session has no conversation entries, so restored history keeps its model.
+        --session|--session-id)
+            PASS_ARGS+=("$1")
+            shift
+            if [[ $# -gt 0 ]]; then
+                PASS_ARGS+=("$1")
+                shift
+            fi
             ;;
         --session-dir)
             PASS_ARGS+=("$1")
