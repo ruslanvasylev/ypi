@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+	assertTreeCoordinatorActive,
 	ensureRootTreeCoordinator,
 	terminateRootTreeCoordinator,
 } from "../extensions/ypi/internal/tree-coordinator.ts";
@@ -31,6 +32,9 @@ ensureRootTreeCoordinator();
 
 const command = process.argv.slice(separator + 1);
 try {
+	// Setup returns before the socket listens. Real roots launch children only
+	// after admission, so wait for the same active authority before launching.
+	await assertTreeCoordinatorActive();
 	const child = spawn(command[0], command.slice(1), {
 		env: { ...process.env, RLM_DEPTH: depth },
 		stdio: "inherit",

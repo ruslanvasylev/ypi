@@ -107,6 +107,12 @@ Test context for guardrail tests.
 EOF
 trap 'rm -rf "$TEST_TMP" "$MOCK_BIN"' EXIT
 
+# G0: the runner launches only after its coordinator is listening. A child that
+# reads the manifest during startup sees "starting", or an empty file while the
+# manifest is rewritten in place. That race made G6b flake in CI.
+OUTPUT=$(with_tree_authority 1 /bin/sh -c 'cat "$YPI_TREE_AUTHORITY_FILE"')
+assert_contains "G0: tree authority is active before launch" '"status":"active"' "$OUTPUT"
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # TIMEOUT TESTS
