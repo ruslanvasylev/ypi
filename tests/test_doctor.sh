@@ -71,6 +71,35 @@ run_doctor "$TOOOLD"
 run_doctor "$TMP/does-not-exist/pi"
 [ "$RC" -ne 0 ] && pass "missing pi fails" || fail "missing pi fails" "rc=$RC out=$OUT"
 
+# 6-7. host `pi` on PATH serves plain Pi sessions with the same extensions.
+# Report drift from the pin without failing ypi, which runs its own binary.
+host_pi_dir() {  # $1=name, $2=version -> prints a PATH directory holding `pi`
+    local dir="$TMP/host-$1"
+    mkdir -p "$dir"
+    ln -sf "$(make_pi "host-$1/node_modules/@earendil-works/pi-coding-agent" "$2")" "$dir/pi"
+    printf '%s\n' "$dir"
+}
+# make_pi reuses paths per package, so case 4 replaced $GOOD; use a fresh one.
+YPI_GOOD="$(make_pi "ypi-good/node_modules/@earendil-works/pi-coding-agent" "$PINNED")"
+MATCHING_HOST="$(host_pi_dir matching "$PINNED")"
+set +e
+OUT="$(PATH="$MATCHING_HOST:$PATH" YPI_PI_BIN="$YPI_GOOD" "$DOCTOR" 2>&1)"; RC=$?
+set -e
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "host pi on PATH matches pinned $PINNED"; then
+    pass "matching host pi is reported"
+else
+    fail "matching host pi is reported" "rc=$RC out=$OUT"
+fi
+DRIFTED_HOST="$(host_pi_dir drifted "0.0.1")"
+set +e
+OUT="$(PATH="$DRIFTED_HOST:$PATH" YPI_PI_BIN="$YPI_GOOD" "$DOCTOR" 2>&1)"; RC=$?
+set -e
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "host pi on PATH is 0.0.1, pinned $PINNED"; then
+    pass "drifted host pi is a non-fatal note"
+else
+    fail "drifted host pi is a non-fatal note" "rc=$RC out=$OUT"
+fi
+
 echo ""
 echo "  Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || { echo "test_doctor: FAIL"; exit 1; }

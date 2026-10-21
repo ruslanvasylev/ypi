@@ -135,5 +135,18 @@ if [ -x "$DETECT" ]; then
     esac
 fi
 
+# Host pi on PATH — ypi runs the binary above, but plain Pi sessions load the
+# same installed extensions on this one. Report drift without failing ypi.
+HOST_PI="$(command -v pi 2>/dev/null || true)"
+if [ -n "$HOST_PI" ] && [ "$PINNED" != "unknown" ]; then
+    HOST_VERSION="$("$HOST_PI" --version 2>/dev/null | tr -d '[:space:]' || true)"
+    if [ "$HOST_VERSION" = "$PINNED" ]; then
+        ok "host pi on PATH matches pinned $PINNED"
+    else
+        note "host pi on PATH is ${HOST_VERSION:-unreadable}, pinned $PINNED ($HOST_PI); plain Pi sessions run a different runtime"
+        fixln "install ${PKG}@$PINNED with the package manager and prefix that provide $HOST_PI"
+    fi
+fi
+
 echo -e "${GREEN}doctor: pi runtime OK${RESET}"
 exit 0
