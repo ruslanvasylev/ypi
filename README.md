@@ -82,6 +82,16 @@ parent route. Escalation requires a previous attempt, an unresolved reasoning
 or correctness issue, and stage 1 or 2; independent later calls start at their
 normal profile. This routing does not depend on Agent Protocol.
 
+Set `YPI_MODEL_ROUTING_PROVIDER` to select another authenticated Pi provider
+for the root default, profiles, and escalation stages, such as a local gateway
+alias. The default remains the provider in `config/model-routing.json`.
+Model families and effort policy are unchanged; an unavailable family on the
+selected provider is an error for a catalog-backed child route, with no fallback
+to the native provider. Explicit provider/model pairs and `profile: "inherit"`
+retain their existing precedence. Fully isolated children receive only the
+selected provider's `models.json` definition, including its model overrides;
+ambient settings, extensions, and other provider definitions remain excluded.
+
 The shell adapter reads standard input when `RLM_STDIN` marks it as explicit or
 when stdin is non-interactive. A non-empty read wins; otherwise it falls back
 to the file named by `CONTEXT`. Its public flags are:
@@ -253,6 +263,7 @@ against the source and must contain exactly the public variables.
 | `RLM_TIMEOUT` | unset | Optional wall-clock seconds for the whole tree. |
 | `RLM_TRACE_ID` | random | Sanitized tree identifier used in telemetry and session filenames. |
 | `YPI_EXTENSION_DEBUG` | `0` | Set to `1` for extension diagnostics. |
+| `YPI_MODEL_ROUTING_PROVIDER` | policy provider | Provider for automatic root, profile, and escalation model selection; must be present in Pi's authenticated, scoped catalog. |
 | `YPI_NODE_BIN` | `node` | Node executable used by shell recursion, recovery, and native implementer launch adapters. |
 | `YPI_PI_BIN` | repository dependency, then `PATH` | Explicit Pi executable override. |
 | `YPI_PROMPT_INCLUDE_RUNTIME_SOURCE` | `0` | Root-only diagnostic opt-in that embeds the shell helper runtime source in the root prompt; it is never propagated to children. |

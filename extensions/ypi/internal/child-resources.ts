@@ -29,6 +29,7 @@ import { acquireWorkspace, type ChildMode, type WorkspaceLease } from "./workspa
 /** Pi's file-backed credential and provider catalog stores in the agent dir. */
 const PI_AUTH_STORE_FILE = "auth.json";
 const PI_MODELS_STORE_FILE = "models-store.json";
+const PI_MODELS_CONFIG_FILE = "models.json";
 const EMPTY_PI_STORE = "{}\n";
 
 export interface ChildResourceInput {
@@ -256,6 +257,42 @@ function projectSelectedProviderAuth(agentDir: string, selectedProvider: string 
 	return true;
 }
 
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Keep only the explicitly routed provider; ambient discovery stays isolated. */
+function selectedProviderModels(selectedProvider: string | undefined): string | undefined {
+	if (!selectedProvider) return undefined;
+	const sourcePath = path.join(configuredParentAgentDir(), PI_MODELS_CONFIG_FILE);
+	if (!existsSync(sourcePath)) return undefined;
+	// Never include parser diagnostics or configuration values in setup errors:
+	// provider definitions can contain API keys and authorization headers.
+	const invalid = () => new Error("Full child isolation could not project selected provider configuration: parent models.json is invalid");
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(readFileSync(sourcePath, "utf8"));
+	} catch {
+		throw invalid();
+	}
+	if (!isJsonObject(parsed) || !isJsonObject(parsed.providers)) throw invalid();
+	if (!Object.hasOwn(parsed.providers, selectedProvider)) return undefined;
+	const provider = parsed.providers[selectedProvider];
+	if (!isJsonObject(provider)) throw invalid();
+	for (const key of ["name", "baseUrl", "apiKey", "api"]) {
+		if (Object.hasOwn(provider, key) && (typeof provider[key] !== "string" || !provider[key])) throw invalid();
+	}
+	if (Object.hasOwn(provider, "authHeader") && typeof provider.authHeader !== "boolean") throw invalid();
+	if (Object.hasOwn(provider, "headers") && (!isJsonObject(provider.headers)
+		|| Object.values(provider.headers).some((value) => typeof value !== "string"))) throw invalid();
+	if (Object.hasOwn(provider, "models") && (!Array.isArray(provider.models)
+		|| provider.models.some((model) => !isJsonObject(model) || typeof model.id !== "string" || !model.id))) throw invalid();
+	if (Object.hasOwn(provider, "modelOverrides") && (!isJsonObject(provider.modelOverrides)
+		|| Object.values(provider.modelOverrides).some((override) => !isJsonObject(override)))) throw invalid();
+	// Computed property names preserve __proto__/constructor as ordinary own keys.
+	return `${JSON.stringify({ providers: { [selectedProvider]: provider } }, null, 2)}\n`;
+}
+
 export function acquireChildResources(input: ChildResourceInput): ChildResourceLease {
 	let promptArtifact: OwnedFileArtifact | undefined;
 	let contextArtifact: OwnedFileArtifact | undefined;
@@ -272,6 +309,9 @@ export function acquireChildResources(input: ChildResourceInput): ChildResourceL
 			contextArtifact?.filePath,
 		);
 		if (input.fullResourceIsolation) {
+			// Validate before allocating the private tree so rejected config cannot
+			// strand an unsealed directory outside the cleanup inventory.
+			const projectedModels = selectedProviderModels(input.selectedProvider);
 			const isolatedPiOwner = createOwnedPrivateTempDirectory(
 				path.join(tmpdir(), "ypi_isolated_pi_"),
 			);
@@ -288,10 +328,14 @@ export function acquireChildResources(input: ChildResourceInput): ChildResourceL
 				atomicCreateFile(path.join(isolatedAgentDir, PI_AUTH_STORE_FILE), EMPTY_PI_STORE);
 			}
 			atomicCreateFile(path.join(isolatedAgentDir, PI_MODELS_STORE_FILE), EMPTY_PI_STORE);
+			if (projectedModels !== undefined) {
+				atomicCreateFile(path.join(isolatedAgentDir, PI_MODELS_CONFIG_FILE), projectedModels);
+			}
 			isolatedPiTree = sealOwnedPrivateDirectory(isolatedPiOwner, [
 				"agent",
 				path.join("agent", PI_AUTH_STORE_FILE),
 				path.join("agent", PI_MODELS_STORE_FILE),
+				...(projectedModels === undefined ? [] : [path.join("agent", PI_MODELS_CONFIG_FILE)]),
 			]);
 		}
 		const childSession = childSessionFile(input);

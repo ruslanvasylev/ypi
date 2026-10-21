@@ -5,6 +5,7 @@ test-unit:
 	@echo "Running unit tests..."
 	@bash tests/test_unit.sh
 	@bun tests/model_routing_harness.ts
+	@bun tests/root_routing_guard_harness.ts
 
 # Guardrail tests — no LLM calls, tests new features
 test-guardrails:
@@ -79,6 +80,7 @@ test-private-path-ownership:
 	@echo "Running private path ownership tests..."
 	@bun tests/private_path_ownership_harness.ts
 	@bun tests/private_path_lifecycle_harness.ts
+	@bun tests/custom_provider_isolation_harness.ts
 	@bun tests/n84_telemetry_append_harness.ts
 	@bun tests/n91_telemetry_init_harness.ts
 

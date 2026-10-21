@@ -2698,6 +2698,14 @@ var model_routing_default = {
 var levels = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 var profiles = new Set(["worker", "explorer", "reviewer", "inherit"]);
 var MAX_CATALOG_BYTES = 1e5;
+function configuredPolicyProvider() {
+  const configured = process.env.YPI_MODEL_ROUTING_PROVIDER;
+  if (configured === undefined)
+    return model_routing_default.provider;
+  if (!configured.trim())
+    throw new Error("YPI_MODEL_ROUTING_PROVIDER must name a provider");
+  return configured.trim();
+}
 function catalogFromEnvironment() {
   const raw = process.env.YPI_MODEL_CATALOG;
   if (!raw)
@@ -2779,14 +2787,15 @@ function resolveRoute(parent, childDepth, request = {}, catalog = catalogFromEnv
   if (depthProvider && !depthModel && !explicitProfile && !request.provider && profile !== "inherit" && !request.escalation)
     throw new Error("RLM_CHILD_PROVIDER(S) requires a matching RLM_CHILD_MODEL(S) at this depth");
   if (profile !== "inherit" && !request.provider && (explicitProfile || request.escalation || !depthModel)) {
+    const policyProvider = configuredPolicyProvider();
     const selectedProfile = request.escalation ? model_routing_default.escalation[request.escalation.stage - 1].profile : profile;
     const definition = model_routing_default.profiles[selectedProfile];
-    if (!catalog && (explicitProfile || request.escalation))
+    if (!catalog && (explicitProfile || request.escalation || process.env.YPI_MODEL_ROUTING_PROVIDER !== undefined))
       throw new Error(`ypi profile ${selectedProfile} needs Pi's authenticated model catalog; launch from ypi or pass an explicit provider and model`);
     const level = request.escalation ? model_routing_default.escalation[request.escalation.stage - 1].thinkingLevel : definition.thinkingLevel;
-    const selected = catalog && newestFamily(catalog, definition.family, model_routing_default.provider, level);
+    const selected = catalog && newestFamily(catalog, definition.family, policyProvider, level);
     if (catalog && !selected)
-      throw new Error(`No authenticated, scoped ${model_routing_default.provider} ${definition.family} model is available for ypi profile ${selectedProfile}; choose an explicit route or profile=inherit`);
+      throw new Error(`No authenticated, scoped ${policyProvider} ${definition.family} model is available for ypi profile ${selectedProfile}; choose an explicit route or profile=inherit`);
     if (selected)
       route = { ...route, provider: selected.provider, model: selected.id, thinkingLevel: level, source: request.escalation ? "escalation" : "profile" };
     else
@@ -5445,6 +5454,7 @@ function acquireWorkspace(input) {
 // extensions/ypi/internal/child-resources.ts
 var PI_AUTH_STORE_FILE = "auth.json";
 var PI_MODELS_STORE_FILE = "models-store.json";
+var PI_MODELS_CONFIG_FILE = "models.json";
 var EMPTY_PI_STORE = `{}
 `;
 function createContextFile(input) {
@@ -5605,6 +5615,44 @@ function projectSelectedProviderAuth(agentDir, selectedProvider) {
 `);
   return true;
 }
+function isJsonObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function selectedProviderModels(selectedProvider) {
+  if (!selectedProvider)
+    return;
+  const sourcePath = path24.join(configuredParentAgentDir(), PI_MODELS_CONFIG_FILE);
+  if (!existsSync8(sourcePath))
+    return;
+  const invalid = () => new Error("Full child isolation could not project selected provider configuration: parent models.json is invalid");
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync8(sourcePath, "utf8"));
+  } catch {
+    throw invalid();
+  }
+  if (!isJsonObject(parsed) || !isJsonObject(parsed.providers))
+    throw invalid();
+  if (!Object.hasOwn(parsed.providers, selectedProvider))
+    return;
+  const provider = parsed.providers[selectedProvider];
+  if (!isJsonObject(provider))
+    throw invalid();
+  for (const key of ["name", "baseUrl", "apiKey", "api"]) {
+    if (Object.hasOwn(provider, key) && (typeof provider[key] !== "string" || !provider[key]))
+      throw invalid();
+  }
+  if (Object.hasOwn(provider, "authHeader") && typeof provider.authHeader !== "boolean")
+    throw invalid();
+  if (Object.hasOwn(provider, "headers") && (!isJsonObject(provider.headers) || Object.values(provider.headers).some((value) => typeof value !== "string")))
+    throw invalid();
+  if (Object.hasOwn(provider, "models") && (!Array.isArray(provider.models) || provider.models.some((model) => !isJsonObject(model) || typeof model.id !== "string" || !model.id)))
+    throw invalid();
+  if (Object.hasOwn(provider, "modelOverrides") && (!isJsonObject(provider.modelOverrides) || Object.values(provider.modelOverrides).some((override) => !isJsonObject(override))))
+    throw invalid();
+  return `${JSON.stringify({ providers: { [selectedProvider]: provider } }, null, 2)}
+`;
+}
 function acquireChildResources(input) {
   let promptArtifact;
   let contextArtifact;
@@ -5617,6 +5665,7 @@ function acquireChildResources(input) {
     contextArtifact = createContextFile(input);
     standaloneSystemPromptArtifact = createStandaloneSystemPrompt(input, promptArtifact.filePath, contextArtifact?.filePath);
     if (input.fullResourceIsolation) {
+      const projectedModels = selectedProviderModels(input.selectedProvider);
       const isolatedPiOwner = createOwnedPrivateTempDirectory(path24.join(tmpdir6(), "ypi_isolated_pi_"));
       const isolatedAgentDir = path24.join(isolatedPiOwner.path, "agent");
       createPrivateDirectory(isolatedAgentDir);
@@ -5625,10 +5674,14 @@ function acquireChildResources(input) {
         atomicCreateFile(path24.join(isolatedAgentDir, PI_AUTH_STORE_FILE), EMPTY_PI_STORE);
       }
       atomicCreateFile(path24.join(isolatedAgentDir, PI_MODELS_STORE_FILE), EMPTY_PI_STORE);
+      if (projectedModels !== undefined) {
+        atomicCreateFile(path24.join(isolatedAgentDir, PI_MODELS_CONFIG_FILE), projectedModels);
+      }
       isolatedPiTree = sealOwnedPrivateDirectory(isolatedPiOwner, [
         "agent",
         path24.join("agent", PI_AUTH_STORE_FILE),
-        path24.join("agent", PI_MODELS_STORE_FILE)
+        path24.join("agent", PI_MODELS_STORE_FILE),
+        ...projectedModels === undefined ? [] : [path24.join("agent", PI_MODELS_CONFIG_FILE)]
       ]);
     }
     const childSession = childSessionFile(input);

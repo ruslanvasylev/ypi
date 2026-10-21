@@ -45,6 +45,13 @@ const levels = new Set<string>(["off", "minimal", "low", "medium", "high", "xhig
 const profiles = new Set<RouteProfile>(["worker", "explorer", "reviewer", "inherit"]);
 const MAX_CATALOG_BYTES = 100_000;
 
+function configuredPolicyProvider(): string {
+	const configured = process.env.YPI_MODEL_ROUTING_PROVIDER;
+	if (configured === undefined) return policy.provider;
+	if (!configured.trim()) throw new Error("YPI_MODEL_ROUTING_PROVIDER must name a provider");
+	return configured.trim();
+}
+
 export function routingCatalogSnapshot(models: readonly RouteModel[]): string {
 	const snapshot = JSON.stringify(models.map((model) => ({
 		provider: model.provider, id: model.id, reasoning: model.reasoning,
@@ -124,12 +131,13 @@ export function resolveRoute(parent: ParentRoute, childDepth: number, request: R
 	const explicitProfile = request.profile !== undefined && profile !== "inherit";
 	if (depthProvider && !depthModel && !explicitProfile && !request.provider && profile !== "inherit" && !request.escalation) throw new Error("RLM_CHILD_PROVIDER(S) requires a matching RLM_CHILD_MODEL(S) at this depth");
 	if (profile !== "inherit" && !request.provider && (explicitProfile || request.escalation || !depthModel)) {
+		const policyProvider = configuredPolicyProvider();
 		const selectedProfile = request.escalation ? policy.escalation[request.escalation.stage - 1].profile : profile;
 		const definition = policy.profiles[selectedProfile as keyof typeof policy.profiles];
-		if (!catalog && (explicitProfile || request.escalation)) throw new Error(`ypi profile ${selectedProfile} needs Pi's authenticated model catalog; launch from ypi or pass an explicit provider and model`);
+		if (!catalog && (explicitProfile || request.escalation || process.env.YPI_MODEL_ROUTING_PROVIDER !== undefined)) throw new Error(`ypi profile ${selectedProfile} needs Pi's authenticated model catalog; launch from ypi or pass an explicit provider and model`);
 		const level = request.escalation ? policy.escalation[request.escalation.stage - 1].thinkingLevel as ThinkingLevel : definition.thinkingLevel as ThinkingLevel;
-		const selected = catalog && newestFamily(catalog, definition.family, policy.provider, level);
-		if (catalog && !selected) throw new Error(`No authenticated, scoped ${policy.provider} ${definition.family} model is available for ypi profile ${selectedProfile}; choose an explicit route or profile=inherit`);
+		const selected = catalog && newestFamily(catalog, definition.family, policyProvider, level);
+		if (catalog && !selected) throw new Error(`No authenticated, scoped ${policyProvider} ${definition.family} model is available for ypi profile ${selectedProfile}; choose an explicit route or profile=inherit`);
 		if (selected) route = { ...route, provider: selected.provider, model: selected.id, thinkingLevel: level, source: request.escalation ? "escalation" : "profile" };
 		else route.source = "catalog-unavailable";
 	}
@@ -147,7 +155,11 @@ export function resolveRoute(parent: ParentRoute, childDepth: number, request: R
 }
 
 export function selectRootDefault(catalog: readonly RouteModel[]): ResolvedRoute | undefined {
-	const model = newestFamily(catalog, policy.profiles.worker.family, policy.provider, policy.profiles.worker.thinkingLevel as ThinkingLevel);
+	const provider = configuredPolicyProvider();
+	const model = newestFamily(catalog, policy.profiles.worker.family, provider, policy.profiles.worker.thinkingLevel as ThinkingLevel);
+	if (!model && process.env.YPI_MODEL_ROUTING_PROVIDER !== undefined) {
+		throw new Error(`No authenticated, scoped ${provider} ${policy.profiles.worker.family} model is available for the automatic ypi root route`);
+	}
 	if (!model) return undefined;
 	validateThinking(policy.profiles.worker.thinkingLevel, model);
 	return { provider: model.provider, model: model.id, thinkingLevel: policy.profiles.worker.thinkingLevel, profile: "worker", source: "profile", policyRevision: policy.revision };
