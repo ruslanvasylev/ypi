@@ -419,6 +419,12 @@ Honcho automatically retains these exchanges, so label them as integration
 tests. This smoke covers loading and tool calls; it does not certify the TUI,
 browser navigation, or long-session cache behavior.
 
+Scripted or agent-run `ypi -p` and `pi -p` calls must redirect standard input,
+for example `ypi -p "..." < /dev/null`. Print mode reads all non-terminal stdin
+before it starts, so an inherited pipe that never closes makes it wait
+indefinitely. Run `make test-fast` and the live test targets the same way from
+a non-interactive shell; the `rlm_query` shell adapter reads such stdin too.
+
 Before pushing an owned feature branch:
 
 ```bash
